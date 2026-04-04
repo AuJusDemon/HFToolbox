@@ -1,0 +1,28 @@
+## Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+
+## Backend secrets
+backend/.env
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+## Frontend
+frontend/node_modules/
+frontend/dist/
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Logs
+*.log
+logs/

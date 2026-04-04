@@ -1,0 +1,15 @@
+[Unit]
+Description=HFToolbox Backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/hftoolbox/backend
+EnvironmentFile=/opt/hftoolbox/backend/.env
+ExecStart=/opt/hftoolbox/.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
