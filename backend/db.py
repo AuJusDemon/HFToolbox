@@ -74,6 +74,8 @@ def init_db() -> None:
     _init_dash_cache()
     init_bytes_history()
     init_contracts_history()
+    init_uid_usernames()
+    init_tid_titles()
     # Migrate existing DBs that predate profile columns
     with _db() as conn:
         existing = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -584,6 +586,7 @@ def init_contracts_history():
                 iproduct   TEXT,
                 oproduct   TEXT,
                 dateline   INTEGER,
+                tid        TEXT DEFAULT '',
                 PRIMARY KEY (uid, cid)
             );
             CREATE TABLE IF NOT EXISTS contracts_crawl_state (
@@ -593,6 +596,11 @@ def init_contracts_history():
                 last_crawl INTEGER
             );
         """)
+        # Migration: add tid column to existing DBs
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN tid TEXT DEFAULT ''")
+        except Exception:
+            pass  # Column already exists
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
@@ -605,8 +613,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                 conn.execute("""
                     INSERT INTO contracts_history
                         (uid,cid,status_n,type_n,inituid,otheruid,
-                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,dateline)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,dateline,tid)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(uid,cid) DO UPDATE SET
                         status_n=excluded.status_n,
                         dateline=excluded.dateline,
@@ -617,7 +625,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                         oprice=excluded.oprice,
                         ocurrency=excluded.ocurrency,
                         iproduct=excluded.iproduct,
-                        oproduct=excluded.oproduct
+                        oproduct=excluded.oproduct,
+                        tid=excluded.tid
                 """, (
                     uid, str(c.get("cid","")),
                     str(c.get("status","")), str(c.get("type","")),
@@ -626,6 +635,7 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     e(c.get("oprice","0")),  e(c.get("ocurrency","")),
                     e(c.get("iproduct","")), e(c.get("oproduct","")),
                     int(c.get("dateline") or 0),
+                    e(c.get("tid","")),
                 ))
                 count += 1
             except Exception:
@@ -675,6 +685,34 @@ def get_contracts_history(uid: str, limit: int = 10, offset: int = 0,
         } for r in rows]
 
 
+
+def backfill_contract_tids(uid: str, cid_tid_map: dict) -> int:
+    """Update tid for contracts that have an empty tid. Only sets non-empty values.
+    cid_tid_map: {cid_str: tid_str}. Returns count updated."""
+    if not cid_tid_map:
+        return 0
+    count = 0
+    with _db() as conn:
+        for cid, tid in cid_tid_map.items():
+            if not tid or tid == "0":
+                continue
+            conn.execute(
+                "UPDATE contracts_history SET tid=? WHERE uid=? AND cid=? AND (tid IS NULL OR tid='' OR tid='0')",
+                (str(tid), uid, str(cid))
+            )
+            count += conn.execute("SELECT changes()").fetchone()[0]
+    return count
+
+
+def get_contracts_with_empty_tid(uid: str) -> bool:
+    """Returns True if any contracts_history rows for uid have empty tid."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM contracts_history WHERE uid=? AND (tid IS NULL OR tid='' OR tid='0') LIMIT 1",
+            (uid,)
+        ).fetchone()
+    return row is not None
+
 def get_contracts_history_count(uid: str, status_n: str | None = None) -> int:
     with _db() as conn:
         if status_n:
@@ -685,6 +723,231 @@ def get_contracts_history_count(uid: str, status_n: str | None = None) -> int:
         return conn.execute(
             "SELECT COUNT(*) FROM contracts_history WHERE uid=?", (uid,)
         ).fetchone()[0]
+
+
+def get_contracts_export(uid: str, status_n: str | None = None,
+                          date_from: int | None = None, date_to: int | None = None) -> list:
+    """Return ALL contracts for a user (no limit) for export. Optional filters."""
+    conditions = ["uid=?"]
+    params: list = [uid]
+    if status_n:
+        conditions.append("status_n=?")
+        params.append(status_n)
+    if date_from:
+        conditions.append("dateline >= ?")
+        params.append(int(date_from))
+    if date_to:
+        conditions.append("dateline <= ?")
+        params.append(int(date_to))
+    where = " AND ".join(conditions)
+    with _db() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+
+def _perspective_type(r, uid: str) -> str:
+    TYPE_MAP = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
+    type_n = str(r.get("type_n") or "")
+    if type_n in ("3","5"):
+        return TYPE_MAP.get(type_n, "--")
+    trivial = {"","other","n/a","none","null"}
+    has_ip  = str(r.get("iproduct") or "").strip().lower() not in trivial
+    has_op  = str(r.get("oproduct") or "").strip().lower() not in trivial
+    try:    iprice = float(r.get("iprice") or 0)
+    except: iprice = 0
+    try:    oprice = float(r.get("oprice") or 0)
+    except: oprice = 0
+    if str(r.get("inituid") or "") == uid:
+        if has_ip:     return "Selling"
+        if has_op:     return "Purchasing"
+        if iprice > 0: return "Purchasing"
+        if oprice > 0: return "Selling"
+        return "Selling"
+    else:
+        if has_op:     return "Selling"
+        if has_ip:     return "Purchasing"
+        if oprice > 0: return "Purchasing"
+        if iprice > 0: return "Selling"
+        return "Selling"
+
+
+def get_contracts_preview(uid: str, status_n: str | None = None,
+                           date_from: int | None = None, date_to: int | None = None,
+                           limit: int = 10) -> dict:
+    """Summary stats + first N rows for the export preview panel."""
+    conditions = ["uid=?"]
+    params: list = [uid]
+    if status_n:
+        conditions.append("status_n=?")
+        params.append(status_n)
+    if date_from:
+        conditions.append("dateline >= ?")
+        params.append(int(date_from))
+    if date_to:
+        conditions.append("dateline <= ?")
+        params.append(int(date_to))
+    where = " AND ".join(conditions)
+
+    with _db() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM contracts_history WHERE {where}", params
+        ).fetchone()[0]
+        date_row = conn.execute(
+            f"SELECT MIN(dateline) as mn, MAX(dateline) as mx FROM contracts_history WHERE {where}", params
+        ).fetchone()
+        status_rows = conn.execute(
+            f"SELECT status_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY status_n ORDER BY cnt DESC",
+            params
+        ).fetchall()
+        type_rows = conn.execute(
+            f"""SELECT CASE
+              WHEN type_n IN ('3','5') THEN type_n
+              WHEN inituid=? AND iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+              WHEN inituid=? AND oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+              WHEN inituid=? AND CAST(COALESCE(iprice,'0') AS REAL)>0 THEN '2'
+              WHEN inituid=? THEN '1'
+              WHEN oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+              WHEN iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+              WHEN CAST(COALESCE(oprice,'0') AS REAL)>0 THEN '2'
+              ELSE '1'
+            END AS type_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY 1 ORDER BY cnt DESC""",
+            [uid,uid,uid,uid] + params
+        ).fetchall()
+        preview_rows = conn.execute(
+            f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC LIMIT ?",
+            params + [limit]
+        ).fetchall()
+        # Top SALES threads — counterparty delivering a product, or exchanges
+        _sell_cond = "otheruid=? AND (type_n IN ('3','5') OR (oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null')))"
+        thread_rows = conn.execute(
+            f"""SELECT tid, COUNT(*) as cnt FROM contracts_history
+                WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0'
+                AND {_sell_cond}
+                GROUP BY tid ORDER BY cnt DESC LIMIT 10""",
+            params + [uid]
+        ).fetchall()
+        with_thread = conn.execute(
+            f"SELECT COUNT(*) FROM contracts_history WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0' AND {_sell_cond}",
+            params + [uid]
+        ).fetchone()[0]
+        # Type breakdown per top thread
+        top_tids = [r["tid"] for r in thread_rows]
+        thread_type_rows = []
+        if top_tids:
+            tid_placeholders = ",".join("?" * len(top_tids))
+            thread_type_rows = conn.execute(
+                f"""SELECT tid, CASE
+                        WHEN type_n IN ('3','5') THEN type_n
+                        WHEN inituid=? AND iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+                        WHEN inituid=? AND oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+                        WHEN inituid=? AND CAST(COALESCE(iprice,'0') AS REAL)>0 THEN '2'
+                        WHEN inituid=? THEN '1'
+                        WHEN oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+                        WHEN iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+                        WHEN CAST(COALESCE(oprice,'0') AS REAL)>0 THEN '2'
+                        ELSE '1'
+                      END AS type_n, COUNT(*) as cnt FROM contracts_history
+                    WHERE {where} AND tid IN ({tid_placeholders})
+                    GROUP BY tid, 2""",
+                [uid,uid,uid,uid] + params + top_tids
+            ).fetchall()
+        # Most common value (iproduct/oproduct) per top thread
+        thread_value_rows = []
+        if top_tids:
+            thread_value_rows = conn.execute(
+                f"""SELECT tid, iproduct, oproduct, iprice, icurrency, oprice, ocurrency, COUNT(*) as cnt
+                    FROM contracts_history
+                    WHERE {where} AND tid IN ({tid_placeholders})
+                    GROUP BY tid, iproduct, oproduct, iprice, icurrency, oprice, ocurrency
+                    ORDER BY cnt DESC""",
+                params + top_tids
+            ).fetchall()
+
+    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
+                  "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
+    TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
+
+    counts    = {r["status_n"]: r["cnt"] for r in status_rows}
+    complete  = counts.get("6", 0)
+    cancelled = counts.get("2", 0)
+    non_canc  = total - cancelled
+    comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    def _val(r):
+        ip, ic = r.get("iprice","0") or "0", r.get("icurrency","other") or "other"
+        op, oc = r.get("oprice","0") or "0", r.get("ocurrency","other") or "other"
+        ipr, opr = r.get("iproduct","") or "", r.get("oproduct","") or ""
+        if ip != "0" and ic.lower() != "other":  return f"{ip} {ic}"
+        if op != "0" and oc.lower() != "other":  return f"{op} {oc}"
+        if ipr not in ("","other","n/a"):         return ipr
+        if opr not in ("","other","n/a"):         return opr
+        return ""
+
+    rows = []
+    for _r in preview_rows:
+        r = dict(_r)  # sqlite3.Row → dict so .get() works
+        rows.append({
+            "cid":      r["cid"],
+            "status":   STATUS_MAP.get(str(r.get("status_n") or ""), "Unknown"),
+            "type":     _perspective_type(r, uid),
+            "value":    _val(r),
+            "inituid":  r.get("inituid") or "",
+            "otheruid": r.get("otheruid") or "",
+            "tid":      r.get("tid") or "",
+            "dateline": r.get("dateline") or 0,
+        })
+
+    # Lookup cached thread titles
+    all_tids = [r["tid"] for r in thread_rows]
+    tid_title_map = get_tid_titles(all_tids)
+
+    # Build per-thread type breakdown
+    thread_types: dict = {}
+    for r in thread_type_rows:
+        tid = r["tid"]
+        if tid not in thread_types:
+            thread_types[tid] = []
+        thread_types[tid].append({
+            "type": TYPE_MAP.get(str(r["type_n"] or ""), "--"),
+            "count": r["cnt"],
+        })
+
+    # Build per-thread most common value
+    thread_values: dict = {}
+    for r in thread_value_rows:
+        tid = r["tid"]
+        if tid in thread_values:
+            continue  # already have the top one
+        # Reuse _val logic inline
+        ip = str(r["iprice"] or "0"); ic = str(r["icurrency"] or "other")
+        op = str(r["oprice"] or "0"); oc = str(r["ocurrency"] or "other")
+        ipr = str(r["iproduct"] or ""); opr = str(r["oproduct"] or "")
+        if ip != "0" and ic.lower() != "other": thread_values[tid] = f"{ip} {ic}"
+        elif op != "0" and oc.lower() != "other": thread_values[tid] = f"{op} {oc}"
+        elif ipr not in ("", "other", "n/a"): thread_values[tid] = ipr
+        elif opr not in ("", "other", "n/a"): thread_values[tid] = opr
+
+    return {
+        "total":       total,
+        "comp_rate":   comp_rate,
+        "date_min":    date_row["mn"] if date_row else None,
+        "date_max":    date_row["mx"] if date_row else None,
+        "by_status":   [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in status_rows],
+        "by_type":     [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in type_rows],
+        "rows":        rows,
+        "with_thread": with_thread,
+        "top_threads": [{
+            "tid":        r["tid"],
+            "title":      tid_title_map.get(r["tid"], ""),
+            "count":      r["cnt"],
+            "types":      sorted(thread_types.get(r["tid"], []), key=lambda x: -x["count"]),
+            "top_value":  thread_values.get(r["tid"], ""),
+        } for r in thread_rows],
+    }
 
 
 def get_contracts_stats(uid: str) -> dict:
@@ -709,6 +972,214 @@ def get_contracts_stats(uid: str) -> dict:
         "disputed": disputed, "expired": expired, "awaiting": awaiting,
         "cancelled": cancelled, "completion_rate": comp_rate,
     }
+
+
+def get_contracts_analytics(uid: str, status_n: str | None = None,
+                              date_from: int | None = None, date_to: int | None = None) -> dict:
+    """Rich aggregate analytics for the contracts preview panel."""
+    conditions = ["uid=?"]
+    params: list = [uid]
+    if status_n:
+        conditions.append("status_n=?")
+        params.append(status_n)
+    if date_from:
+        conditions.append("dateline >= ?")
+        params.append(int(date_from))
+    if date_to:
+        conditions.append("dateline <= ?")
+        params.append(int(date_to))
+    where = " AND ".join(conditions)
+
+    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
+                  "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
+    TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
+
+    with _db() as conn:
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM contracts_history WHERE {where}", params
+        ).fetchone()[0]
+
+        date_row = conn.execute(
+            f"SELECT MIN(dateline) as mn, MAX(dateline) as mx FROM contracts_history WHERE {where}", params
+        ).fetchone()
+
+        by_status_rows = conn.execute(
+            f"SELECT status_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY status_n ORDER BY cnt DESC",
+            params
+        ).fetchall()
+
+        by_type_rows = conn.execute(
+            f"""SELECT CASE
+              WHEN type_n IN ('3','5') THEN type_n
+              WHEN inituid=? AND iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+              WHEN inituid=? AND oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+              WHEN inituid=? AND CAST(COALESCE(iprice,'0') AS REAL)>0 THEN '2'
+              WHEN inituid=? THEN '1'
+              WHEN oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+              WHEN iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+              WHEN CAST(COALESCE(oprice,'0') AS REAL)>0 THEN '2'
+              ELSE '1'
+            END AS type_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY 1 ORDER BY cnt DESC""",
+            [uid,uid,uid,uid] + params
+        ).fetchall()
+
+        # Counterparty = the other party (not the session user)
+        cp_rows = conn.execute(
+            f"""SELECT
+                    CASE WHEN inituid=uid THEN otheruid ELSE inituid END AS cp,
+                    COUNT(*) AS cnt
+                FROM contracts_history
+                WHERE {where} AND (inituid != '' OR otheruid != '')
+                GROUP BY cp
+                ORDER BY cnt DESC
+                LIMIT 8""",
+            params
+        ).fetchall()
+
+        monthly_rows = conn.execute(
+            f"""SELECT
+                    strftime('%Y-%m', datetime(dateline, 'unixepoch')) AS month,
+                    COUNT(*) AS cnt
+                FROM contracts_history
+                WHERE {where} AND dateline > 0
+                GROUP BY month
+                ORDER BY month DESC
+                LIMIT 24""",
+            params
+        ).fetchall()
+
+        # Simple value stats: count how many have a non-trivial price vs product description
+        val_row = conn.execute(
+            f"""SELECT
+                    SUM(CASE WHEN icurrency NOT IN ('','other') AND iprice NOT IN ('','0') THEN 1 ELSE 0 END) AS has_price,
+                    SUM(CASE WHEN iproduct NOT IN ('','other','n/a','None') AND iproduct IS NOT NULL AND LENGTH(iproduct)>1 THEN 1 ELSE 0 END) AS has_product
+                FROM contracts_history WHERE {where}""",
+            params
+        ).fetchone()
+
+    counts = {r["status_n"]: r["cnt"] for r in by_status_rows}
+    complete  = counts.get("6", 0)
+    cancelled = counts.get("2", 0)
+    non_canc  = total - cancelled
+    comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    return {
+        "total":     total,
+        "comp_rate": comp_rate,
+        "date_min":  date_row["mn"] if date_row else None,
+        "date_max":  date_row["mx"] if date_row else None,
+        "by_status": [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in by_status_rows],
+        "by_type":   [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in by_type_rows],
+        "top_counterparties": [{"uid": r["cp"], "count": r["cnt"]} for r in cp_rows if r["cp"]],
+        "monthly":   [{"month": r["month"], "count": r["cnt"]} for r in monthly_rows],
+        "has_price":   val_row["has_price"]   or 0,
+        "has_product": val_row["has_product"] or 0,
+    }
+
+
+def init_uid_usernames() -> None:
+    """Create uid_usernames table and add it to init_db flow."""
+    with _db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS uid_usernames (
+                uid       TEXT PRIMARY KEY,
+                username  TEXT NOT NULL,
+                cached_at INTEGER
+            )
+        """)
+
+
+def upsert_uid_usernames(uid_map: dict) -> None:
+    """Store uid→username. Safe to call repeatedly."""
+    if not uid_map:
+        return
+    import time as _t
+    now = int(_t.time())
+    with _db() as conn:
+        for u, name in uid_map.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO uid_usernames (uid, username, cached_at) VALUES (?,?,?)",
+                (str(u), str(name), now)
+            )
+
+
+def get_uid_usernames(uids: list) -> dict:
+    """Lookup usernames from local cache. Returns {uid: username}. Zero HF calls."""
+    if not uids:
+        return {}
+    uids = [str(u) for u in uids if u]
+    placeholders = ",".join("?" * len(uids))
+    with _db() as conn:
+        rows = conn.execute(
+            f"SELECT uid, username FROM uid_usernames WHERE uid IN ({placeholders})", uids
+        ).fetchall()
+    return {r["uid"]: r["username"] for r in rows}
+
+
+def get_unknown_uids_from_contracts(uid: str, limit: int = 60) -> list:
+    """Return counterparty UIDs from contracts_history not yet in uid_usernames.
+    Used by crawl to know which UIDs still need resolving."""
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT DISTINCT cp FROM (
+                SELECT inituid AS cp FROM contracts_history WHERE uid=? AND inituid != '' AND inituid != ?
+                UNION
+                SELECT otheruid AS cp FROM contracts_history WHERE uid=? AND otheruid != '' AND otheruid != ?
+            )
+            WHERE cp NOT IN (SELECT uid FROM uid_usernames)
+            LIMIT ?
+        """, (uid, uid, uid, uid, limit)).fetchall()
+    return [r["cp"] for r in rows if r["cp"]]
+
+
+def init_tid_titles() -> None:
+    with _db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tid_titles (
+                tid       TEXT PRIMARY KEY,
+                title     TEXT NOT NULL,
+                cached_at INTEGER
+            )
+        """)
+
+
+def upsert_tid_titles(tid_map: dict) -> None:
+    """Store tid→title. {tid: title}"""
+    if not tid_map:
+        return
+    import time as _t
+    now = int(_t.time())
+    with _db() as conn:
+        for tid, title in tid_map.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO tid_titles (tid, title, cached_at) VALUES (?,?,?)",
+                (str(tid), str(title), now)
+            )
+
+
+def get_tid_titles(tids: list) -> dict:
+    """Lookup thread titles from cache. Returns {tid: title}."""
+    if not tids:
+        return {}
+    tids = [str(t) for t in tids if t]
+    placeholders = ",".join("?" * len(tids))
+    with _db() as conn:
+        rows = conn.execute(
+            f"SELECT tid, title FROM tid_titles WHERE tid IN ({placeholders})", tids
+        ).fetchall()
+    return {r["tid"]: r["title"] for r in rows}
+
+
+def get_unknown_tids_from_contracts(uid: str, limit: int = 30) -> list:
+    """Return TIDs from contracts_history (for this user) not yet in tid_titles."""
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT DISTINCT tid FROM contracts_history
+            WHERE uid=? AND tid IS NOT NULL AND tid != ''
+            AND tid NOT IN (SELECT tid FROM tid_titles)
+            LIMIT ?
+        """, (uid, limit)).fetchall()
+    return [r["tid"] for r in rows]
 
 
 def get_contracts_crawl_state(uid: str) -> dict:

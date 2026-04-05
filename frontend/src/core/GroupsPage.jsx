@@ -70,7 +70,7 @@ export default function GroupsPage() {
           Adding Group Features
         </div>
         <div style={{ fontSize: 13, color: 'var(--sub)', lineHeight: 1.8 }}>
-          Group-specific modules (like Brotherhood's Watchlist) can be added to any self-hosted instance of HFToolbox.
+          Group-specific modules can be added to any self-hosted instance of HFToolbox.
           The source code is open — groups can build and run their own private version with their own features.
         </div>
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>

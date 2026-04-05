@@ -412,8 +412,6 @@ select.inp,select.input{cursor:pointer}
   /* Form inputs: full width on mobile */
   input.inp, textarea.inp, select.inp{ width:100% }
 
-  /* Watchlist card grid: single column on small screens */
-  .watchlist-grid{ grid-template-columns:1fr !important }
 }
 
 /* Slightly wider but still compact — 2-col grid becomes 1 */

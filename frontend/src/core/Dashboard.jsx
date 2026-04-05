@@ -228,33 +228,35 @@ function BytesOverview() {
         {sendMsg && <span style={{fontSize:11,alignSelf:'center',flexShrink:0,color:sendMsg.ok?'var(--acc)':'var(--red)'}}>{sendMsg.text}</span>}
       </div>
 
-      <div className="card-body" style={{flex:1,overflowY:"auto",minHeight:0,padding:"8px 14px"}}>
+      <div className="card-body" style={{flex:1,display:'flex',flexDirection:'column',minHeight:0,padding:"8px 14px"}}>
 
         {/* Transactions */}
         {txns.length === 0 ? (
           <div style={{fontSize:11,color:'var(--sub)',fontStyle:'italic'}}>No transactions yet</div>
         ) : (
           <>
-            <div style={{display:'grid',gridTemplateColumns:'20px 72px 1fr 52px',gap:8,padding:'0 0 5px',borderBottom:'1px solid var(--b1)',marginBottom:2}}>
+            <div style={{display:'grid',gridTemplateColumns:'20px 72px 1fr 52px',gap:8,padding:'0 0 5px',borderBottom:'1px solid var(--b1)',marginBottom:2,flexShrink:0}}>
               <span/>
               <span className="col-lbl">Amount</span>
               <span className="col-lbl">Reason</span>
               <span className="col-lbl" style={{textAlign:'right'}}>When</span>
             </div>
-            {txns.map((t,i) => {
-              const col = t.sent ? 'var(--red)' : 'var(--acc)'
-              const amt = Number(t.amount)
-              return (
-                <div key={t.id||i} style={{display:'grid',gridTemplateColumns:'20px 72px 1fr 52px',gap:8,alignItems:'center',padding:'4px 0',borderBottom:'1px solid rgba(21,30,46,.4)'}}>
-                  <span style={{fontSize:11,color:col,textAlign:'center'}}>{t.sent?'↑':'↓'}</span>
-                  <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:col}}>
-                    {t.sent?'-':'+'}{Math.abs(amt).toLocaleString()}
-                  </span>
-                  <span style={{fontSize:11,color:'var(--muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.reason||'--'}</span>
-                  <span style={{fontSize:10,color:'var(--dim)',textAlign:'right',fontFamily:'var(--mono)'}}>{ago(t.dateline)}</span>
-                </div>
-              )
-            })}
+            <div style={{display:'flex',flexDirection:'column',flex:1}}>
+              {txns.map((t,i) => {
+                const col = t.sent ? 'var(--red)' : 'var(--acc)'
+                const amt = Number(t.amount)
+                return (
+                  <div key={t.id||i} style={{flex:1,display:'grid',gridTemplateColumns:'20px 72px 1fr 52px',gap:8,alignItems:'center',borderBottom:'1px solid rgba(21,30,46,.4)'}}>
+                    <span style={{fontSize:11,color:col,textAlign:'center'}}>{t.sent?'↑':'↓'}</span>
+                    <span style={{fontFamily:'var(--mono)',fontSize:11,fontWeight:700,color:col}}>
+                      {t.sent?'-':'+'}{Math.abs(amt).toLocaleString()}
+                    </span>
+                    <span style={{fontSize:11,color:'var(--muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.reason||'--'}</span>
+                    <span style={{fontSize:10,color:'var(--dim)',textAlign:'right',fontFamily:'var(--mono)'}}>{ago(t.dateline)}</span>
+                  </div>
+                )
+              })}
+            </div>
           </>
         )}
 
@@ -291,11 +293,11 @@ function ContractsOverview() {
         }
         badgeColor={disputed > 0 ? 'var(--red)' : awaiting > 0 ? 'var(--yellow)' : 'var(--acc)'}
       />
-      <div className="card-body" style={{flex:1,overflowY:"auto",minHeight:0}}>
+      <div className="card-body" style={{flex:1,display:'flex',flexDirection:'column',minHeight:0}}>
 
         {/* Quick counts */}
         {data && (
-          <div style={{display:'flex',gap:14,marginBottom:10,paddingBottom:8,borderBottom:'1px solid var(--b1)',flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:14,marginBottom:10,paddingBottom:8,borderBottom:'1px solid var(--b1)',flexWrap:'wrap',flexShrink:0}}>
             {[
               { l:'Total',    v: total,    c: 'var(--text)' },
               { l:'Active',   v: active,   c: active   > 0 ? 'var(--acc)'    : 'var(--dim)' },
@@ -312,7 +314,7 @@ function ContractsOverview() {
 
         {/* Column labels */}
         {contracts.length > 0 && (
-          <div style={{display:'grid',gridTemplateColumns:'6px 56px 80px 1fr 52px',gap:8,padding:'0 0 5px',borderBottom:'1px solid var(--b1)',marginBottom:2}}>
+          <div style={{display:'grid',gridTemplateColumns:'6px 56px 80px 1fr 52px',gap:8,padding:'0 0 5px',borderBottom:'1px solid var(--b1)',marginBottom:2,flexShrink:0}}>
             <span/>
             <span className="col-lbl">CID</span>
             <span className="col-lbl">Status</span>
@@ -325,24 +327,26 @@ function ContractsOverview() {
           ? <div style={{display:'flex',flexDirection:'column',gap:4}}>{[1,2,3,4,5].map(i=><div key={i} style={{height:18,background:'var(--s3)',borderRadius:2,opacity:.4}}/>)}</div>
           : contracts.length === 0
             ? <div style={{fontSize:11,color:'var(--sub)',fontStyle:'italic'}}>No contracts</div>
-            : contracts.map(c => {
-                const val = c.value || (c.type === 'Vouch Copy' ? 'Vouch Copy' : c.type || '--')
-                const dot = STATUS_COLORS[c.status] || 'var(--dim)'
-                return (
-                  <div key={c.cid} style={{display:'grid',gridTemplateColumns:'6px 56px 80px 1fr 52px',gap:8,alignItems:'center',padding:'4.5px 0',borderBottom:'1px solid rgba(21,30,46,.4)'}}>
-                    <span style={{width:6,height:6,borderRadius:'50%',flexShrink:0,display:'inline-block',background:dot}}/>
-                    <a
-                      href={`https://hackforums.net/contracts.php?action=view&cid=${c.cid}`}
-                      target="_blank" rel="noreferrer"
-                      onClick={e => e.stopPropagation()}
-                      style={{fontSize:11,color:'var(--acc)',fontFamily:'var(--mono)'}}
-                    >#{c.cid}</a>
-                    <span style={{fontSize:10,fontFamily:'var(--mono)',fontWeight:600,color:dot}}>{c.status}</span>
-                    <span style={{fontSize:11,color:'var(--muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{val}</span>
-                    <span style={{fontSize:10,color:'var(--dim)',textAlign:'right',fontFamily:'var(--mono)'}}>{ago(c.dateline)}</span>
-                  </div>
-                )
-              })
+            : <div style={{display:'flex',flexDirection:'column',flex:1}}>
+                {contracts.map(c => {
+                  const val = c.value || (c.type === 'Vouch Copy' ? 'Vouch Copy' : c.type || '--')
+                  const dot = STATUS_COLORS[c.status] || 'var(--dim)'
+                  return (
+                    <div key={c.cid} style={{flex:1,display:'grid',gridTemplateColumns:'6px 56px 80px 1fr 52px',gap:8,alignItems:'center',borderBottom:'1px solid rgba(21,30,46,.4)'}}>
+                      <span style={{width:6,height:6,borderRadius:'50%',flexShrink:0,display:'inline-block',background:dot}}/>
+                      <a
+                        href={`https://hackforums.net/contracts.php?action=view&cid=${c.cid}`}
+                        target="_blank" rel="noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        style={{fontSize:11,color:'var(--acc)',fontFamily:'var(--mono)'}}
+                      >#{c.cid}</a>
+                      <span style={{fontSize:10,fontFamily:'var(--mono)',fontWeight:600,color:dot}}>{c.status}</span>
+                      <span style={{fontSize:11,color:'var(--muted)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{val}</span>
+                      <span style={{fontSize:10,color:'var(--dim)',textAlign:'right',fontFamily:'var(--mono)'}}>{ago(c.dateline)}</span>
+                    </div>
+                  )
+                })}
+              </div>
         }
       </div>
     </div>
@@ -494,19 +498,41 @@ function SigmarketOverview() {
 }
 
 
+function DashGrid({ children }) {
+  // Filter out false/null/undefined children — only count what actually renders
+  const real = Array.isArray(children) ? children.filter(Boolean) : [children].filter(Boolean)
+  if (!real.length) return null
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: real.length === 1 ? '1fr' : '1fr 1fr',
+      gap: 12,
+      alignItems: 'start',
+    }}>
+      {real}
+    </div>
+  )
+}
+
 export default function Dashboard() {
   const isEnabled = useStore(s => s.isEnabled)
+
+  const showBumper    = isEnabled('autobump')
+  const showBytes     = isEnabled('bytes')
+  const showContracts = isEnabled('contracts')
+  const showSigmarket = isEnabled('sigmarket')
+
   return (
     <>
-      {isEnabled('autobump') && <BumperOverview />}
-      <div className="grid2" style={{alignItems:'start'}}>
-        {isEnabled('bytes') && <BytesOverview />}
-        {isEnabled('contracts') && <ContractsOverview />}
-      </div>
-      <div className="grid2" style={{alignItems:'start'}}>
-        <SigmarketOverview />
+      {showBumper && <BumperOverview />}
+      <DashGrid>
+        {showBytes     && <BytesOverview />}
+        {showContracts && <ContractsOverview />}
+      </DashGrid>
+      <DashGrid>
+        {showSigmarket && <SigmarketOverview />}
         <UserLookup />
-      </div>
+      </DashGrid>
     </>
   )
 }
