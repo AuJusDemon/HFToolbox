@@ -762,15 +762,15 @@ function _e2eLink(shareLink, seed, iv, hmac) {
 // ── AutoTextarea — grows to fit content reliably for all change sources ─────
 // useEffect watches value so paste, toolbar inserts, and initial load all work.
 // overflow stays 'auto' so if somehow height calc is off, scroll still works.
-function AutoTextarea({ taRef, value, onChange, onFocus, onBlur }) {
-  // Set height once on mount imperatively — React never touches it again
-  // since height is not in the style prop. resize:vertical lets user drag bigger.
+function AutoTextarea({ taRef, value, onChange, onFocus, onBlur, onSaveSelection }) {
   useEffect(() => {
     const ta = taRef.current
     if (!ta) return
     ta.style.height = '320px'
     ta.style.resize = 'vertical'
   }, [])
+
+  const saveSel = () => { onSaveSelection?.() }
 
   return (
     <textarea
@@ -780,14 +780,17 @@ function AutoTextarea({ taRef, value, onChange, onFocus, onBlur }) {
       className="bb-ta"
       style={{
         width: '100%', padding: '10px 12px',
-        background: 'var(--bg)', border: '1px solid var(--b2)',
+        background: 'var(--s3)', border: '1px solid var(--b2)',
         borderRadius: '0 0 4px 4px', color: 'var(--text)',
         fontFamily: 'var(--mono)', fontSize: 12, lineHeight: 1.6,
         outline: 'none', overflowY: 'auto',
         boxSizing: 'border-box', display: 'block',
       }}
       onFocus={onFocus}
-      onBlur={onBlur}
+      onBlur={e => { saveSel(); onBlur?.(e) }}
+      onSelect={saveSel}
+      onKeyUp={saveSel}
+      onMouseUp={saveSel}
       placeholder="Write your post in BBCode…"
       spellCheck={false}
     />
@@ -808,19 +811,29 @@ function BBEditor({ value, onChange, userGroups }) {
 
   const saveSelection = () => {
     const ta = taRef.current
-    if (ta) { selRef.current = { start: ta.selectionStart, end: ta.selectionEnd } }
+    if (ta) {
+      selRef.current = {
+        start:     ta.selectionStart,
+        end:       ta.selectionEnd,
+        scrollTop: ta.scrollTop,
+      }
+    }
   }
 
   const wrap = (open, close, startOverride, endOverride) => {
     const ta = taRef.current
     if (!ta) return
-    const start = startOverride ?? ta.selectionStart
-    const end   = endOverride   ?? ta.selectionEnd
+    // Use the saved selection — clicking a toolbar button can blur the textarea
+    // in some browsers before onClick fires, zeroing out selectionStart/End.
+    const start     = startOverride ?? selRef.current.start
+    const end       = endOverride   ?? selRef.current.end
+    const savedScroll = selRef.current.scrollTop ?? ta.scrollTop
     const sel   = value.slice(start, end)
     const next  = value.slice(0, start) + open + sel + close + value.slice(end)
     onChange(next)
     setTimeout(() => {
       ta.focus()
+      ta.scrollTop      = savedScroll   // restore position — prevents jump to top
       ta.selectionStart = start + open.length
       ta.selectionEnd   = start + open.length + sel.length
     }, 0)
@@ -829,10 +842,15 @@ function BBEditor({ value, onChange, userGroups }) {
   const insert = (text) => {
     const ta = taRef.current
     if (!ta) return
-    const pos  = ta.selectionStart
+    const pos         = selRef.current.start ?? ta.selectionStart
+    const savedScroll = selRef.current.scrollTop ?? ta.scrollTop
     const next = value.slice(0, pos) + text + value.slice(pos)
     onChange(next)
-    setTimeout(() => { ta.focus(); ta.selectionStart = ta.selectionEnd = pos + text.length }, 0)
+    setTimeout(() => {
+      ta.focus()
+      ta.scrollTop      = savedScroll
+      ta.selectionStart = ta.selectionEnd = pos + text.length
+    }, 0)
   }
 
   const openModal = (fields, onOk) => {
@@ -881,7 +899,7 @@ function BBEditor({ value, onChange, userGroups }) {
   const selectStyle = { ...btnStyle, padding:'3px 5px', fontFamily:'var(--sans)', cursor:'pointer', appearance:'none', WebkitAppearance:'none' }
 
   return (
-    <div>
+    <div style={{ position: 'sticky', top: 50, zIndex: 10 }}>
       {/* Inline modal */}
       {modal && (
         <Modal
@@ -1231,6 +1249,7 @@ function BBEditor({ value, onChange, userGroups }) {
         taRef={taRef}
         value={value}
         onChange={onChange}
+        onSaveSelection={saveSelection}
         onFocus={e => e.currentTarget.style.borderColor='var(--acc)'}
         onBlur={e => e.currentTarget.style.borderColor='var(--b2)'}
       />
@@ -1437,7 +1456,7 @@ function Composer({ onPosted }) {
           </div>
         </div>
         {sideBySide ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
             <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
             <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />
           </div>
@@ -1707,7 +1726,7 @@ function PostToThread() {
           </div>
 
           {preview ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
               <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
               <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title="" userGroups={userGroups} />
             </div>
@@ -1744,41 +1763,292 @@ function PostToThread() {
 }
 
 
+
+// ── Line diff utility ─────────────────────────────────────────────────────────
+// Simple LCS-based line diff. Returns array of {type:'same'|'added'|'removed', line}.
+function lineDiff(oldText, newText) {
+  const a = (oldText || '').split('\n')
+  const b = (newText || '').split('\n')
+  const m = a.length, n = b.length
+  // Build LCS table
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1))
+  for (let i = m - 1; i >= 0; i--)
+    for (let j = n - 1; j >= 0; j--)
+      dp[i][j] = a[i] === b[j] ? dp[i+1][j+1] + 1 : Math.max(dp[i+1][j], dp[i][j+1])
+  // Backtrack
+  const result = []
+  let i = 0, j = 0
+  while (i < m || j < n) {
+    if (i < m && j < n && a[i] === b[j]) {
+      result.push({ type: 'same', line: a[i] }); i++; j++
+    } else if (j < n && (i >= m || dp[i][j+1] >= dp[i+1][j])) {
+      result.push({ type: 'added', line: b[j] }); j++
+    } else {
+      result.push({ type: 'removed', line: a[i] }); i++
+    }
+  }
+  return result
+}
+
+function DiffView({ oldText, newText }) {
+  const chunks = useMemo(() => lineDiff(oldText || '', newText || ''), [oldText, newText])
+  const changed = chunks.filter(c => c.type !== 'same').length
+  if (!changed) return (
+    <div style={{ fontSize: 11, color: 'var(--dim)', fontStyle: 'italic', padding: '6px 8px' }}>
+      No content changes (subject or formatting may differ)
+    </div>
+  )
+  return (
+    <div style={{ fontFamily: 'var(--mono)', fontSize: 11, lineHeight: 1.5, overflowX: 'auto' }}>
+      {chunks.map((c, i) => (
+        <div key={i} style={{
+          background: c.type === 'added' ? 'rgba(36,201,140,.1)' : c.type === 'removed' ? 'rgba(232,84,84,.1)' : 'transparent',
+          color:      c.type === 'added' ? 'var(--green)'        : c.type === 'removed' ? 'var(--red)'        : 'var(--dim)',
+          padding: '0 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        }}>
+          {c.type === 'added' ? '+ ' : c.type === 'removed' ? '− ' : '  '}{c.line}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── Collaborative DraftsPanel ─────────────────────────────────────────────────
 function DraftsPanel({ onSchedule }) {
   const user       = useStore(s => s.user)
   const userGroups = user?.groups || []
-  const [drafts,     setDrafts]     = useState([])
-  const [loading,    setLoading]    = useState(true)
-  const [editing,     setEditing]    = useState(null)
-  const [editPreview, setEditPreview] = useState(false)
-  const [scheduling,  setScheduling] = useState(null)
-  const [fireAt,     setFireAt]     = useState(() => { const d=new Date(Date.now()+3600000); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })
-  const [saving,     setSaving]     = useState(false)
+  const myUid      = user?.uid || ''
 
+  // ── Data ──────────────────────────────────────────────────────────────────
+  const [myDrafts,     setMyDrafts]     = useState([])
+  const [sharedDrafts, setSharedDrafts] = useState([])
+  const [loading,      setLoading]      = useState(true)
+  const [subTab,       setSubTab]       = useState('mine')
+
+  // ── Editing ───────────────────────────────────────────────────────────────
+  const [editingDraft, setEditingDraft] = useState(null)
+  const [editSubject,  setEditSubject]  = useState('')
+  const [editMessage,  setEditMessage]  = useState('')
+  const [editFid,      setEditFid]      = useState('')
+  const [editForumName,setEditForumName]= useState('')
+  const [editVersion,  setEditVersion]  = useState(1)
+  const [editIsOwner,  setEditIsOwner]  = useState(false)
+  const [editPreview,  setEditPreview]  = useState(false)
+  const [editSaving,   setEditSaving]   = useState(false)
+  const [editSaveFlash,setEditSaveFlash]= useState(null) // null | 'ok' | 'err'
+  const [editSaveErr,  setEditSaveErr]  = useState(null)
+
+  // ── Conflict ──────────────────────────────────────────────────────────────
+  const [conflict, setConflict] = useState(null)
+  // null | { theirVersion, theirSubject, theirMessage, theirEditor }
+
+  // ── Version poll + presence ───────────────────────────────────────────────
+  const pollRef          = useRef(null)
+  const heartbeatRef     = useRef(null)
+  const editingIdRef     = useRef(null)
+  const editVersionRef   = useRef(1)
+  const [versionBanner,  setVersionBanner]  = useState(null) // { version, editorName }
+  const [presence,       setPresence]       = useState([])
+
+  // ── Collaborator panel ────────────────────────────────────────────────────
+  const [showCollabPanel, setShowCollabPanel] = useState(false)
+  const [collaborators,   setCollaborators]   = useState([])
+  const [addCollabUid,    setAddCollabUid]    = useState('')
+  const [addCollabLoading,setAddCollabLoading]= useState(false)
+  const [addCollabErr,    setAddCollabErr]    = useState(null)
+
+  // ── Edit log ──────────────────────────────────────────────────────────────
+  const [showLog,        setShowLog]        = useState(false)
+  const [logEntries,     setLogEntries]     = useState([])
+  const [logLoading,     setLogLoading]     = useState(false)
+  const [expandedDiff,   setExpandedDiff]   = useState(null)
+  const [rollbackLoading,setRollbackLoading]= useState(null)
+
+  // ── Scheduling (existing) ─────────────────────────────────────────────────
+  const [scheduling, setScheduling] = useState(null)
+  const [fireAt,     setFireAt]     = useState(() => {
+    const d = new Date(Date.now() + 3600000)
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' +
+           String(d.getDate()).padStart(2,'0') + 'T' +
+           String(d.getHours()).padStart(2,'0') + ':' +
+           String(d.getMinutes()).padStart(2,'0')
+  })
+  const [saving, setSaving] = useState(false)
+
+  // ── Load ──────────────────────────────────────────────────────────────────
   const load = useCallback(() => {
-    api.get('/api/posting/drafts').then(d => {
-      setDrafts(d.drafts || [])
+    setLoading(true)
+    Promise.all([
+      api.get('/api/posting/drafts').catch(() => ({ drafts: [] })),
+      api.get('/api/posting/drafts/shared').catch(() => ({ drafts: [] })),
+    ]).then(([mine, shared]) => {
+      setMyDrafts(mine?.drafts || [])
+      setSharedDrafts(shared?.drafts || [])
       setLoading(false)
-    }).catch(() => setLoading(false))
+    })
   }, [])
 
   useEffect(() => { load() }, [load])
 
-  const deleteDraft = async (id) => {
-    await api.delete(`/api/posting/drafts/${id}`)
-    setDrafts(d => d.filter(x => x.id !== id))
+  // ── Open / close edit ─────────────────────────────────────────────────────
+  const openEdit = useCallback(async (draft) => {
+    // Close any existing edit first
+    if (editingIdRef.current && editingIdRef.current !== draft.id) {
+      await fetch(`/api/posting/drafts/${editingIdRef.current}/presence`, {
+        method: 'DELETE', credentials: 'include',
+      }).catch(() => {})
+      clearInterval(pollRef.current)
+      clearInterval(heartbeatRef.current)
+    }
+
+    setEditingDraft(draft)
+    setEditSubject(draft.subject)
+    setEditMessage(draft.message)
+    setEditFid(draft.fid || '')
+    setEditForumName(draft.forum_name || '')
+    setEditVersion(draft.version || 1)
+    editVersionRef.current = draft.version || 1
+    setEditIsOwner(draft.is_owner !== false)
+    setEditPreview(false)
+    setConflict(null)
+    setVersionBanner(null)
+    setShowCollabPanel(false)
+    setShowLog(false)
+    setLogEntries([])
+    editingIdRef.current = draft.id
+
+    // Fetch collaborators
+    api.get(`/api/posting/drafts/${draft.id}/collaborators`)
+      .then(d => setCollaborators(d?.collaborators || []))
+      .catch(() => {})
+
+    // Immediate presence ping
+    fetch(`/api/posting/drafts/${draft.id}/presence`, {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' }, body: '{}',
+    }).catch(() => {})
+
+    // Heartbeat every 20s
+    heartbeatRef.current = setInterval(() => {
+      fetch(`/api/posting/drafts/${draft.id}/presence`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: '{}',
+      }).catch(() => {})
+    }, 20000)
+
+    // Version poll every 30s
+    pollRef.current = setInterval(async () => {
+      try {
+        const info = await api.get(`/api/posting/drafts/${draft.id}/version`)
+        if (!info) return
+        setPresence((info.presence || []).filter(p => String(p.uid) !== String(myUid)))
+        if ((info.version || 1) > editVersionRef.current) {
+          setVersionBanner({ version: info.version, editorName: info.last_editor_name || 'Someone' })
+        }
+      } catch {}
+    }, 30000)
+  }, [myUid])
+
+  const closeEdit = useCallback(() => {
+    const id = editingIdRef.current
+    if (id) {
+      fetch(`/api/posting/drafts/${id}/presence`, { method: 'DELETE', credentials: 'include' }).catch(() => {})
+      editingIdRef.current = null
+    }
+    clearInterval(pollRef.current)
+    clearInterval(heartbeatRef.current)
+    setEditingDraft(null)
+    setConflict(null)
+    setVersionBanner(null)
+    setShowCollabPanel(false)
+    setShowLog(false)
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => () => {
+    clearInterval(pollRef.current)
+    clearInterval(heartbeatRef.current)
+    if (editingIdRef.current) {
+      fetch(`/api/posting/drafts/${editingIdRef.current}/presence`, { method: 'DELETE', credentials: 'include' }).catch(() => {})
+    }
+  }, [])
+
+  // ── Versioned save ────────────────────────────────────────────────────────
+  const saveEdit = async (draft) => {
+    setEditSaving(true)
+    setEditSaveFlash(null)
+    setEditSaveErr(null)
+    try {
+      const res = await fetch(`/api/posting/drafts/${draft.id}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fid: editFid, forum_name: editForumName,
+          subject: editSubject, message: editMessage,
+          base_version: editVersion,
+        }),
+      })
+      const data = await res.json()
+
+      if (res.status === 409) {
+        setConflict({
+          theirVersion: data.current_version,
+          theirSubject: data.current_subject,
+          theirMessage: data.current_message,
+          theirEditor:  data.last_editor || 'Someone',
+        })
+        return
+      }
+      if (!res.ok) { setEditSaveErr(data?.error || `Error ${res.status}`); return }
+
+      // Success
+      const newVer = data.draft?.version || (editVersion + 1)
+      setEditVersion(newVer)
+      editVersionRef.current = newVer
+      setVersionBanner(null)
+      setConflict(null)
+      const update = d => d.id === draft.id ? { ...d, subject: editSubject, message: editMessage, version: newVer, updated_at: data.draft?.updated_at || d.updated_at } : d
+      setMyDrafts(ds => ds.map(update))
+      setSharedDrafts(ds => ds.map(update))
+      setEditSaveFlash('ok')
+      setTimeout(() => setEditSaveFlash(null), 2500)
+    } catch (e) {
+      setEditSaveErr(e.message || 'Save failed')
+    }
+    setEditSaving(false)
   }
 
+  // ── Conflict resolution ───────────────────────────────────────────────────
+  const resolveConflict = async (draft, choice) => {
+    if (choice === 'theirs') {
+      // Load their version into editor, clear conflict
+      setEditSubject(conflict.theirSubject)
+      setEditMessage(conflict.theirMessage)
+      setEditVersion(conflict.theirVersion)
+      editVersionRef.current = conflict.theirVersion
+      setConflict(null)
+    } else {
+      // Override: re-save using their version as base_version
+      const theirVer = conflict.theirVersion
+      setConflict(null)
+      setEditVersion(theirVer)
+      editVersionRef.current = theirVer
+      await saveEdit(draft)
+    }
+  }
+
+  // ── Post / schedule existing actions ─────────────────────────────────────
   const scheduleNow = async (draft) => {
-    // Schedule immediately (fire on next tick)
     const res = await api.post('/api/posting/thread', {
       fid: draft.fid, forum_name: draft.forum_name,
-      subject: draft.subject, message: draft.message,
-      fire_at: 0,
+      subject: draft.subject, message: draft.message, fire_at: 0,
     })
     if (res?.ok || res?.id) {
       await api.delete(`/api/posting/drafts/${draft.id}`)
-      setDrafts(d => d.filter(x => x.id !== draft.id))
+      setMyDrafts(ds => ds.filter(x => x.id !== draft.id))
+      setSharedDrafts(ds => ds.filter(x => x.id !== draft.id))
+      if (editingDraft?.id === draft.id) closeEdit()
       onSchedule?.()
     }
   }
@@ -1790,111 +2060,410 @@ function DraftsPanel({ onSchedule }) {
     setSaving(true)
     const res = await api.post('/api/posting/thread', {
       fid: draft.fid, forum_name: draft.forum_name,
-      subject: draft.subject, message: draft.message,
-      fire_at,
+      subject: draft.subject, message: draft.message, fire_at,
     })
     if (res?.ok || res?.id) {
       await api.delete(`/api/posting/drafts/${draft.id}`)
-      setDrafts(d => d.filter(x => x.id !== draft.id))
+      setMyDrafts(ds => ds.filter(x => x.id !== draft.id))
+      setSharedDrafts(ds => ds.filter(x => x.id !== draft.id))
+      if (editingDraft?.id === draft.id) closeEdit()
       onSchedule?.()
     }
     setSaving(false)
     setScheduling(null)
   }
 
-  const saveEdit = async (draft) => {
-    await api.put(`/api/posting/drafts/${draft.id}`, {
-      fid: draft.fid, forum_name: draft.forum_name,
-      subject: editing.subject, message: editing.message,
-    })
-    setDrafts(d => d.map(x => x.id === draft.id ? { ...x, ...editing } : x))
-    setEditing(null)
+  const deleteDraft = async (id, isOwner) => {
+    if (!isOwner) return
+    await api.delete(`/api/posting/drafts/${id}`)
+    if (editingDraft?.id === id) closeEdit()
+    setMyDrafts(ds => ds.filter(x => x.id !== id))
   }
 
-  const fmtDate = ts => new Date(ts * 1000).toLocaleString(undefined, {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+  // ── Collaborator actions (owner only) ─────────────────────────────────────
+  const addCollab = async (draftId) => {
+    if (!addCollabUid.trim()) return
+    setAddCollabLoading(true)
+    setAddCollabErr(null)
+    try {
+      const res = await api.post(`/api/posting/drafts/${draftId}/collaborators`, { uid: addCollabUid.trim() })
+      if (res?.ok) {
+        setCollaborators(cs => [...cs, { uid: res.uid, username: res.username, added_at: Math.floor(Date.now()/1000) }])
+        setAddCollabUid('')
+      }
+    } catch (e) {
+      setAddCollabErr(e.message || 'Failed')
+    }
+    setAddCollabLoading(false)
+  }
+
+  const removeCollab = async (draftId, collabUid) => {
+    try {
+      await fetch(`/api/posting/drafts/${draftId}/collaborators/${collabUid}`, {
+        method: 'DELETE', credentials: 'include',
+      })
+      setCollaborators(cs => cs.filter(c => c.uid !== collabUid))
+    } catch {}
+  }
+
+  // ── Edit log actions ──────────────────────────────────────────────────────
+  const loadLog = async (draftId) => {
+    setShowLog(true)
+    setLogLoading(true)
+    setExpandedDiff(null)
+    try {
+      const res = await api.get(`/api/posting/drafts/${draftId}/log`)
+      setLogEntries(res?.log || [])
+    } catch {}
+    setLogLoading(false)
+  }
+
+  const doRollback = async (draft, logId) => {
+    if (!window.confirm('Restore this version? Current content will be replaced.')) return
+    setRollbackLoading(logId)
+    try {
+      const res = await api.post(`/api/posting/drafts/${draft.id}/rollback/${logId}`)
+      if (res?.ok) {
+        // Reload the draft to get restored content
+        const fresh = await api.get(`/api/posting/drafts/${draft.id}`)
+        if (fresh?.draft) {
+          const d = fresh.draft
+          setEditSubject(d.subject)
+          setEditMessage(d.message)
+          setEditVersion(d.version || 1)
+          editVersionRef.current = d.version || 1
+          setMyDrafts(ds => ds.map(x => x.id === draft.id ? { ...x, ...d } : x))
+          setSharedDrafts(ds => ds.map(x => x.id === draft.id ? { ...x, ...d } : x))
+        }
+        // Refresh log
+        loadLog(draft.id)
+      }
+    } catch {}
+    setRollbackLoading(null)
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const fmtDate = ts => new Date((ts || 0) * 1000).toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
   })
+  const fmtFireAt = () => {
+    const d = new Date(fireAt)
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' at ' +
+           d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  }
+  const resetFireAt = (ms = 3600000) => {
+    const d = new Date(Date.now() + ms)
+    setFireAt(d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' +
+              String(d.getDate()).padStart(2,'0') + 'T' +
+              String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'))
+  }
 
-  if (loading) return <div style={{ display:'flex', justifyContent:'center', padding:20 }}><div className="spin"/></div>
-
-  if (!drafts.length) return (
-    <div style={{ fontSize:12, color:'var(--dim)', fontStyle:'italic', padding:'8px 0' }}>
-      No drafts. Cancel a scheduled thread to save it here, or save from the composer.
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (loading) return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
+      <div className="spin" />
     </div>
   )
 
+  const allEmpty = myDrafts.length === 0 && sharedDrafts.length === 0
+  if (allEmpty) return (
+    <div style={{ fontSize: 12, color: 'var(--dim)', fontStyle: 'italic', padding: '8px 0' }}>
+      No drafts. Save from the composer or cancel a scheduled thread.
+    </div>
+  )
+
+  const hasShared = sharedDrafts.length > 0
+  const displayDrafts = subTab === 'shared' ? sharedDrafts : myDrafts
+
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:8, padding:'8px 0' }}>
-      {drafts.map(d => (
-        <div key={d.id} style={{ border:'1px solid var(--b1)', borderRadius:4, background:'var(--card)', overflow:'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
 
-          {/* Header row */}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:8, alignItems:'center', padding:'8px 10px' }}>
-            <div>
-              <div style={{ fontSize:12, fontWeight:600, marginBottom:2 }}>{d.subject}</div>
-              <div style={{ fontSize:10, color:'var(--dim)' }}>{d.forum_name} · Saved {fmtDate(d.updated_at)}</div>
-            </div>
-            <div style={{ display:'flex', gap:4 }}>
-              <button className="btn btn-ghost" style={{ fontSize:10, padding:'2px 7px' }}
-                onClick={() => { const closing = editing?.id === d.id; setEditing(closing ? null : { id:d.id, subject:d.subject, message:d.message }); if(closing) setEditPreview(false) }}>
-                {editing?.id === d.id ? 'Close' : 'Edit'}
-              </button>
-              <button className="btn btn-acc" style={{ fontSize:10, padding:'2px 7px' }}
-                onClick={() => scheduleNow(d)}>
-                Post now
-              </button>
-              <button className="btn btn-ghost" style={{ fontSize:10, padding:'2px 7px' }}
-                onClick={() => { setScheduling(scheduling?.id === d.id ? null : d); const dt=new Date(Date.now()+3600000); setFireAt(dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0')+'T'+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0')) }}>
-                Schedule
-              </button>
-              <button className="btn btn-danger" style={{ fontSize:10, padding:'2px 7px' }}
-                onClick={() => deleteDraft(d.id)}>Delete</button>
-            </div>
-          </div>
-
-          {/* Schedule picker */}
-          {scheduling?.id === d.id && (
-            <div style={{ padding:'8px 10px', borderTop:'1px solid var(--b1)', display:'flex', gap:8, alignItems:'center', background:'var(--s2)' }}>
-              <span style={{ fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)' }}>FIRE AT</span>
-              <input type="datetime-local" className="inp"
-                value={fireAt} onChange={e => setFireAt(e.target.value)}
-                min={new Date().toISOString().slice(0,16)}
-                style={{ fontSize:11 }} />
-              <button className="btn btn-acc" style={{ fontSize:11 }} disabled={saving}
-                onClick={() => scheduleLater(d)}>
-                {saving ? 'Scheduling…' : 'Schedule'}
-              </button>
-              <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={() => setScheduling(null)}>Cancel</button>
-            </div>
-          )}
-
-          {/* Edit panel */}
-          {editing?.id === d.id && (
-            <div style={{ padding:'8px 10px', borderTop:'1px solid var(--b1)', display:'flex', flexDirection:'column', gap:8, background:'var(--s2)' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                <input className="inp" placeholder="Title" value={editing.subject}
-                  onChange={e => setEditing(ed => ({ ...ed, subject: e.target.value }))}
-                  style={{ flex:1 }} />
-                <label style={{ fontSize:11, color:'var(--dim)', display:'flex', alignItems:'center', gap:4, cursor:'pointer', flexShrink:0 }}>
-                  <input type="checkbox" checked={editPreview} onChange={e => setEditPreview(e.target.checked)} /> Preview
-                </label>
-              </div>
-              {editPreview ? (
-                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-                  <BBEditor value={editing.message} onChange={v => setEditing(ed => ({ ...ed, message: v }))} userGroups={userGroups} />
-                  <BBPreview message={editing.message} title={editing.subject} userGroups={userGroups} />
-                </div>
-              ) : (
-                <BBEditor value={editing.message} onChange={v => setEditing(ed => ({ ...ed, message: v }))} userGroups={userGroups} />
-              )}
-              <div style={{ display:'flex', gap:6 }}>
-                <button className="btn btn-acc" style={{ fontSize:11 }} onClick={() => saveEdit(d)}>Save draft</button>
-                <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={() => setEditing(null)}>Discard</button>
-              </div>
-            </div>
-          )}
+      {/* Sub-tabs — only if there are shared drafts */}
+      {hasShared && (
+        <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--b1)', marginBottom: 4 }}>
+          {[['mine', `My Drafts (${myDrafts.length})`], ['shared', `Shared with Me (${sharedDrafts.length})`]].map(([key, label]) => (
+            <button key={key}
+              onClick={() => setSubTab(key)}
+              style={{
+                padding: '5px 14px', fontSize: 11, fontWeight: 600, border: 'none',
+                background: 'transparent', cursor: 'pointer',
+                color: subTab === key ? 'var(--acc)' : 'var(--dim)',
+                borderBottom: subTab === key ? '2px solid var(--acc)' : '2px solid transparent',
+                transition: 'all 130ms',
+              }}
+            >{label}</button>
+          ))}
         </div>
-      ))}
+      )}
+
+      {/* Draft cards */}
+      {displayDrafts.length === 0 && (
+        <div style={{ fontSize: 12, color: 'var(--dim)', fontStyle: 'italic' }}>
+          {subTab === 'shared' ? 'No drafts shared with you.' : 'No drafts yet.'}
+        </div>
+      )}
+
+      {displayDrafts.map(d => {
+        const isEditing = editingDraft?.id === d.id
+        const isOwner   = d.is_owner !== false
+        return (
+          <div key={d.id} style={{
+            border: '1px solid ' + (isEditing ? 'var(--acc)' : 'var(--b1)'),
+            borderRadius: 4, background: 'var(--card)',
+            transition: 'border-color 150ms',
+          }}>
+
+            {/* ── Header row ─────────────────────────────────────────── */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 8, alignItems: 'start', padding: '8px 10px' }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{d.subject}</div>
+                <div style={{ fontSize: 10, color: 'var(--dim)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <span>{d.forum_name || '—'}</span>
+                  <span>·</span>
+                  <span>v{d.version || 1}</span>
+                  <span>·</span>
+                  <span>Saved {fmtDate(d.updated_at)}</span>
+                  {(d.collab_count || 0) > 0 && (
+                    <><span>·</span><span style={{ color: 'var(--blue)' }}>👥 {d.collab_count} editor{d.collab_count > 1 ? 's' : ''}</span></>
+                  )}
+                  {!isOwner && <span style={{ color: 'var(--yellow)', fontWeight: 600 }}>shared</span>}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                  onClick={() => isEditing ? closeEdit() : openEdit(d)}>
+                  {isEditing ? 'Close' : 'Edit'}
+                </button>
+                {isOwner && (
+                  <button className="btn btn-acc" style={{ fontSize: 10, padding: '2px 7px' }}
+                    onClick={() => scheduleNow(d)}>
+                    Post now
+                  </button>
+                )}
+                {isOwner && (
+                  <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                    onClick={() => { setScheduling(scheduling?.id === d.id ? null : d); resetFireAt() }}>
+                    Schedule
+                  </button>
+                )}
+                {isOwner && (
+                  <button className="btn btn-danger" style={{ fontSize: 10, padding: '2px 7px' }}
+                    onClick={() => deleteDraft(d.id, isOwner)}>
+                    Delete
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* ── Schedule picker ────────────────────────────────────── */}
+            {scheduling?.id === d.id && (
+              <div style={{ padding: '8px 10px', borderTop: '1px solid var(--b1)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', background: 'var(--s2)' }}>
+                <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>FIRE AT</span>
+                <input type="datetime-local" className="inp"
+                  value={fireAt} onChange={e => setFireAt(e.target.value)}
+                  min={new Date().toISOString().slice(0, 16)} style={{ fontSize: 11 }} />
+                <div style={{ display: 'flex', gap: 3 }}>
+                  {[['1h',1],['6h',6],['12h',12],['1d',24]].map(([lbl,hrs]) => (
+                    <button key={lbl} className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                      onClick={() => resetFireAt(hrs * 3600000)}>{lbl}</button>
+                  ))}
+                </div>
+                <button className="btn btn-acc" style={{ fontSize: 11 }} disabled={saving}
+                  onClick={() => scheduleLater(d)}>
+                  {saving ? 'Scheduling…' : `Schedule → ${fmtFireAt()}`}
+                </button>
+                <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => setScheduling(null)}>Cancel</button>
+              </div>
+            )}
+
+            {/* ── Edit panel ─────────────────────────────────────────── */}
+            {isEditing && (
+              <div style={{ borderTop: '1px solid var(--acc)', background: 'var(--bg)' }}>
+
+                {/* Version banner — someone else saved while you were editing */}
+                {versionBanner && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: 'rgba(232,168,40,.08)', borderBottom: '1px solid rgba(232,168,40,.2)' }}>
+                    <span style={{ fontSize: 11, color: 'var(--yellow)' }}>
+                      ⚠ <strong>{versionBanner.editorName}</strong> saved changes while you were editing (v{versionBanner.version})
+                    </span>
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px', marginLeft: 'auto' }}
+                      onClick={async () => {
+                        const fresh = await api.get(`/api/posting/drafts/${d.id}`)
+                        if (fresh?.draft) {
+                          setEditSubject(fresh.draft.subject)
+                          setEditMessage(fresh.draft.message)
+                          setEditVersion(fresh.draft.version || 1)
+                          editVersionRef.current = fresh.draft.version || 1
+                        }
+                        setVersionBanner(null)
+                      }}>
+                      Load their version
+                    </button>
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                      onClick={() => setVersionBanner(null)}>
+                      Ignore
+                    </button>
+                  </div>
+                )}
+
+                {/* Presence strip — who else has this open */}
+                {presence.length > 0 && (
+                  <div style={{ padding: '4px 10px', borderBottom: '1px solid var(--b1)', fontSize: 10, color: 'var(--blue)', display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span>👁</span>
+                    {presence.map(p => <span key={p.uid} style={{ fontWeight: 600 }}>{p.username || p.uid}</span>)}
+                    <span style={{ color: 'var(--dim)', fontWeight: 400 }}>also viewing</span>
+                  </div>
+                )}
+
+                {/* Conflict UI */}
+                {conflict && (
+                  <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--b1)', background: 'rgba(232,84,84,.06)' }}>
+                    <div style={{ fontSize: 12, color: 'var(--red)', fontWeight: 600, marginBottom: 6 }}>
+                      ⚡ Save conflict — <strong>{conflict.theirEditor}</strong> saved v{conflict.theirVersion} after you opened this draft.
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--sub)', marginBottom: 8 }}>
+                      Your unsaved changes are still in the editor. Choose how to resolve:
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button className="btn btn-acc" style={{ fontSize: 11 }}
+                        onClick={() => resolveConflict(d, 'mine')}>
+                        Post my version (override)
+                      </button>
+                      <button className="btn btn-ghost" style={{ fontSize: 11 }}
+                        onClick={() => resolveConflict(d, 'theirs')}>
+                        Load their version (discard mine)
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Toolbar row */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--b1)', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>v{editVersion}</span>
+                  <label style={{ fontSize: 11, color: 'var(--dim)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={editPreview} onChange={e => setEditPreview(e.target.checked)} /> Preview
+                  </label>
+                  {isOwner && (
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                      onClick={() => { setShowCollabPanel(p => !p); setShowLog(false) }}>
+                      👥 Collaborators {collaborators.length > 0 ? `(${collaborators.length})` : ''}
+                    </button>
+                  )}
+                  <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                    onClick={() => { if (!showLog) loadLog(d.id); else setShowLog(false) }}>
+                    📋 History
+                  </button>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+                    {editSaveFlash === 'ok' && <span style={{ fontSize: 10, color: 'var(--green)' }}>✓ Saved</span>}
+                    {editSaveErr && <span style={{ fontSize: 10, color: 'var(--red)' }}>{editSaveErr}</span>}
+                    <button className="btn btn-acc" style={{ fontSize: 11, padding: '3px 12px' }}
+                      disabled={editSaving || !!conflict}
+                      onClick={() => saveEdit(d)}>
+                      {editSaving ? 'Saving…' : 'Save draft'}
+                    </button>
+                    <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={closeEdit}>Discard</button>
+                  </div>
+                </div>
+
+                {/* Collaborator panel */}
+                {showCollabPanel && isOwner && (
+                  <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--b1)', background: 'var(--s2)' }}>
+                    <div style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 8 }}>Collaborators</div>
+                    {collaborators.length === 0 && (
+                      <div style={{ fontSize: 11, color: 'var(--dim)', marginBottom: 8 }}>No collaborators yet. Add someone by their HF UID.</div>
+                    )}
+                    {collaborators.map(c => (
+                      <div key={c.uid} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid var(--b1)', fontSize: 11 }}>
+                        <span style={{ color: 'var(--text)', fontWeight: 500 }}>{c.username || c.uid}</span>
+                        <span style={{ color: 'var(--dim)', fontFamily: 'var(--mono)', fontSize: 10 }}>UID {c.uid}</span>
+                        <button className="btn btn-danger" style={{ fontSize: 9, padding: '1px 6px', marginLeft: 'auto' }}
+                          onClick={() => removeCollab(d.id, c.uid)}>Remove</button>
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                      <input className="inp" placeholder="HF UID (numbers)" value={addCollabUid}
+                        style={{ width: 140, fontSize: 11 }}
+                        onChange={e => { setAddCollabUid(e.target.value); setAddCollabErr(null) }}
+                        onKeyDown={e => e.key === 'Enter' && addCollab(d.id)} />
+                      <button className="btn btn-acc" style={{ fontSize: 11 }}
+                        disabled={addCollabLoading || !addCollabUid.trim()}
+                        onClick={() => addCollab(d.id)}>
+                        {addCollabLoading ? 'Adding…' : 'Add'}
+                      </button>
+                      {addCollabErr && <span style={{ fontSize: 10, color: 'var(--red)' }}>{addCollabErr}</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: 'var(--dim)', marginTop: 6 }}>
+                      Collaborators can edit and save — but cannot post or delete.
+                    </div>
+                  </div>
+                )}
+
+                {/* Edit log panel */}
+                {showLog && (
+                  <div style={{ borderBottom: '1px solid var(--b1)', background: 'var(--s2)' }}>
+                    <div style={{ padding: '8px 12px', fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.08em' }}>
+                      Edit History
+                    </div>
+                    {logLoading && <div style={{ display: 'flex', justifyContent: 'center', padding: 12 }}><div className="spin" /></div>}
+                    {!logLoading && logEntries.length === 0 && (
+                      <div style={{ padding: '6px 12px', fontSize: 11, color: 'var(--dim)', fontStyle: 'italic' }}>No history yet.</div>
+                    )}
+                    {!logLoading && logEntries.map(entry => (
+                      <div key={entry.id} style={{ borderTop: '1px solid var(--b1)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px' }}>
+                          <span style={{ fontSize: 11, color: 'var(--text)', fontWeight: 500 }}>
+                            {entry.is_rollback ? '↩ Rolled back by ' : ''}{entry.editor_name || entry.editor_uid}
+                          </span>
+                          <span style={{ fontSize: 10, color: 'var(--dim)' }}>v{entry.version} · {fmtDate(entry.edited_at)}</span>
+                          <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+                            <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 7px' }}
+                              onClick={() => setExpandedDiff(expandedDiff === entry.id ? null : entry.id)}>
+                              {expandedDiff === entry.id ? 'Hide diff' : 'Diff'}
+                            </button>
+                            {isOwner && (
+                              <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 7px' }}
+                                disabled={rollbackLoading === entry.id}
+                                onClick={() => doRollback(d, entry.id)}>
+                                {rollbackLoading === entry.id ? '…' : 'Restore'}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        {entry.old_subject !== entry.new_subject && (
+                          <div style={{ padding: '0 12px 4px', fontSize: 10 }}>
+                            <span style={{ color: 'var(--red)', fontFamily: 'var(--mono)' }}>− {entry.old_subject}</span>
+                            <br />
+                            <span style={{ color: 'var(--green)', fontFamily: 'var(--mono)' }}>+ {entry.new_subject}</span>
+                          </div>
+                        )}
+                        {expandedDiff === entry.id && (
+                          <div style={{ borderTop: '1px solid var(--b1)', maxHeight: 300, overflowY: 'auto' }}>
+                            <DiffView oldText={entry.old_message} newText={entry.new_message} />
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Subject + editor */}
+                <div style={{ padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <input className="inp" placeholder="Title" value={editSubject}
+                    onChange={e => setEditSubject(e.target.value)} style={{ width: '100%' }} />
+                  {editPreview ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
+                      <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
+                      <BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />
+                    </div>
+                  ) : (
+                    <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -2165,7 +2734,7 @@ function ReplyQueue({ onCountChange }) {
                     </button>
                   </div>
                   {preview[tid] ? (
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,alignItems:'start'}}>
                       <BBEditor value={threadMsg[tid]||''} onChange={v=>setThreadMsg(m=>({...m,[tid]:v}))} userGroups={userGroups}/>
                       <BBPreview message={threadMsg[tid]||''} userGroups={userGroups}/>
                     </div>

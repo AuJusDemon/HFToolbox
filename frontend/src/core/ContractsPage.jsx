@@ -472,235 +472,6 @@ function ExportPanel({ crawlDone, crawlPage, totalCount, myUid }) {
   )
 }
 
-// ── Contract Templates (unchanged logic) ─────────────────────────────────────
-const POSITIONS  = ['selling','buying','exchanging','trading','vouchcopy']
-const CURRENCIES = ['other','USD','BTC','ETH','LTC','bytes']
-const POSITION_LABELS = {
-  selling:'Selling', buying:'Buying', exchanging:'Exchanging', trading:'Trading', vouchcopy:'Vouch Copy',
-}
-
-function CurrencyAmountFields({ label, currKey, amtKey, form, set, inp, lbl, sel }) {
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
-      <div style={{ fontSize:9, color:'var(--sub)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em' }}>{label}</div>
-      <div>
-        <label {...lbl}>Currency</label>
-        <select {...sel} value={form[currKey]} onChange={e => set(currKey, e.target.value)}>
-          {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
-      <div>
-        <label {...lbl}>Amount</label>
-        <input {...inp} value={form[amtKey]} onChange={e => set(amtKey, e.target.value)} placeholder="0" />
-      </div>
-    </div>
-  )
-}
-
-function ProductField({ label, fieldKey, form, set, inp, lbl, placeholder }) {
-  return (
-    <div>
-      <div style={{ fontSize:9, color:'var(--sub)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:4 }}>{label}</div>
-      <label {...lbl}>Product / Description</label>
-      <input {...inp} value={form[fieldKey]} onChange={e => set(fieldKey, e.target.value)} placeholder={placeholder} />
-    </div>
-  )
-}
-
-function TemplateForm({ initial, onSave, onCancel }) {
-  const [form, setForm] = useState({
-    name:'', position:'selling', terms:'',
-    yourproduct:'', yourcurrency:'other', youramount:'0',
-    theirproduct:'', theircurrency:'other', theiramount:'0',
-    address:'', middleman_uid:'', timeout_days:14, is_public:false,
-    ...initial,
-  })
-  const [busy, setBusy] = useState(false)
-  const [err,  setErr]  = useState(null)
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
-  const submit = async () => {
-    if (!form.name.trim())  { setErr('Name is required'); return }
-    if (!form.terms.trim()) { setErr('Terms are required'); return }
-    setBusy(true); setErr(null)
-    try { await onSave(form) } catch (e) { setErr(e.message || 'Error') } finally { setBusy(false) }
-  }
-  const inp = { className:'inp', style:{ fontSize:11, width:'100%', boxSizing:'border-box' } }
-  const lbl = { style:{ fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:4, display:'block' } }
-  const sel = { className:'inp', style:{ fontSize:11, width:'100%', boxSizing:'border-box', cursor:'pointer' } }
-  const pos = form.position; const shared = { form, set, inp, lbl, sel }
-
-  const renderPositionFields = () => {
-    if (pos === 'vouchcopy') return <div style={{ padding:'10px 12px', background:'var(--s2)', border:'1px solid var(--b1)', borderRadius:4, fontSize:11, color:'var(--sub)', fontStyle:'italic', textAlign:'center' }}>Vouch Copy — no product or currency fields needed</div>
-    if (pos === 'selling')   return <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}><ProductField label="Your Product / Service" fieldKey="yourproduct" placeholder="e.g. 30-day Spotify slot" {...shared} /><CurrencyAmountFields label="Their Payment" currKey="theircurrency" amtKey="theiramount" {...shared} /></div>
-    if (pos === 'buying')    return <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}><CurrencyAmountFields label="Your Payment" currKey="yourcurrency" amtKey="youramount" {...shared} /><ProductField label="Their Product / Service" fieldKey="theirproduct" placeholder="e.g. 30-day Spotify slot" {...shared} /></div>
-    if (pos === 'exchanging') return <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}><CurrencyAmountFields label="Your Currency / Amount" currKey="yourcurrency" amtKey="youramount" {...shared} /><CurrencyAmountFields label="Their Currency / Amount" currKey="theircurrency" amtKey="theiramount" {...shared} /></div>
-    if (pos === 'trading')   return <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}><ProductField label="Your Product / Service" fieldKey="yourproduct" placeholder="e.g. Your item" {...shared} /><ProductField label="Their Product / Service" fieldKey="theirproduct" placeholder="e.g. Their item" {...shared} /></div>
-    return null
-  }
-
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <div><label {...lbl}>Template Name</label><input {...inp} value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Standard Service Sale" /></div>
-        <div><label {...lbl}>Position</label><select {...sel} value={form.position} onChange={e => set('position', e.target.value)}>{POSITIONS.map(p => <option key={p} value={p}>{POSITION_LABELS[p]}</option>)}</select></div>
-      </div>
-      {renderPositionFields()}
-      <div>
-        <label {...lbl}>Contract Terms</label>
-        <textarea {...inp} style={{ ...inp.style, minHeight:100, fontFamily:'var(--mono)', resize:'vertical' }}
-          value={form.terms} onChange={e => set('terms', e.target.value)} placeholder="Full contract terms…" spellCheck={false}
-          onFocus={e => e.target.style.borderColor='var(--acc)'} onBlur={e => e.target.style.borderColor='var(--b2)'} />
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <div><label {...lbl}>Payment Address <span style={{ color:'var(--dim)' }}>(optional)</span></label><input {...inp} value={form.address} onChange={e => set('address', e.target.value)} placeholder="e.g. crypto wallet / autobuy link" /></div>
-        <div><label {...lbl}>Middleman UID <span style={{ color:'var(--dim)' }}>(optional)</span></label><input {...inp} value={form.middleman_uid} onChange={e => set('middleman_uid', e.target.value)} placeholder="UID of middleman/escrow" /></div>
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
-        <div><label {...lbl}>Timeout (days)</label><input {...inp} type="number" min="1" max="90" value={form.timeout_days} onChange={e => set('timeout_days', parseInt(e.target.value) || 14)} /></div>
-        <div style={{ display:'flex', alignItems:'center', gap:8, paddingTop:16 }}>
-          <button className={`tog${!form.is_public ? ' off' : ''}`} onClick={() => set('is_public', !form.is_public)} />
-          <span style={{ fontSize:11, color:'var(--sub)' }}>{form.is_public ? 'Public (visible to all users)' : 'Private (only you)'}</span>
-        </div>
-      </div>
-      {err && <div style={{ fontSize:11, color:'var(--red)', fontFamily:'var(--mono)' }}>✕ {err}</div>}
-      <div style={{ display:'flex', gap:6 }}>
-        <button className="btn btn-acc" style={{ fontSize:11 }} disabled={busy} onClick={submit}>{busy ? '…' : initial ? 'Save Changes' : 'Create Template'}</button>
-        <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={onCancel}>Cancel</button>
-      </div>
-    </div>
-  )
-}
-
-function FireModal({ template, onClose }) {
-  const [cpUid, setCpUid]       = useState('')
-  const [threadId, setThreadId] = useState('')
-  const [busy, setBusy]         = useState(false)
-  const [result, setResult]     = useState(null)
-  const [err, setErr]           = useState(null)
-
-  const fire = async () => {
-    if (!cpUid) { setErr('Counterparty UID required'); return }
-    setBusy(true); setErr(null)
-    try {
-      const d = await api.post(`/api/contracts/templates/${template.id}/fire`, {
-        counterparty_uid: parseInt(cpUid),
-        thread_id: threadId ? parseInt(threadId) : undefined,
-      })
-      setResult(d)
-    } catch (e) { setErr(e.message || 'Failed to create contract') }
-    finally { setBusy(false) }
-  }
-
-  return (
-    <div style={{ position:'fixed', inset:0, zIndex:500, background:'rgba(0,0,0,.65)', display:'flex', alignItems:'center', justifyContent:'center' }}
-      onClick={e => { if(e.target===e.currentTarget) onClose() }}>
-      <div style={{ background:'var(--s2)', border:'1px solid var(--b2)', borderRadius:8, width:'min(420px,94vw)', padding:20, boxShadow:'0 12px 40px rgba(0,0,0,.6)' }}>
-        {result ? (
-          <div style={{ display:'flex', flexDirection:'column', gap:12, textAlign:'center' }}>
-            <div style={{ fontSize:24 }}>✓</div>
-            <div style={{ fontSize:14, fontWeight:600 }}>Contract Created</div>
-            {result.cid && <div style={{ fontSize:12, color:'var(--dim)', fontFamily:'var(--mono)' }}>CID: {result.cid}</div>}
-            {result.url && <a href={result.url} target="_blank" rel="noreferrer" className="btn btn-acc" style={{ fontSize:12, textAlign:'center' }}>View on HF →</a>}
-            <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={onClose}>Close</button>
-          </div>
-        ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-            <div style={{ fontSize:13, fontWeight:600 }}>Use Template: <span style={{ color:'var(--acc)' }}>{template.name}</span></div>
-            <div style={{ fontSize:11, color:'var(--dim)', padding:'6px 10px', background:'var(--s3)', border:'1px solid var(--b1)', borderRadius:4 }}>
-              <strong style={{ color:'var(--sub)' }}>{template.position}</strong>{template.yourproduct && ` · ${template.yourproduct}`}
-            </div>
-            <div>
-              <label style={{ fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:4, display:'block' }}>Counterparty UID *</label>
-              <input className="inp" style={{ fontSize:12, width:'100%', boxSizing:'border-box' }}
-                value={cpUid} onChange={e => setCpUid(e.target.value)} placeholder="e.g. 123456" autoFocus
-                onKeyDown={e => { if(e.key==='Enter') fire() }} />
-            </div>
-            <div>
-              <label style={{ fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em', marginBottom:4, display:'block' }}>Thread ID (optional)</label>
-              <input className="inp" style={{ fontSize:12, width:'100%', boxSizing:'border-box' }}
-                value={threadId} onChange={e => setThreadId(e.target.value)} placeholder="e.g. 5847344" />
-            </div>
-            {err && <div style={{ fontSize:11, color:'var(--red)', fontFamily:'var(--mono)' }}>✕ {err}</div>}
-            <div style={{ display:'flex', gap:6 }}>
-              <button className="btn btn-acc" style={{ fontSize:12, flex:1 }} disabled={busy||!cpUid} onClick={fire}>{busy ? '…' : 'Create Contract'}</button>
-              <button className="btn btn-ghost" style={{ fontSize:12 }} onClick={onClose}>Cancel</button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function TemplatesPanel({ myUid }) {
-  const [templates, setTemplates] = useState([])
-  const [loading, setLoading]     = useState(true)
-  const [mode, setMode]           = useState('list')
-  const [editing, setEditing]     = useState(null)
-  const [firing, setFiring]       = useState(null)
-
-  const load = useCallback(() => {
-    api.get('/api/contracts/templates')
-      .then(d => { setTemplates(d.templates || []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
-  useEffect(() => { load() }, [load])
-
-  const createTemplate = async (data) => { await api.post('/api/contracts/templates', data); load(); setMode('list') }
-  const saveTemplate   = async (data) => { await api.patch(`/api/contracts/templates/${editing.id}`, data); load(); setMode('list'); setEditing(null) }
-  const deleteTemplate = async (id)   => { if (!confirm('Delete this template?')) return; await api.delete(`/api/contracts/templates/${id}`); load() }
-
-  if (loading) return <div style={{ display:'flex', justifyContent:'center', padding:30 }}><div className="spin"/></div>
-  if (mode === 'create') return <div><div style={{ fontSize:12, fontWeight:600, marginBottom:14 }}>New Template</div><TemplateForm onSave={createTemplate} onCancel={() => setMode('list')} /></div>
-  if (mode === 'edit' && editing) return <div><div style={{ fontSize:12, fontWeight:600, marginBottom:14 }}>Edit Template</div><TemplateForm initial={editing} onSave={saveTemplate} onCancel={() => { setMode('list'); setEditing(null) }} /></div>
-
-  const mine = templates.filter(t => t.uid === myUid)
-  const pub  = templates.filter(t => t.uid !== myUid && t.is_public)
-
-  const TemplateCard = ({ t }) => (
-    <div style={{ padding:'12px 14px', background:'var(--s3)', border:'1px solid var(--b2)', borderRadius:6, display:'flex', flexDirection:'column', gap:8 }}>
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <span style={{ fontWeight:600, fontSize:12, flex:1 }}>{t.name}</span>
-        {t.is_public && <span style={{ fontSize:9, padding:'1px 6px', borderRadius:2, fontFamily:'var(--mono)', background:'rgba(75,140,245,.1)', border:'1px solid rgba(75,140,245,.2)', color:'var(--blue)' }}>PUBLIC</span>}
-        <span style={{ fontSize:9, padding:'1px 6px', borderRadius:2, fontFamily:'var(--mono)', background:'var(--s2)', border:'1px solid var(--b1)', color:'var(--sub)', textTransform:'uppercase' }}>{t.position}</span>
-      </div>
-      {(t.yourproduct || t.theirproduct) && (
-        <div style={{ fontSize:11, color:'var(--dim)' }}>
-          {t.yourproduct && <span>You: <span style={{ color:'var(--sub)' }}>{t.yourproduct}</span></span>}
-          {t.yourproduct && t.theirproduct && <span style={{ margin:'0 6px' }}>·</span>}
-          {t.theirproduct && <span>Them: <span style={{ color:'var(--sub)' }}>{t.theirproduct}</span></span>}
-        </div>
-      )}
-      {t.terms && <div style={{ fontSize:11, color:'var(--dim)', fontFamily:'var(--mono)', whiteSpace:'pre-wrap', wordBreak:'break-word', maxHeight:60, overflowY:'auto', lineHeight:1.5 }}>{t.terms.slice(0, 200)}{t.terms.length > 200 ? '…' : ''}</div>}
-      <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
-        <button className="btn btn-acc" style={{ fontSize:11 }} onClick={() => setFiring(t)}>Use Template</button>
-        {t.uid === myUid && <>
-          <button className="btn btn-ghost" style={{ fontSize:11 }} onClick={() => { setEditing(t); setMode('edit') }}>Edit</button>
-          <button className="btn btn-danger" style={{ fontSize:11 }} onClick={() => deleteTemplate(t.id)}>Delete</button>
-        </>}
-      </div>
-    </div>
-  )
-
-  return (
-    <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <span style={{ fontSize:12, color:'var(--dim)' }}>{mine.length} template{mine.length !== 1 ? 's' : ''}</span>
-        <button className="btn btn-acc" style={{ fontSize:11, marginLeft:'auto' }} onClick={() => setMode('create')}>+ New Template</button>
-      </div>
-      {!templates.length ? (
-        <div style={{ fontSize:12, color:'var(--dim)', fontStyle:'italic', textAlign:'center', padding:'20px 0' }}>No templates yet. Create one to speed up repeated contracts.</div>
-      ) : (
-        <>
-          {mine.length > 0 && <div style={{ display:'flex', flexDirection:'column', gap:8 }}><div style={{ fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em' }}>Your Templates</div>{mine.map(t => <TemplateCard key={t.id} t={t} />)}</div>}
-          {pub.length > 0  && <div style={{ display:'flex', flexDirection:'column', gap:8 }}><div style={{ fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)', textTransform:'uppercase', letterSpacing:'.07em' }}>Public Templates</div>{pub.map(t => <TemplateCard key={t.id} t={t} />)}</div>}
-        </>
-      )}
-      {firing && <FireModal template={firing} onClose={() => { setFiring(null); load() }} />}
-    </div>
-  )
-}
-
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ContractsPage() {
   const apiPaused = useStore(s => s.apiPaused)
@@ -708,7 +479,6 @@ export default function ContractsPage() {
   const myUid     = useStore(s => s.user?.uid)
   const nav       = useNavigate()
 
-  const [tab,       setTab]       = useState('contracts')
   const [data,      setData]      = useState(null)
   const [hist,      setHist]      = useState(null)
   const [stats,     setStats]     = useState(null)
@@ -819,22 +589,7 @@ export default function ContractsPage() {
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
 
-      {/* Tab bar */}
-      <div style={{ display:'flex', borderBottom:'1px solid var(--b1)' }}>
-        {[['contracts','📜 Contracts']].map(([k,l]) => (
-          <button key={k} className={`tab${tab===k?' on':''}`} onClick={() => setTab(k)}>{l}</button>
-        ))}
-      </div>
-
-      {tab === 'templates' ? (
-        <div className="card">
-          <div className="card-head">
-            <span className="card-icon">📋</span>
-            <span className="card-title">Contract Templates</span>
-          </div>
-          <div className="card-body"><TemplatesPanel myUid={myUid} /></div>
-        </div>
-      ) : (
+      {
         <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
 
           {/* Stats bar — 6 tiles */}
@@ -1015,7 +770,7 @@ export default function ContractsPage() {
             </div>
           </div>
         </div>
-      )}
+      }
     </div>
   )
 }

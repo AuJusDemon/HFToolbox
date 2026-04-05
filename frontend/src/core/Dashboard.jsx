@@ -279,7 +279,7 @@ function ContractsOverview() {
   const active    = (data?.contracts||[]).filter(c => c.status_n === '5').length
   const awaiting  = (data?.contracts||[]).filter(c => c.status_n === '1').length
   const disputed  = (data?.contracts||[]).filter(c => c.status_n === '7').length
-  const total     = (data?.contracts||[]).length
+  const total     = data?.total_count ?? (data?.contracts||[]).length
 
   return (
     <div className="card" style={{cursor:'pointer',height:420,display:'flex',flexDirection:'column'}} onClick={() => nav('/dashboard/contracts')}>
@@ -505,7 +505,7 @@ function DashGrid({ children }) {
   return (
     <div style={{
       display: 'grid',
-      gridTemplateColumns: real.length === 1 ? '1fr' : '1fr 1fr',
+      gridTemplateColumns: real.length === 1 ? '1fr' : 'minmax(0,1fr) minmax(0,1fr)',
       gap: 12,
       alignItems: 'start',
     }}>

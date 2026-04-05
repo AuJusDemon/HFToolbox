@@ -143,9 +143,11 @@ async def fire_due_threads() -> None:
 
 # In-memory: populated by crawl, consumed by reply poller each cycle.
 # Key: uid, Value: set of tids where lastpost changed and lastposter != us/Stanley
-_reply_check_queue: dict[str, set[str]] = {}
-# Also store thread titles for queued tids
-_reply_check_titles: dict[str, dict[str, str]] = {}  # uid -> {tid -> title}
+_reply_check_queue:       dict[str, set[str]]       = {}
+# Thread titles for queued tids
+_reply_check_titles:      dict[str, dict[str, str]] = {}  # uid -> {tid -> title}
+# numreplies hint for queued tids — used to calculate which page to fetch
+_reply_check_numreplies:  dict[str, dict[str, int]] = {}  # uid -> {tid -> numreplies}
 
 STANLEY_UID = "1337"
 
@@ -172,8 +174,9 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
         if active_uids is not None and uid not in active_uids:
             continue
 
-        tids = _reply_check_queue.pop(uid, set())
-        titles = _reply_check_titles.pop(uid, {})
+        tids       = _reply_check_queue.pop(uid, set())
+        titles     = _reply_check_titles.pop(uid, {})
+        numreplies = _reply_check_numreplies.pop(uid, {})
         if not tids:
             continue
 
@@ -199,36 +202,63 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             if not last_pid:
                 last_pid = "0"
 
-            thread_title = titles.get(tid_str, tracked.get("title", ""))
+            thread_title  = titles.get(tid_str, tracked.get("title", ""))
+            nr            = numreplies.get(tid_str, 0)
+
+            # Calculate which page(s) new replies are likely on.
+            # Posts are returned oldest-first, so new replies are at the END.
+            # Bug fix: always fetching page 1 was missing replies on threads with >30 posts.
+            # Use numreplies (from crawl) to jump to the correct last page.
+            # Fetch last page + one before it as a buffer for stale numreplies counts.
+            last_pid_int = int(last_pid)
+            if nr > 30:
+                import math as _math
+                last_page = _math.ceil(nr / 30)
+                pages_to_fetch = list(dict.fromkeys([
+                    max(1, last_page - 1),
+                    last_page,
+                    last_page + 1,   # one ahead in case numreplies was stale
+                ]))
+            elif last_pid_int == 0:
+                pages_to_fetch = [1, 2]   # first time: grab first two pages
+            else:
+                pages_to_fetch = [1]
 
             try:
-                posts_data = await client.read({
-                    "posts": {
-                        "_tid":     [int(tid_str)],
-                        "_page":    1,
-                        "_perpage": 30,
-                        "pid":      True,
-                        "uid":      True,
-                        "dateline": True,
-                        "message":  True,
-                        "subject":  True,
-                    }
-                })
-                if not posts_data:
-                    continue
-                posts_raw = posts_data.get("posts", [])
-                if isinstance(posts_raw, dict): posts_raw = [posts_raw]
-                if not posts_raw:
+                collected_posts: list = []
+                for fetch_page in pages_to_fetch:
+                    page_data = await client.read({
+                        "posts": {
+                            "_tid":     [int(tid_str)],
+                            "_page":    fetch_page,
+                            "_perpage": 30,
+                            "pid":      True,
+                            "uid":      True,
+                            "dateline": True,
+                            "message":  True,
+                            "subject":  True,
+                        }
+                    })
+                    if not page_data:
+                        continue
+                    page_raw = page_data.get("posts", [])
+                    if isinstance(page_raw, dict): page_raw = [page_raw]
+                    collected_posts.extend(page_raw or [])
+
+                if not collected_posts:
                     continue
 
+                # Dedupe by pid (pages can overlap at boundaries)
+                seen_pids: set[str] = set()
                 max_pid   = last_pid
                 new_posts = []
-                for p in posts_raw:
+                for p in collected_posts:
                     pid_str  = str(p.get("pid") or "")
                     post_uid = str(p.get("uid") or "")
-                    if not pid_str:
+                    if not pid_str or pid_str in seen_pids:
                         continue
-                    if int(pid_str) <= int(last_pid):
+                    seen_pids.add(pid_str)
+                    if int(pid_str) <= last_pid_int:
                         continue
                     if int(pid_str) > int(max_pid):
                         max_pid = pid_str
