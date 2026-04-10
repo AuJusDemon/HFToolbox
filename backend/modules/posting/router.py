@@ -39,6 +39,11 @@ import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 import db
+try:
+    from HFClient import AuthExpired as _AuthExpired
+except ImportError:
+    class _AuthExpired(Exception):
+        pass
 from .posting_db import (
     init_posting_db,
     # scheduled threads
@@ -53,7 +58,7 @@ from .posting_db import (
     # drafts — simple
     save_draft, delete_draft,
     # drafts — collaborative
-    get_draft, get_drafts_with_collab_info, get_shared_drafts,
+    create_draft, get_draft, get_drafts_with_collab_info, get_shared_drafts,
     save_draft_collab, get_draft_version_info,
     # collaborators
     add_collaborator, remove_collaborator, get_collaborators,
@@ -165,14 +170,17 @@ async def queue_thread(request: Request):
     if fire_at <= 0:
         fire_at = int(time.time())
 
-    auto_bump       = bool(body.get("auto_bump", False))
-    bump_interval_h = int(body.get("bump_interval_h", 12))
+    auto_bump        = bool(body.get("auto_bump", False))
+    bump_interval_h  = int(body.get("bump_interval_h", 12))
+    overflow_message   = str(body.get("overflow_message") or "").strip()
+    overflow_message_2 = str(body.get("overflow_message_2") or "").strip()
     if bump_interval_h < 6:  bump_interval_h = 6
     if bump_interval_h > 24: bump_interval_h = 24
 
     row_id = await asyncio.to_thread(
         create_scheduled_thread,
-        uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h
+        uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h,
+        overflow_message, overflow_message_2
     )
     await asyncio.to_thread(touch_recent, uid, fid, forum_name, category_name)
 
@@ -227,7 +235,9 @@ async def cancel_to_draft_route(request: Request, row_id: int):
     if not row:
         return JSONResponse({"error": "not found or already sent"}, status_code=404)
     draft_id = await asyncio.to_thread(
-        save_draft, uid, row["fid"], row["forum_name"], row["subject"], row["message"]
+        create_draft, uid, row["fid"], row["forum_name"], row["subject"], row["message"],
+        str(row.get("overflow_message") or ""),
+        str(row.get("overflow_message_2") or ""),
     )
     return {"ok": True, "draft_id": draft_id}
 
@@ -327,7 +337,7 @@ async def post_reply(request: Request):
     client = HFClient(token)
 
     try:
-        result = await client.write({"posts": {"_tid": int(tid), "_message": message}})
+        result = await asyncio.wait_for(client.write({"posts": {"_tid": int(tid), "_message": message}}), timeout=12)
         log.info("Reply write uid=%s tid=%s raw_result=%s", uid, tid, result)
         if not result:
             return JSONResponse({"error": "API returned empty response"}, status_code=502)
@@ -355,6 +365,10 @@ async def post_reply(request: Request):
             log.debug("Auto-dismiss failed uid=%s tid=%s: %s", uid, tid, _de)
 
         return {"ok": True, "pid": pid}
+    except _AuthExpired:
+        request.session.clear()
+        await asyncio.to_thread(db.clear_token, uid)
+        return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
     except Exception as e:
         log.exception("Reply failed uid=%s tid=%s: %s", uid, tid, e)
         return JSONResponse({"error": str(e)}, status_code=500)
@@ -421,16 +435,18 @@ async def list_drafts(request: Request):
 
 
 @router.post("/drafts")
-async def create_draft(request: Request):
+async def create_draft_route(request: Request):
     uid, err = _auth(request)
     if err: return err
     body = await request.json()
     draft_id = await asyncio.to_thread(
-        save_draft, uid,
+        create_draft, uid,
         str(body.get("fid") or ""),
         str(body.get("forum_name") or ""),
         str(body.get("subject") or ""),
         str(body.get("message") or ""),
+        str(body.get("reply1") or ""),
+        str(body.get("reply2") or ""),
     )
     return {"ok": True, "draft_id": draft_id}
 
@@ -464,6 +480,8 @@ async def save_draft_versioned(request: Request, draft_id: int):
     forum_name   = str(body.get("forum_name") or "").strip()
     subject      = str(body.get("subject") or "").strip()
     message      = str(body.get("message") or "").strip()
+    reply1       = str(body.get("reply1") or "").strip()
+    reply2       = str(body.get("reply2") or "").strip()
     base_version = int(body.get("base_version") or 1)
 
     if not subject: return JSONResponse({"error": "subject required"}, status_code=400)
@@ -477,7 +495,8 @@ async def save_draft_versioned(request: Request, draft_id: int):
 
     status, data = await asyncio.to_thread(
         save_draft_collab,
-        draft_id, uid, fid, forum_name, subject, message, base_version, editor_name
+        draft_id, uid, fid, forum_name, subject, message, base_version, editor_name,
+        reply1, reply2
     )
 
     if status == "notfound":

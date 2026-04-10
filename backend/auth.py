@@ -99,6 +99,13 @@ async def callback(request: Request, code: str, state: str):
     return RedirectResponse(f"{FRONTEND_URL}/dashboard")
 
 
+# Dev override: DEV_GROUPS_OVERRIDE=63,53,57,... in .env injects extra group IDs
+# into every user's groups list. Only for local dev — never set in production.
+_DEV_GROUPS_OVERRIDE: list[str] = [
+    g.strip() for g in os.environ.get("DEV_GROUPS_OVERRIDE", "").split(",") if g.strip()
+]
+
+
 @router.get("/me")
 async def me(request: Request):
     uid = request.session.get("uid")
@@ -107,11 +114,14 @@ async def me(request: Request):
     user = await asyncio.to_thread(db.get_user, uid)
     if not user:
         raise HTTPException(401)
+    groups = user["groups"]
+    if _DEV_GROUPS_OVERRIDE:
+        groups = list(dict.fromkeys(groups + _DEV_GROUPS_OVERRIDE))
     return {
         "uid":      user["uid"],
         "username": user["username"],
         "avatar":   user["avatar"],
-        "groups":   user["groups"],
+        "groups":   groups,
     }
 
 

@@ -30,20 +30,21 @@ function contractValue(c) {
 }
 
 // Which actions are available based on status + party
-function availableActions(c, myUid) {
+function availableActions(c, myUid, cid) {
   const status = c.status
   const isInit  = String(c.inituid)  === String(myUid)
   const isOther = String(c.otheruid) === String(myUid)
   const actions = []
 
   if (status === '1') {
-    if (isInit)  actions.push({ action:'undo',     label:'Undo',    cls:'btn-ghost',   confirm:false })
-    if (isOther) actions.push({ action:'approve',  label:'Approve', cls:'btn-acc',     confirm:true  })
-    if (isOther) actions.push({ action:'deny',     label:'Deny',    cls:'btn-danger',  confirm:true  })
+    if (isInit)  actions.push({ action:'undo',    label:'Undo',          cls:'btn-ghost',  confirm:false })
+    if (isOther) actions.push({ action:'approve', label:'Approve',       cls:'btn-acc',    confirm:true  })
+    if (isOther) actions.push({ action:'deny',    label:'Deny Contract', cls:'btn-danger', confirm:true  })
   }
   if (status === '5') {
-    actions.push({ action:'complete', label:'Mark Complete', cls:'btn-acc',    confirm:true  })
-    actions.push({ action:'cancel',   label:'Request Cancel', cls:'btn-ghost', confirm:true  })
+    actions.push({ action:'complete', label:'Mark Complete', cls:'btn-acc', confirm:true })
+    actions.push({ action:'deny_external', label:'Deny Contract', cls:'btn-danger', confirm:false,
+                   external:`https://hackforums.net/contracts.php?action=view&cid=${cid}` })
   }
   return actions
 }
@@ -71,14 +72,18 @@ export default function ContractDetailPage() {
     setActionResult(null)
     try {
       const res = await api.post(`/api/contracts/${cid}/action`, { action, address })
-      setActionResult({ ok: true, message: `${action} successful` })
-      // Refresh contract data after action
-      setTimeout(() => {
-        api.get(`/api/contracts/${cid}`).then(d => setData(d)).catch(() => {})
-        setActionResult(null)
-      }, 2000)
+      console.log('[contract action]', action, 'response:', res)
+      if (!res) {
+        setActionResult({ ok: false, message: 'No response from server — action may not have gone through.' })
+      } else {
+        setActionResult({ ok: true, message: `${action} successful — refreshing...` })
+        setTimeout(() => {
+          api.get(`/api/contracts/${cid}?force=true`).then(d => { setData(d); setActionResult(null) }).catch(() => {})
+        }, 1500)
+      }
     } catch (e) {
-      setActionResult({ ok: false, message: e.message })
+      console.error('[contract action] error:', e)
+      setActionResult({ ok: false, message: e.message || 'Unknown error — check HF directly.' })
     }
     setActing(null)
     setConfirmAction(null)
@@ -105,7 +110,7 @@ export default function ContractDetailPage() {
   const value       = contractValue(c)
   const isInit      = String(c.inituid) === String(my_uid)
   const cpUid       = isInit ? c.otheruid : c.inituid
-  const actions     = availableActions(c, my_uid)
+  const actions     = availableActions(c, my_uid, cid)
   const needsAddress = (confirmAction === 'approve' || confirmAction === 'complete')
 
   return (
@@ -230,7 +235,12 @@ export default function ContractDetailPage() {
             </div>
           ) : (
             <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
-              {actions.map(a => (
+              {actions.map(a => a.external ? (
+                <a key={a.action} href={a.external} target="_blank" rel="noreferrer"
+                  className={`btn ${a.cls}`} style={{ fontSize:11 }}>
+                  {a.label}
+                </a>
+              ) : (
                 <button key={a.action}
                   className={`btn ${a.cls}`}
                   style={{ fontSize:11 }}

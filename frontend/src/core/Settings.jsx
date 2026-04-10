@@ -231,7 +231,7 @@ function AccountSection() {
         </Row>
         <Row
           label="Delete account data"
-          hint="Permanently removes all stored data: bytes history, contracts, bump jobs, settings. Your HF account is unaffected."
+          hint="Permanently removes all stored data: bytes history, contracts, bump jobs, drafts, settings. Your HF account is unaffected."
           last
         >
           {phase === 'idle' && (

@@ -13,6 +13,7 @@ import os
 import sys
 import logging
 import asyncio
+import secrets
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,10 +27,6 @@ try:
 except ImportError:
     pass  # python-dotenv optional — set env vars manually if not installed
 
-# Windows + Python 3.12 require this for uvicorn to work correctly
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 import db
 import auth
 from module_registry import all_modules, all_routers
@@ -41,6 +38,79 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+ENV = os.environ.get("ENV", "development").lower()
+
+_WEAK_SESSION_SECRETS = {
+    "",
+    "changeme",
+    "change-me",
+    "default",
+    "replace_with_64_char_random_hex_string",
+}
+
+
+def _get_session_secret() -> str:
+    secret = (os.environ.get("SESSION_SECRET") or "").strip()
+    weak = secret in _WEAK_SESSION_SECRETS or len(secret) < 32
+    if weak:
+        if ENV == "production":
+            raise RuntimeError(
+                "SESSION_SECRET is missing or weak. Set a long random value before starting production."
+            )
+        secret = secrets.token_urlsafe(48)
+        log.warning(
+            "SESSION_SECRET missing or weak. Generated an ephemeral development secret; sessions will reset on restart."
+        )
+    return secret
+
+
+SESSION_SECRET = _get_session_secret()
+
+try:
+    from HFClient import AuthExpired as _AuthExpired
+except ImportError:
+    class _AuthExpired(Exception):
+        pass
+
+
+def _handle_auth_expired(request: Request, uid: str) -> JSONResponse:
+    """Call when HF returns 401 (token revoked/expired). Wipes session + stored token.
+    DB clear is fire-and-forget via create_task so we don't block the event loop."""
+    request.session.clear()
+    try:
+        asyncio.get_event_loop().call_soon(
+            lambda: asyncio.ensure_future(asyncio.to_thread(db.clear_token, uid))
+        )
+    except Exception:
+        pass
+    return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
+
+
+# ── Dynamic throttle ───────────────────────────────────────────────────────────
+# Levels based on lowest remaining calls across all active user tokens.
+#   normal   > 150  — everything runs at full speed
+#   caution  100-150 — skip non-critical background work (username cache, tid backfill, browse warm)
+#   low       50-100 — skip bytes crawl, double reply poll interval
+#   critical  < 50   — skip everything except autobump and scheduled posts
+
+# ── Throttle level — fully in-memory, never blocks the event loop ─────────────
+# HFClient._rate_limits is a module-level dict {token: remaining} updated from
+# every API response header. We read it directly — zero DB calls, zero blocking.
+
+def _throttle_level() -> str:
+    """Return throttle level from HFClient in-memory rate limit data. Never blocks."""
+    try:
+        import HFClient as _hfc
+        values = [v for v in _hfc._rate_limits.values() if v < 9999]
+        if not values:
+            return "normal"
+        lowest = min(values)
+        if lowest < 50:   return "critical"
+        if lowest < 100:  return "low"
+        if lowest < 150:  return "caution"
+        return "normal"
+    except Exception:
+        return "normal"
 
 
 async def _crawl_user_bytes(uid: str, token: str) -> None:
@@ -67,7 +137,7 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
 
     # ── Call 1: bytes received + me profile + contracts + threads  [4/4 slots] ──
     # threads._uid page 1 = 30 most recently active threads, free in this slot
-    data1 = await client.read({
+    data1 = await asyncio.wait_for(client.read({
         "bytes": {"_to": [uid_int], "_page": recv_page, "_perpage": 30,
                   "id": True, "amount": True, "dateline": True, "reason": True},
         "me": {
@@ -90,8 +160,9 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
             "_uid": [uid_int], "_page": 1, "_perpage": 30,
             "tid": True, "subject": True, "fid": True,
             "lastpost": True, "lastposteruid": True, "numreplies": True,
+            "closed": True,
         },
-    })
+    }), timeout=15)
 
     # ── Call 2: bytes sent + contracts(page N+1 if still crawling)  [1-2/4] ──
     c_page2 = c_page_check + 1
@@ -109,7 +180,7 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
             "iproduct": True, "oproduct": True,
             "dateline": True, "tid": True,
         }
-    data2 = await client.read(call2_ask)
+    data2 = await asyncio.wait_for(client.read(call2_ask), timeout=15)
 
     # ── Parse + store bytes ───────────────────────────────────────────────────
     def parse_bytes(data, sent):
@@ -185,6 +256,35 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
             except Exception as e:
                 log.warning("Crawl: contract notification failed uid=%s: %s", uid, e)
 
+    # ── Re-check any contracts still showing as open (Awaiting/Active) ──────────
+    # The main crawl only pages through history once. Open contracts need their
+    # status refreshed every cycle so stale Awaiting/Active records get updated.
+    try:
+        open_cids = await asyncio.to_thread(db.get_open_contract_cids, uid)
+        # Remove CIDs we already fetched this cycle (page 1 + page 2 of crawl)
+        fetched_cids = {str(c.get("cid","")) for c in all_contracts}
+        stale_cids = [int(cid) for cid in open_cids if cid not in fetched_cids]
+        # Batch into groups of 30 (API max per call), 1 call at a time
+        for i in range(0, len(stale_cids), 30):
+            batch = stale_cids[i:i+30]
+            r = await client.read({"contracts": {
+                "_cid": batch,
+                "cid": True, "status": True, "type": True,
+                "inituid": True, "otheruid": True,
+                "iprice": True, "icurrency": True,
+                "oprice": True, "ocurrency": True,
+                "iproduct": True, "oproduct": True,
+                "dateline": True, "tid": True,
+            }})
+            if r:
+                updated = r.get("contracts", [])
+                if isinstance(updated, dict): updated = [updated]
+                if updated:
+                    await asyncio.to_thread(db.upsert_contracts, uid, updated)
+                    log.info("Contracts re-check uid=%s updated %d open contracts", uid, len(updated))
+    except Exception as e:
+        log.warning("Contracts re-check failed uid=%s: %s", uid, e)
+
     # Advance contracts crawl state
     pages_fetched_this_run = len([b for b in [c_batch1, c_batch2] if b])
     last_batch = c_batch2 if c_batch2 else c_batch1
@@ -223,12 +323,14 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
             t_lastpost   = int(th.get("lastpost") or 0)
             t_lastposter = str(th.get("lastposteruid") or "")
             t_numreplies = int(th.get("numreplies") or 0)
+            t_closed     = int(th.get("closed") or 0)
             if not t_tid or not t_lastpost:
                 continue
 
             # Register thread (idempotent)
             try:
-                await asyncio.to_thread(add_my_thread, uid, t_tid, t_fid, t_subject)
+                await asyncio.to_thread(add_my_thread, uid, t_tid, t_fid, t_subject,
+                                                   t_lastpost, t_lastposter, t_numreplies, t_closed)
             except Exception:
                 pass
 
@@ -324,7 +426,7 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
 
     # ── Free bonus: refresh contracts dash cache from page-1 batch ───────────
     if c_batch1:
-        STATUS  = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
+        STATUS  = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
                    "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
         TYPE_MAP = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
         cached_contracts = []
@@ -408,6 +510,9 @@ async def _trigger_listener() -> None:
                 try:
                     await _crawl_user_bytes(uid, token)
                     await asyncio.to_thread(db.set_needs_refresh, uid, 0)
+                except _AuthExpired:
+                    log.warning("Crawl: token revoked for uid=%s — clearing token", uid)
+                    await asyncio.to_thread(db.clear_token, uid)
                 except Exception as e:
                     log.warning("Immediate crawl failed uid=%s: %s", uid, e)
             _crawl_trigger.task_done()
@@ -447,16 +552,25 @@ async def _bytes_crawl_loop() -> None:
         try:
             uids = await asyncio.to_thread(db.get_all_uids)
             ran = 0
-            for uid in uids:
-                token = await asyncio.to_thread(db.get_token, uid)
-                if token:
-                    try:
-                        did_crawl = await asyncio.wait_for(_crawl_if_active(uid, token), timeout=90)
-                    except asyncio.TimeoutError:
-                        log.warning("Bytes crawl: timed out after 90s uid=%s — skipping", uid)
-                        did_crawl = False
-                    if did_crawl:
-                        ran += 1
+            # Skip bytes crawl entirely when API budget is low
+            _tl = _throttle_level()
+            if _tl in ("low", "critical"):
+                log.info("Bytes crawl: skipping — throttle=%s", _tl)
+            else:
+                for uid in uids:
+                    token = await asyncio.to_thread(db.get_token, uid)
+                    if token:
+                        try:
+                            did_crawl = await asyncio.wait_for(_crawl_if_active(uid, token), timeout=90)
+                        except asyncio.TimeoutError:
+                            log.warning("Bytes crawl: timed out after 90s uid=%s — skipping", uid)
+                            did_crawl = False
+                        except _AuthExpired:
+                            log.warning("Bytes crawl: token revoked for uid=%s — clearing token", uid)
+                            await asyncio.to_thread(db.clear_token, uid)
+                            did_crawl = False
+                        if did_crawl:
+                            ran += 1
             if ran == 0:
                 log.debug("Bytes crawl: all users idle, no API calls made")
         except Exception as e:
@@ -539,6 +653,12 @@ async def _username_resolve_loop() -> None:
     await asyncio.sleep(120)  # wait 2 min after startup before first run
     while True:
         try:
+            # Skip at caution or worse — this is non-critical background work
+            _tl = _throttle_level()
+            if _tl in ("caution", "low", "critical"):
+                log.debug("Username resolver: skipping — throttle=%s", _tl)
+                await asyncio.sleep(600)
+                continue
             uids = await asyncio.to_thread(db.get_all_uids)
             for uid in uids:
                 try:
@@ -581,6 +701,9 @@ async def _username_resolve_loop() -> None:
                                 await asyncio.to_thread(db.upsert_tid_titles, tid_map)
                                 log.info("Thread cache: resolved %d titles for uid=%s", len(tid_map), uid)
 
+                except _AuthExpired:
+                    log.warning("Username cache: token revoked for uid=%s — clearing token", uid)
+                    await asyncio.to_thread(db.clear_token, uid)
                 except Exception as e:
                     log.debug("Username cache: skip uid=%s: %s", uid, e)
         except Exception as e:
@@ -664,15 +787,21 @@ async def lifespan(app: FastAPI):
     db.init_db()
     db.init_user_settings()
     db.init_notifications_table()
-    from modules.posting.posting_db import init_posting_db, _conn as _pconn
+    from modules.posting.posting_db import init_posting_db
     init_posting_db()
     from modules.sigmarket.sigmarket_db import init_sigmarket_db
     init_sigmarket_db()
+    from modules.contracts.templates_db import init_templates_db
+    init_templates_db()
 
     # Reset any NULL last_pid rows so the cursor comparison works cleanly
     try:
-        with _pconn() as _pc:
-            _pc.execute("UPDATE my_threads SET last_pid='0' WHERE last_pid IS NULL")
+        import sqlite3 as _sq3
+        from pathlib import Path as _PL
+        _pc = _sq3.connect(str(_PL("data/hf_dash.db")), check_same_thread=False)
+        _pc.execute("UPDATE my_threads SET last_pid='0' WHERE last_pid IS NULL")
+        _pc.commit()
+        _pc.close()
     except Exception:
         pass
     import modules  # noqa — triggers all register() calls
@@ -694,6 +823,8 @@ async def lifespan(app: FastAPI):
     app.include_router(posting_router)
     from modules.sigmarket.router import router as sigmarket_router
     app.include_router(sigmarket_router)
+    from modules.contracts.templates_router import router as templates_router
+    app.include_router(templates_router)
 
     # ── Unified 5-minute scheduler ──────────────────────────────────────────
     # Replaces the old autobump-only 30-min loop.
@@ -702,14 +833,19 @@ async def lifespan(app: FastAPI):
     from modules.autobump import poll_autobump
     from modules.posting import fire_due_threads, poll_reply_queues
     from modules.sigmarket import poll_sigmarket_rotations
+    from modules.sigmarket.router import _do_browse_fetch, _browse_cache, warm_sigmarket_status
 
     async def _unified_loop():
         import time as _t
-        _last_autobump   = 0.0
-        _last_reply_poll = 0.0
-        AUTOBUMP_INTERVAL   = 1800   # 30 min
-        REPLY_POLL_INTERVAL =  300   # 5 min — thread list is free via crawl, only post fetches cost
-        TICK                =   60   # 1 min
+        _last_autobump      = 0.0
+        _last_reply_poll    = 0.0
+        _last_browse_warm   = 0.0
+        _last_sigmarket_warm = 0.0
+        AUTOBUMP_INTERVAL      = 1800  # 30 min — always runs (user-facing feature)
+        REPLY_POLL_INTERVAL    =  300  # 5 min normal; doubled at low/critical
+        BROWSE_WARM_INTERVAL   = 1500  # 25 min; skipped at caution+
+        SIGMARKET_WARM_INTERVAL =  900  # 15 min per-user sigmarket status; skip at caution+
+        TICK                   =   60  # 1 min normal; stretched at low/critical
 
         # Smart startup for autobump — check when it last ran
         try:
@@ -729,54 +865,138 @@ async def lifespan(app: FastAPI):
         while True:
             now = _t.time()
             try:
-                # ── 1. Fire any due scheduled threads (every tick) ──────────
+                # ── 0. Compute throttle level once per tick ─────────────
+                _tl = _throttle_level()
+                if _tl != "normal":
+                    log.debug("Unified scheduler: throttle=%s", _tl)
+
+                # ── 1. Fire any due scheduled threads (always — user-facing) ──
                 try:
                     await asyncio.wait_for(fire_due_threads(), timeout=60)
                 except asyncio.TimeoutError:
                     log.warning("Unified scheduler: fire_due_threads timed out")
 
-                # ── 2. Autobump (every 30 min) ──────────────────────────────
+                # ── 2. Autobump (every 30 min — always runs) ────────────────
                 if now - _last_autobump >= AUTOBUMP_INTERVAL:
                     try:
                         uids = await asyncio.to_thread(db.get_all_uids)
                         for uid in uids:
                             token = await asyncio.to_thread(db.get_token, uid)
-                            if token:
+                            if not token:
+                                continue
+                            try:
                                 await poll_autobump(uid, token)
                                 await poll_sigmarket_rotations(uid, token)
+                            except _AuthExpired:
+                                log.warning("Scheduler: token revoked for uid=%s — clearing token", uid)
+                                await asyncio.to_thread(db.clear_token, uid)
                         _last_autobump = _t.time()
                     except Exception as e:
                         log.exception("Unified scheduler: autobump error: %s", e)
 
-                # ── 3. Reply queue poll (every 15 min) ──────────────────────
-                if now - _last_reply_poll >= REPLY_POLL_INTERVAL:
+                # ── 3. Reply queue poll (5 min normal, 10 min at low/critical) ──
+                _reply_interval = REPLY_POLL_INTERVAL * (2 if _tl in ("low", "critical") else 1)
+                if now - _last_reply_poll >= _reply_interval:
+                    if _tl == "critical":
+                        log.info("Unified scheduler: reply poll skipped — throttle=critical")
+                        _last_reply_poll = now
+                    else:
+                        try:
+                            # Build active UID set — same idle gate used by bytes crawler.
+                            # Idle users' tracked threads are skipped; they get caught
+                            # on the next poll cycle after they return.
+                            all_uids = await asyncio.to_thread(db.get_all_uids)
+                            active_uids: set[str] = set()
+                            for _uid in all_uids:
+                                _last = await asyncio.to_thread(db.get_last_active, _uid)
+                                if _last and (_t.time() - _last) <= IDLE_THRESHOLD:
+                                    active_uids.add(_uid)
+                            if active_uids:
+                                await asyncio.wait_for(poll_reply_queues(active_uids), timeout=60)
+                            else:
+                                log.debug("Reply poll: all users idle, skipping")
+                            _last_reply_poll = _t.time()
+                        except asyncio.TimeoutError:
+                            log.warning("Unified scheduler: poll_reply_queues timed out")
+                        except Exception as e:
+                            log.exception("Unified scheduler: reply poll error: %s", e)
+
+                # ── 4. Sigmarket browse pre-warm (every 25 min, skip at caution+) ──
+                if now - _last_browse_warm >= BROWSE_WARM_INTERVAL and _tl == "normal":
                     try:
-                        # Build active UID set — same idle gate used by bytes crawler.
-                        # Idle users' tracked threads are skipped; they get caught
-                        # on the next poll cycle after they return.
-                        all_uids = await asyncio.to_thread(db.get_all_uids)
-                        active_uids: set[str] = set()
-                        for _uid in all_uids:
-                            _last = await asyncio.to_thread(db.get_last_active, _uid)
-                            if _last and (_t.time() - _last) <= IDLE_THRESHOLD:
-                                active_uids.add(_uid)
-                        if active_uids:
-                            await asyncio.wait_for(poll_reply_queues(active_uids), timeout=60)
-                        else:
-                            log.debug("Reply poll: all users idle, skipping")
-                        _last_reply_poll = _t.time()
+                        uids = await asyncio.to_thread(db.get_all_uids)
+                        _warm_token = None
+                        for _uid in uids:
+                            _warm_token = await asyncio.to_thread(db.get_token, _uid)
+                            if _warm_token:
+                                break
+                        if _warm_token:
+                            result = await asyncio.wait_for(_do_browse_fetch(_warm_token), timeout=25)
+                            if result is not None and result.get("listings"):
+                                _browse_cache["data"] = result
+                                _browse_cache["ts"]   = _t.time()
+                                await asyncio.to_thread(db.set_dash_cache, "__system__", "sigmarket_browse", result)
+                                log.info("Sigmarket browse pre-warmed (%d listings)", len(result.get("listings", [])))
+                        _last_browse_warm = _t.time()
                     except asyncio.TimeoutError:
-                        log.warning("Unified scheduler: poll_reply_queues timed out")
+                        log.warning("Sigmarket browse pre-warm timed out")
                     except Exception as e:
-                        log.exception("Unified scheduler: reply poll error: %s", e)
+                        log.warning("Sigmarket browse pre-warm error: %s", e)
+
+                # ── 5. Sigmarket status per-user warm (every 15 min, skip at caution+) ──
+                if now - _last_sigmarket_warm >= SIGMARKET_WARM_INTERVAL and _tl == "normal":
+                    try:
+                        uids = await asyncio.to_thread(db.get_all_uids)
+                        for _uid in uids:
+                            _tok = await asyncio.to_thread(db.get_token, _uid)
+                            if _tok:
+                                await asyncio.wait_for(warm_sigmarket_status(_uid, _tok), timeout=15)
+                                await asyncio.sleep(1)  # brief pause between users
+                        _last_sigmarket_warm = _t.time()
+                    except asyncio.TimeoutError:
+                        log.warning("Sigmarket status warm timed out")
+                    except Exception as e:
+                        log.warning("Sigmarket status warm error: %s", e)
 
             except Exception as e:
                 log.exception("Unified scheduler: unexpected error: %s", e)
 
             _touch_heartbeat()  # watchdog: unified scheduler is still ticking
-            await asyncio.sleep(TICK)
+            # Stretch the tick when budget is low — less overhead, fewer wasted cycles
+            _tick = TICK * (2 if _tl in ("low", "critical") else 1)
+            await asyncio.sleep(_tick)
 
     asyncio.create_task(_unified_loop(), name="unified_scheduler")
+
+    # Pre-warm sigmarket browse cache on startup
+    # Loads from DB first (free, instant) — only hits HF API if DB cache is stale/empty
+    async def _startup_browse_warm():
+        await asyncio.sleep(3)
+        try:
+            from modules.sigmarket.router import _load_browse_cache_from_db, _do_browse_fetch, _browse_cache
+
+            # Try DB cache first — zero API calls if it's fresh
+            if _load_browse_cache_from_db():
+                log.info("Startup: sigmarket browse loaded from DB cache (0 API calls)")
+                return
+
+            # DB cache stale/empty — fetch from HF
+            uids = await asyncio.to_thread(db.get_all_uids)
+            token = None
+            for _uid in uids:
+                token = await asyncio.to_thread(db.get_token, _uid)
+                if token:
+                    break
+            if token:
+                result = await asyncio.wait_for(_do_browse_fetch(token), timeout=30)
+                if result is not None and result.get("listings"):
+                    _browse_cache["data"] = result
+                    _browse_cache["ts"]   = __import__('time').time()
+                    await asyncio.to_thread(db.set_dash_cache, "__system__", "sigmarket_browse", result)
+                    log.info("Startup: sigmarket browse fetched + persisted (%d listings)", len(result.get("listings", [])))
+        except Exception as e:
+            log.warning("Startup browse warm failed: %s", e)
+    asyncio.create_task(_startup_browse_warm(), name="startup_browse_warm")
 
     # Start bytes history crawler (core, not a module)
     asyncio.create_task(_bytes_crawl_loop(), name="bytes_crawler")
@@ -807,8 +1027,8 @@ app.add_middleware(
 )
 app.add_middleware(
     SessionMiddleware,
-    secret_key=os.environ.get("SESSION_SECRET", "changeme"),
-    https_only=os.environ.get("ENV") == "production",
+    secret_key=SESSION_SECRET,
+    https_only=ENV == "production",
     same_site="lax",
 )
 
@@ -913,12 +1133,15 @@ async def refresh_profile(request: Request):
         return JSONResponse({"error": "no token"}, status_code=401)
     from HFClient import HFClient
     client = HFClient(token)
-    data = await client.read({"me": {
-        "uid": True, "username": True, "avatar": True,
-        "usergroup": True, "displaygroup": True, "additionalgroups": True,
-        "postnum": True, "threadnum": True, "reputation": True,
-        "bytes": True, "usertitle": True, "timeonline": True,
-    }})
+    try:
+        data = await client.read({"me": {
+            "uid": True, "username": True, "avatar": True,
+            "usergroup": True, "displaygroup": True, "additionalgroups": True,
+            "postnum": True, "threadnum": True, "reputation": True,
+            "bytes": True, "usertitle": True, "timeonline": True,
+        }})
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if not data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     me = data.get("me", {})
@@ -943,7 +1166,8 @@ async def rate_limit(request: Request):
         return JSONResponse({"remaining": None})
     from HFClient import get_rate_limit_remaining
     remaining = get_rate_limit_remaining(token)
-    return {"remaining": remaining}
+    throttle  = _throttle_level()
+    return {"remaining": remaining, "throttle": throttle}
 
 
 # ── Dash data endpoints ─────────────────────────────────────────────────────────
@@ -979,17 +1203,20 @@ async def dash_bytes(request: Request, force: bool = False):
     from HFClient import HFClient
     client  = HFClient(token)
     uid_int = int(uid)
-    data1   = await client.read({
-        "me":    {"uid": True, "bytes": True, "vault": True},
-        "bytes": {"_to": [uid_int], "_page": 1, "_perpage": 30,
-                  "id": True, "amount": True, "dateline": True, "reason": True},
-    })
-    if not data1:
-        return {"balance": balance, "vault": vault, "transactions": []}
-    data2 = await client.read({
-        "bytes": {"_from": [uid_int], "_page": 1, "_perpage": 30,
-                  "id": True, "amount": True, "dateline": True, "reason": True},
-    })
+    try:
+        data1 = await client.read({
+            "me":    {"uid": True, "bytes": True, "vault": True},
+            "bytes": {"_to": [uid_int], "_page": 1, "_perpage": 30,
+                      "id": True, "amount": True, "dateline": True, "reason": True},
+        })
+        if not data1:
+            return {"balance": balance, "vault": vault, "transactions": []}
+        data2 = await client.read({
+            "bytes": {"_from": [uid_int], "_page": 1, "_perpage": 30,
+                      "id": True, "amount": True, "dateline": True, "reason": True},
+        })
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     me = (data1 or {}).get("me", {})
     balance = str(me.get("bytes") or "0")
     vault   = str(me.get("vault")  or "0")
@@ -1039,53 +1266,24 @@ def _contract_value(c: dict) -> str:
 
 @app.get("/api/dash/contracts")
 async def dash_contracts(request: Request, force: bool = False):
-    """Active + recent contracts. Cached 1hr."""
+    """All contracts from local DB. Falls back to HF API only if DB is empty."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
-    if not force:
-        cached = await asyncio.to_thread(db.get_dash_cache, uid, "contracts", 1800)
-        if cached:
-            return cached
-
-    token = await asyncio.to_thread(db.get_token, uid)
-    if not token:
-        return JSONResponse({"error": "no token"}, status_code=401)
-
-    from HFClient import HFClient
-    client = HFClient(token)
-
-    data = await client.read({
-        "contracts": {
-            "_uid": [int(uid)], "_page": 1, "_perpage": 30,
-            "cid": True, "status": True, "type": True,
-            "inituid": True, "otheruid": True,
-            "iprice": True, "icurrency": True,
-            "oprice": True, "ocurrency": True,
-            "iproduct": True, "oproduct": True,
-            "dateline": True, "terms": True,
-        }
-    })
-    if not data:
-        return JSONResponse({"error": "HF API unavailable"}, status_code=503)
-
-    raw = data.get("contracts", [])
-    if isinstance(raw, dict): raw = [raw]
-
     STATUS = {
-        "1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
+        "1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
         "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"
     }
 
-    contracts = []
-    for c in (raw or []):
-        contracts.append({
+    def _fmt(c):
+        return {
             "cid":      str(c.get("cid") or ""),
-            "type_n":   str(c.get("type") or ""),
-            "status":   STATUS.get(str(c.get("status") or ""), "Unknown"),
-            "status_n": str(c.get("status") or ""),
-            "type":     {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}.get(str(c.get("type") or ""), str(c.get("type") or "--")),
+            "type_n":   str(c.get("type_n") or c.get("type") or ""),
+            "status":   STATUS.get(str(c.get("status_n") or c.get("status") or ""), "Unknown"),
+            "status_n": str(c.get("status_n") or c.get("status") or ""),
+            "type":     {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}.get(
+                            str(c.get("type_n") or c.get("type") or ""), "--"),
             "inituid":  str(c.get("inituid") or ""),
             "otheruid": str(c.get("otheruid") or ""),
             "iprice":   str(c.get("iprice") or "0"),
@@ -1097,13 +1295,53 @@ async def dash_contracts(request: Request, force: bool = False):
             "dateline": int(c.get("dateline") or 0),
             "terms":    str(c.get("terms") or ""),
             "value":    _contract_value(c),
-        })
+        }
 
+    # ── Try DB first (crawler keeps this populated) ───────────────────────────
     total_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
-    result = {"contracts": contracts, "uid": uid, "total_count": total_count}
-    await asyncio.to_thread(db.set_dash_cache, uid, "contracts", result)
-    return result
+    if total_count > 0 and not force:
+        rows = await asyncio.to_thread(db.get_contracts_history, uid, total_count, 0, None, "dateline", "desc")
+        contracts = [_fmt(dict(r)) for r in rows]
+        # Enrich with cached counterparty usernames — zero HF API calls
+        all_cp_uids = list({str(c["inituid"]) for c in contracts if c.get("inituid")} |
+                           {str(c["otheruid"]) for c in contracts if c.get("otheruid")})
+        username_map = await asyncio.to_thread(db.get_uid_usernames, all_cp_uids) if all_cp_uids else {}
+        for c in contracts:
+            is_init = str(c.get("inituid", "")) == str(uid)
+            cp_uid  = str(c["otheruid"] if is_init else c["inituid"])
+            c["counterparty_uid"]      = cp_uid
+            c["counterparty_username"] = username_map.get(cp_uid, "")
+        return {"contracts": contracts, "uid": uid, "total_count": total_count, "username_map": username_map}
 
+    # ── DB empty or force refresh — fall back to HF API (page 1 only) ─────────
+    token = await asyncio.to_thread(db.get_token, uid)
+    if not token:
+        return JSONResponse({"error": "no token"}, status_code=401)
+
+    from HFClient import HFClient
+    client = HFClient(token)
+    try:
+        data = await client.read({
+            "contracts": {
+                "_uid": [int(uid)], "_page": 1, "_perpage": 30,
+                "cid": True, "status": True, "type": True,
+                "inituid": True, "otheruid": True,
+                "iprice": True, "icurrency": True,
+                "oprice": True, "ocurrency": True,
+                "iproduct": True, "oproduct": True,
+                "dateline": True, "terms": True,
+            }
+        })
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
+    if not data:
+        return JSONResponse({"error": "HF API unavailable"}, status_code=503)
+
+    raw = data.get("contracts", [])
+    if isinstance(raw, dict): raw = [raw]
+    contracts = [_fmt(c) for c in (raw or [])]
+    total_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
+    return {"contracts": contracts, "uid": uid, "total_count": total_count}
 
 
 def _perspective_type_row(c, uid: str) -> str:
@@ -1150,7 +1388,7 @@ async def contracts_history_db(request: Request, page: int = 1, perpage: int = 1
     total    = await asyncio.to_thread(db.get_contracts_history_count, uid, status_n)
     cstate   = await asyncio.to_thread(db.get_contracts_crawl_state, uid)
 
-    STATUS   = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
+    STATUS   = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
                 "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
     TYPE_MAP = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
 
@@ -1221,7 +1459,7 @@ async def contracts_export(
 
     rows = await asyncio.to_thread(db.get_contracts_export, uid, status, date_from, date_to)
 
-    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
+    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
                   "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
     TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
 
@@ -1335,14 +1573,17 @@ async def dash_user_lookup(request: Request, lookup_uid: str):
 
     from HFClient import HFClient
     client = HFClient(token)
-    data = await client.read({"users": {
-        "_uid": [int(lookup_uid)],
-        "uid": True, "username": True, "usergroup": True,
-        "displaygroup": True, "additionalgroups": True,
-        "postnum": True, "threadnum": True, "myps": True,
-        "reputation": True, "usertitle": True, "awards": True,
-        "timeonline": True, "avatar": True,
-    }})
+    try:
+        data = await client.read({"users": {
+            "_uid": [int(lookup_uid)],
+            "uid": True, "username": True, "usergroup": True,
+            "displaygroup": True, "additionalgroups": True,
+            "postnum": True, "threadnum": True, "myps": True,
+            "reputation": True, "usertitle": True, "awards": True,
+            "timeonline": True, "avatar": True,
+        }})
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if not data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     users = data.get("users", {})
@@ -1352,6 +1593,12 @@ async def dash_user_lookup(request: Request, lookup_uid: str):
         user = users
     if not user:
         return JSONResponse({"error": "User not found"}, status_code=404)
+    # Passively cache the result so contract lists resolve this UID without extra calls
+    if user.get("uid") and user.get("username"):
+        try:
+            await asyncio.to_thread(db.upsert_uid_usernames, {str(user["uid"]): user["username"]})
+        except Exception:
+            pass
     return user
 
 
@@ -1366,11 +1613,14 @@ async def dash_send_bytes(request: Request):
         return JSONResponse({"error": "no token"}, status_code=401)
     from HFClient import HFClient
     client = HFClient(token)
-    result = await client.write({"bytes": {
-        "_uid":    str(body.get("to_uid", "")),
-        "_amount": str(body.get("amount", "")),
-        "_reason": str(body.get("reason", "")),
-    }})
+    try:
+        result = await client.write({"bytes": {
+            "_uid":    str(body.get("to_uid", "")),
+            "_amount": str(body.get("amount", "")),
+            "_reason": str(body.get("reason", "")),
+        }})
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if result is None:
         return JSONResponse({"error": "Send failed"}, status_code=500)
     await asyncio.to_thread(db.clear_dash_cache, uid, "bytes")
@@ -1392,10 +1642,13 @@ async def dash_vault(request: Request):
         return JSONResponse({"error": "no token"}, status_code=401)
     from HFClient import HFClient
     client = HFClient(token)
-    if action == "deposit":
-        result = await client.write({"bytes": {"_deposit": amount}})
-    else:
-        result = await client.write({"bytes": {"_withdraw": amount}})
+    try:
+        if action == "deposit":
+            result = await client.write({"bytes": {"_deposit": amount}})
+        else:
+            result = await client.write({"bytes": {"_withdraw": amount}})
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if result is None:
         return JSONResponse({"error": f"{action} failed — check you have enough bytes"}, status_code=500)
 
@@ -1584,16 +1837,19 @@ async def user_activity(request: Request, lookup_uid: str):
     target = int(lookup_uid)
 
     # Call 1: profile
-    profile_data = await client.read({
-        "users": {
-            "_uid": [target],
-            "uid": True, "username": True, "usergroup": True,
-            "displaygroup": True, "additionalgroups": True,
-            "postnum": True, "threadnum": True, "myps": True,
-            "reputation": True, "usertitle": True, "timeonline": True,
-            "avatar": True, "awards": True, "website": True, "referrals": True,
-        },
-    })
+    try:
+        profile_data = await client.read({
+            "users": {
+                "_uid": [target],
+                "uid": True, "username": True, "usergroup": True,
+                "displaygroup": True, "additionalgroups": True,
+                "postnum": True, "threadnum": True, "myps": True,
+                "reputation": True, "usertitle": True, "timeonline": True,
+                "avatar": True, "awards": True, "website": True, "referrals": True,
+            },
+        })
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if not profile_data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     users_raw = profile_data.get("users", {})
@@ -1608,12 +1864,15 @@ async def user_activity(request: Request, lookup_uid: str):
     all_threads = []
     firstpost_pids = set()
     for t_page in range(1, 3):
-        td = await client.read({"threads": {
-            "_uid": [target], "_page": t_page, "_perpage": PERPAGE,
-            "tid": True, "fid": True, "subject": True, "dateline": True,
-            "firstpost": True, "views": True, "lastpost": True,
-            "closed": True, "sticky": True,
-        }})
+        try:
+            td = await client.read({"threads": {
+                "_uid": [target], "_page": t_page, "_perpage": PERPAGE,
+                "tid": True, "fid": True, "subject": True, "dateline": True,
+                "firstpost": True, "views": True, "lastpost": True,
+                "closed": True, "sticky": True,
+            }})
+        except _AuthExpired:
+            return _handle_auth_expired(request, uid)
         if not td: break
         raw = td.get("threads", [])
         if isinstance(raw, dict): raw = [raw]
@@ -1632,11 +1891,14 @@ async def user_activity(request: Request, lookup_uid: str):
     true_last_page = base_page
     raw_last = []
     for try_page in range(base_page, base_page + 8):
-        pd = await client.read({"posts": {
-            "_uid": [target], "_page": try_page, "_perpage": PERPAGE,
-            "pid": True, "tid": True, "fid": True,
-            "dateline": True, "subject": True, "message": True,
-        }})
+        try:
+            pd = await client.read({"posts": {
+                "_uid": [target], "_page": try_page, "_perpage": PERPAGE,
+                "pid": True, "tid": True, "fid": True,
+                "dateline": True, "subject": True, "message": True,
+            }})
+        except _AuthExpired:
+            return _handle_auth_expired(request, uid)
         cur = []
         if pd:
             r = pd.get("posts", [])
@@ -1649,11 +1911,14 @@ async def user_activity(request: Request, lookup_uid: str):
     # Fetch one extra page back for more history
     raw_prev = []
     if true_last_page > 1:
-        pd2 = await client.read({"posts": {
-            "_uid": [target], "_page": true_last_page - 1, "_perpage": PERPAGE,
-            "pid": True, "tid": True, "fid": True,
-            "dateline": True, "subject": True, "message": True,
-        }})
+        try:
+            pd2 = await client.read({"posts": {
+                "_uid": [target], "_page": true_last_page - 1, "_perpage": PERPAGE,
+                "pid": True, "tid": True, "fid": True,
+                "dateline": True, "subject": True, "message": True,
+            }})
+        except _AuthExpired:
+            return _handle_auth_expired(request, uid)
         if pd2:
             r2 = pd2.get("posts", [])
             if isinstance(r2, dict): r2 = [r2]
@@ -1694,18 +1959,21 @@ async def user_trust(request: Request, lookup_uid: str, ratings_page: int = 1):
     PERPAGE = 15
 
     # 1 call: b-ratings received + contracts (2 endpoints, well under limit)
-    data = await client.read({
-        "bratings": {
-            "_to": [target], "_page": ratings_page, "_perpage": PERPAGE,
-            "crid": True, "contractid": True, "fromid": True, "toid": True,
-            "dateline": True, "amount": True, "message": True,
-            "from": {"uid": True, "username": True},
-        },
-        "contracts": {
-            "_uid": [target], "_page": 1, "_perpage": 30,
-            "cid": True, "status": True, "type": True, "dateline": True,
-        },
-    })
+    try:
+        data = await client.read({
+            "bratings": {
+                "_to": [target], "_page": ratings_page, "_perpage": PERPAGE,
+                "crid": True, "contractid": True, "fromid": True, "toid": True,
+                "dateline": True, "amount": True, "message": True,
+                "from": {"uid": True, "username": True},
+            },
+            "contracts": {
+                "_uid": [target], "_page": 1, "_perpage": 30,
+                "cid": True, "status": True, "type": True, "dateline": True,
+            },
+        })
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
 
     if not data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
@@ -1806,20 +2074,29 @@ async def mark_seen(request: Request):
 
 @app.get("/api/contracts/{cid}")
 async def get_contract_detail(request: Request, cid: int):
-    """Fetch contract detail. Batches contract + user lookup into one API call."""
+    """Fetch contract detail with 5-min cache. Force-refresh with ?force=true."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
+
+    force     = request.query_params.get("force") == "true"
+    cache_key = f"contract_detail_{cid}"
+    CACHE_TTL = 300  # 5 minutes
+
+    # Serve from cache unless forced or stale
+    if not force:
+        cached = await asyncio.to_thread(db.get_dash_cache, uid, cache_key, CACHE_TTL)
+        if cached:
+            return cached
+
     try:
         from HFClient import HFClient
         client  = HFClient(token)
         uid_int = int(uid)
 
-        # Single API call: contract + counterparty user lookup batched together
-        # First get the contract to know the counterparty UID
         data = await asyncio.wait_for(client.read({
             "contracts": {
                 "_cid": [int(cid)],
@@ -1831,7 +2108,7 @@ async def get_contract_detail(request: Request, cid: int):
                 "terms": True, "timeout_days": True, "timeout": True,
                 "public": True, "tid": True, "idispute": True, "odispute": True,
             },
-        }), timeout=20)
+        }), timeout=8)
         if not data:
             return JSONResponse({"error": "No response from HF"}, status_code=503)
         rows = data.get("contracts", [])
@@ -1840,31 +2117,29 @@ async def get_contract_detail(request: Request, cid: int):
             return JSONResponse({"error": "Contract not found"}, status_code=404)
         c = rows[0]
 
-        # Counterparty UID
+        # Counterparty username — local DB first, API only if missing
         init_uid  = int(c.get("inituid") or 0)
         other_uid = int(c.get("otheruid") or 0)
         cp_uid    = other_uid if init_uid == uid_int else init_uid
-
-        # Check local DB for username first (free, instant)
-        username = None
+        username  = None
         if cp_uid:
-            cached = await asyncio.to_thread(db.get_user, str(cp_uid))
-            if cached:
-                username = cached.get("username")
-
-        # Only hit API for username if not in local DB
+            cached_user = await asyncio.to_thread(db.get_user, str(cp_uid))
+            if cached_user:
+                username = cached_user.get("username")
         if cp_uid and not username:
             try:
                 u_data = await asyncio.wait_for(client.read({
                     "users": {"_uid": [cp_uid], "uid": True, "username": True}
-                }), timeout=15)
+                }), timeout=8)
                 u_rows = u_data.get("users", []) if u_data else []
                 if isinstance(u_rows, dict): u_rows = [u_rows]
                 if u_rows: username = u_rows[0].get("username")
             except Exception:
                 pass
 
-        return {"contract": c, "counterparty_username": username, "my_uid": uid}
+        result = {"contract": c, "counterparty_username": username, "my_uid": uid}
+        await asyncio.to_thread(db.set_dash_cache, uid, cache_key, result)
+        return result
     except asyncio.TimeoutError:
         return JSONResponse({"error": "HF API timeout"}, status_code=503)
     except Exception as e:
@@ -1893,7 +2168,7 @@ async def contract_action(request: Request, cid: int):
         payload: dict = {"_action": action, "_cid": int(cid)}
         if address:
             payload["_address"] = address
-        data = await asyncio.wait_for(client.write({"contracts": payload}), timeout=20)
+        data = await asyncio.wait_for(client.write({"contracts": payload}), timeout=8)
         if not data:
             return JSONResponse({"error": "No response from HF"}, status_code=503)
         return {"ok": True, "response": data}

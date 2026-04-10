@@ -71,14 +71,14 @@ export default function GroupsPage() {
         </div>
         <div style={{ fontSize: 13, color: 'var(--sub)', lineHeight: 1.8 }}>
           Group-specific modules can be added to any self-hosted instance of HFToolbox.
-          The source code is open — groups can build and run their own private version with their own features.
+          The source code is open, so groups can build and run their own private version with their own features.
         </div>
         <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
           {[
             ['1', 'Fork the repo', 'github.com/AuJusDemon/hftoolbox'],
             ['2', 'Add your module under backend/modules/ and frontend/src/core/'],
             ['3', 'Wire it into Shell.jsx GROUP_NAV for your group\'s gid'],
-            ['4', 'Self-host it — your group\'s features stay private'],
+            ['4', 'Self-host it so your group\'s features stay private'],
           ].map(([num, text, link]) => (
             <div key={num} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
               <span style={{

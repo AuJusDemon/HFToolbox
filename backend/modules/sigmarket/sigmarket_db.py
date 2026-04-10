@@ -53,8 +53,6 @@ def init_sigmarket_db() -> None:
         """)
 
 
-# ── Rotation config ────────────────────────────────────────────────────────────
-
 def get_rotation(uid: str) -> dict | None:
     with _db() as conn:
         row = conn.execute(
@@ -88,7 +86,6 @@ def set_rotation_enabled(uid: str, enabled: bool) -> None:
 
 
 def advance_rotation(uid: str, new_idx: int, now: int) -> None:
-    """Called after a successful changesig — record the new index and timestamp."""
     with _db() as conn:
         conn.execute("""
             UPDATE sigmarket_rotations
@@ -98,10 +95,8 @@ def advance_rotation(uid: str, new_idx: int, now: int) -> None:
 
 
 def get_all_rotation_uids() -> list[str]:
-    """All UIDs with rotation enabled and at least 2 sigs."""
     with _db() as conn:
-        rows = conn.execute("""
-            SELECT uid FROM sigmarket_rotations
-            WHERE enabled = 1
-        """).fetchall()
+        rows = conn.execute(
+            "SELECT uid FROM sigmarket_rotations WHERE enabled = 1"
+        ).fetchall()
     return [r["uid"] for r in rows]

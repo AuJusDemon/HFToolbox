@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { api } from './api.js'
+import { api, throttledInterval } from './api.js'
 import useStore from '../store.js'
 
 const ago = ts => {
@@ -71,7 +71,8 @@ function BumperOverview() {
     api.get('/api/autobump/jobs').then(d => setJobs(d?.jobs||[])).catch(() => {})
   , [])
   useEffect(() => { load() }, [])
-  usePolling(load, 60000)
+  const throttle = useStore(s => s.throttle)
+  usePolling(load, throttledInterval(60000, throttle))
 
   const enabled  = jobs.filter(j => j.enabled)
   const dueCount = jobs.filter(j => j.enabled && (j.seconds_until_bump||0) <= 0).length
@@ -174,7 +175,8 @@ function BytesOverview() {
   useEffect(() => {
     refresh()
   }, [])
-  usePolling(refresh, 120000)
+  const throttle = useStore(s => s.throttle)
+  usePolling(refresh, throttledInterval(120000, throttle))
 
   const txns = (data?.transactions || []).slice(0, 10)
 
@@ -273,7 +275,8 @@ function ContractsOverview() {
   useEffect(() => {
     api.get('/api/dash/contracts').then(d => { if(d) setData(d) }).catch(() => {})
   }, [])
-  usePolling(() => api.get('/api/dash/contracts').then(d => { if(d) setData(d) }).catch(() => {}), 300000)
+  const throttle = useStore(s => s.throttle)
+  usePolling(() => api.get('/api/dash/contracts').then(d => { if(d) setData(d) }).catch(() => {}), throttledInterval(300000, throttle))
 
   const contracts = (data?.contracts || []).slice(0, 10)
   const active    = (data?.contracts||[]).filter(c => c.status_n === '5').length
@@ -413,7 +416,8 @@ function SigmarketOverview() {
   }, [])
 
   useEffect(() => { load() }, [load])
-  usePolling(load, apiPaused ? null : 300000)
+  const throttle = useStore(s => s.throttle)
+  usePolling(load, apiPaused ? null : throttledInterval(300000, throttle))
 
   if (!isEnabled('sigmarket')) return null
 

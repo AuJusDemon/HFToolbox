@@ -114,6 +114,26 @@ async def fire_due_threads() -> None:
             log.info("Posting: fired row_id=%d uid=%s tid=%s fid=%s subject='%s'",
                      row_id, uid, tid, fid, subject[:40])
 
+            # Overflow replies — post immediately after thread (up to 2 replies)
+            async def _post_overflow(msg, label):
+                try:
+                    r = await client.write({"posts": {"_tid": int(tid), "_message": msg}})
+                    if r:
+                        rp = r.get("posts") or {}
+                        if isinstance(rp, list): rp = rp[0] if rp else {}
+                        log.info("Posting: %s posted tid=%s pid=%s", label, tid, rp.get("pid","?"))
+                    else:
+                        log.warning("Posting: %s empty response tid=%s", label, tid)
+                except Exception as oe:
+                    log.warning("Posting: %s failed tid=%s: %s", label, tid, oe)
+
+            overflow1 = str(row.get("overflow_message") or "").strip()
+            overflow2 = str(row.get("overflow_message_2") or "").strip()
+            if overflow1:
+                await _post_overflow(overflow1, "reply-1")
+            if overflow2:
+                await _post_overflow(overflow2, "reply-2")
+
             # Auto-bump: add to bumper if requested
             if row.get("auto_bump"):
                 try:

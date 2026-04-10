@@ -3,6 +3,48 @@ import { useNavigate } from 'react-router-dom'
 import { api } from './api.js'
 import useStore from '../store.js'
 
+const isUpgraded = (groups) => (groups || []).some(g => ['9','28','67'].includes(String(g)))
+
+function AccessDenied({ feature }) {
+  return (
+    <div style={{
+      padding: '22px 20px',
+      fontFamily: 'var(--mono)',
+      borderRadius: 'var(--r)',
+      background: 'rgba(232,84,84,.04)',
+      border: '1px solid rgba(232,84,84,.18)',
+    }}>
+      <div style={{ fontSize: 10, color: 'var(--red)', letterSpacing: '.1em', marginBottom: 8, textTransform: 'uppercase' }}>
+        // permission denied
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', letterSpacing: '.04em', marginBottom: 10 }}>
+        ACCESS DENIED
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--sub)', lineHeight: 1.9, marginBottom: 18 }}>
+        <div><span style={{ color: 'var(--dim)' }}>$ check_access --feature=</span><span style={{ color: 'var(--yellow)' }}>{feature}</span></div>
+        <div><span style={{ color: 'var(--red)' }}>  ✕ DENIED</span><span style={{ color: 'var(--dim)' }}> — requires usergroup </span><span style={{ color: 'var(--acc)' }}>L33t</span><span style={{ color: 'var(--dim)' }}> or </span><span style={{ color: 'var(--acc)' }}>Ub3r</span></div>
+        <div><span style={{ color: 'var(--dim)' }}>$ resolve --action=</span><span style={{ color: 'var(--yellow)' }}>upgrade</span></div>
+      </div>
+      <a
+        href="https://hackforums.net/upgrade.php"
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          textDecoration: 'none', fontSize: 11, fontFamily: 'var(--mono)',
+          padding: '6px 14px', borderRadius: 'var(--r)',
+          background: 'rgba(232,84,84,.12)', border: '1px solid rgba(232,84,84,.35)',
+          color: 'var(--red)', fontWeight: 600, letterSpacing: '.03em',
+          transition: 'background var(--ease)',
+        }}
+        onMouseOver={e => e.currentTarget.style.background='rgba(232,84,84,.22)'}
+        onMouseOut={e => e.currentTarget.style.background='rgba(232,84,84,.12)'}
+      >
+        ↗ hackforums.net/upgrade.php
+      </a>
+    </div>
+  )
+}
 const ago = ts => {
   if (!ts) return '--'
   const d = Math.floor(Date.now()/1000) - ts
@@ -178,7 +220,7 @@ function PresetPicker({ onSelect }) {
 }
 
 // ── Export + Preview panel ────────────────────────────────────────────────────
-function ExportPanel({ crawlDone, crawlPage, totalCount, myUid }) {
+function ExportPanel({ crawlDone, crawlPage, totalCount, myUid, upgraded }) {
   const [fmt,      setFmt]      = useState('csv')
   const [status,   setStatus]   = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -316,10 +358,22 @@ function ExportPanel({ crawlDone, crawlPage, totalCount, myUid }) {
         </div>
 
         {/* Download */}
-        <button className="btn btn-acc" style={{ fontSize:11, padding:'5px 18px', alignSelf:'flex-end' }}
-          onClick={doDownload} disabled={dlLoading}>
-          {dlLoading ? <span className="spin" style={{width:10,height:10}}/> : `↓ Download ${fmt.toUpperCase()}`}
-        </button>
+        {upgraded ? (
+          <button className="btn btn-acc" style={{ fontSize:11, padding:'5px 18px', alignSelf:'flex-end' }}
+            onClick={doDownload} disabled={dlLoading}>
+            {dlLoading ? <span className="spin" style={{width:10,height:10}}/> : `↓ Download ${fmt.toUpperCase()}`}
+          </button>
+        ) : (
+          <div style={{
+            display:'inline-flex', alignItems:'center', gap:6, alignSelf:'flex-end',
+            padding:'5px 14px', borderRadius:'var(--r)', fontFamily:'var(--mono)',
+            background:'rgba(232,84,84,.08)', border:'1px solid rgba(232,84,84,.25)',
+            fontSize:11, color:'var(--red)', fontWeight:600,
+          }}>
+            🔒 <a href="https://hackforums.net/upgrade.php" target="_blank" rel="noreferrer"
+              style={{color:'var(--red)',textDecoration:'none'}}>L33t / Ub3r to export</a>
+          </div>
+        )}
       </div>
 
       {dlErr && <div style={{ padding:'6px 16px', fontSize:11, color:'var(--red)', fontFamily:'var(--mono)', background:'rgba(232,84,84,.08)' }}>✕ {dlErr}</div>}
@@ -475,9 +529,14 @@ function ExportPanel({ crawlDone, crawlPage, totalCount, myUid }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function ContractsPage() {
   const apiPaused = useStore(s => s.apiPaused)
-  const settings  = useStore(s => s.settings)
-  const myUid     = useStore(s => s.user?.uid)
-  const nav       = useNavigate()
+  const settings       = useStore(s => s.settings)
+  const myUid          = useStore(s => s.user?.uid)
+  const userGroups     = useStore(s => s.user?.groups)
+  const upgraded       = isUpgraded(userGroups)
+  const mergeUserCache = useStore(s => s.mergeUserCache)
+  const resolveUids    = useStore(s => s.resolveUids)
+  const storeUserCache = useStore(s => s.userCache)
+  const nav            = useNavigate()
 
   const [data,      setData]      = useState(null)
   const [hist,      setHist]      = useState(null)
@@ -492,8 +551,17 @@ export default function ContractsPage() {
   const PERPAGE = 20
 
   const loadDash  = useCallback(() =>
-    api.get('/api/dash/contracts').then(d => { if(d) setData(d) }).catch(() => {})
-  , [])
+    api.get('/api/dash/contracts').then(d => {
+      if (d) {
+        setData(d)
+        // Seed store and local usernames from server-enriched username_map
+        if (d.username_map) {
+          mergeUserCache(d.username_map)
+          setUsernames(prev => ({ ...prev, ...d.username_map }))
+        }
+      }
+    }).catch(() => {})
+  , [mergeUserCache])
   const loadHist  = useCallback((pg = 1, f = null, sc = null, sd = null) => {
     const sp  = (f && f !== 'all') ? `&status=${f}` : ''
     const srt = sc ? `&sort_col=${sc}&sort_dir=${sd||'desc'}` : ''
@@ -509,18 +577,22 @@ export default function ContractsPage() {
   usePolling(() => loadHist(page, filter, sortCol, sortDir), apiPaused ? null : 30000)
   usePolling(loadStats, apiPaused ? null : 60000)
 
-  // Resolve counterparty usernames — DB-only, no HF API cost.
+  // Resolve counterparty usernames — merge store cache first (instant),
+  // then call resolveUids for any still-missing ones (DB-only, no HF cost).
   // Deps: page/filter so it fires when user navigates, NOT on every 30s poll.
+  useEffect(() => {
+    // Sync any newly-cached names from store into local state immediately
+    setUsernames(prev => ({ ...prev, ...storeUserCache }))
+  }, [storeUserCache])
+
   useEffect(() => {
     const visibleContracts = hist?.contracts || data?.contracts || []
     const uids = [...new Set(
       visibleContracts.flatMap(c => [c.inituid, c.otheruid]).filter(Boolean).map(String)
     )]
     if (!uids.length) return
-    fetch(`/api/users/resolve?uids=${uids.join(',')}`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(m => setUsernames(prev => ({ ...prev, ...(m || {}) })))
-      .catch(() => {})
+    // Use store resolveUids — checks store first, only fetches missing ones
+    resolveUids(uids)
   }, [page, filter, sortCol, sortDir])
 
   const changeFilter = f  => { setFilter(f); setPage(1); loadHist(1, f, sortCol, sortDir) }
@@ -618,7 +690,7 @@ export default function ContractsPage() {
           </div>
 
           {/* Export panel — gated on crawl state */}
-          <ExportPanel crawlDone={crawlDone} crawlPage={crawlPage} totalCount={sTotal} myUid={myUid} />
+          <ExportPanel crawlDone={crawlDone} crawlPage={crawlPage} totalCount={sTotal} myUid={myUid} upgraded={upgraded} />
 
           {/* Contract list */}
           <div className="card">

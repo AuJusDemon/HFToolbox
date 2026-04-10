@@ -22,11 +22,11 @@ DB_PATH = Path(os.getenv("DB_PATH", "data/hf_dash.db"))
 
 def _connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)  # str() for Windows compat
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=10000")   # 10s busy wait before error, not infinite hang
-    conn.execute("PRAGMA synchronous=NORMAL")   # faster writes, still safe with WAL
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
@@ -49,17 +49,16 @@ def init_db() -> None:
                 token        TEXT NOT NULL,
                 avatar       TEXT,
                 groups       TEXT DEFAULT '[]',
-                -- Cached HF profile fields (refreshed on login + manual refresh)
                 postnum      INTEGER,
                 threadnum    INTEGER,
                 reputation   INTEGER,
                 myps         TEXT,
                 usertitle    TEXT,
                 timeonline   INTEGER,
-                profile_ts   INTEGER,  -- when profile was last fetched
+                profile_ts   INTEGER,
                 created_at   INTEGER DEFAULT (strftime('%s','now')),
-                last_seen      INTEGER DEFAULT (strftime('%s','now')),
-                needs_refresh  INTEGER NOT NULL DEFAULT 0
+                last_seen    INTEGER DEFAULT (strftime('%s','now')),
+                needs_refresh INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS module_prefs (
@@ -68,7 +67,6 @@ def init_db() -> None:
                 enabled   INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY (uid, module_id)
             );
-
         """)
 
     _init_dash_cache()
@@ -76,6 +74,9 @@ def init_db() -> None:
     init_contracts_history()
     init_uid_usernames()
     init_tid_titles()
+    init_notifications_table()
+    init_user_settings()
+
     # Migrate existing DBs that predate profile columns
     with _db() as conn:
         existing = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
@@ -89,9 +90,14 @@ def init_db() -> None:
             ("timeonline",    "INTEGER"),
             ("profile_ts",    "INTEGER"),
             ("needs_refresh", "INTEGER DEFAULT 0"),
+            ("last_seen",     "INTEGER"),
+            ("last_unreadpms","INTEGER"),
         ]:
             if col not in existing:
-                conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+                try:
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+                except Exception:
+                    pass
 
 
 # ── Users ──────────────────────────────────────────────────────────────────────
@@ -124,166 +130,7 @@ def get_token(uid: str) -> str | None:
     return crypto.decrypt_token(u["token"]) if u else None
 
 
-# ── Notifications ─────────────────────────────────────────────────────────────
-
-def init_notifications_table() -> None:
-    with _db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                uid        TEXT NOT NULL,
-                type       TEXT NOT NULL,
-                title      TEXT NOT NULL,
-                body       TEXT,
-                link       TEXT,
-                ref_id     TEXT,
-                seen       INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_uid ON notifications(uid, seen, created_at)")
-
-
-def add_notification(uid: str, type_: str, title: str, body: str = '', link: str = '', ref_id: str = '') -> None:
-    with _db() as conn:
-        existing = conn.execute(
-            "SELECT id FROM notifications WHERE uid=? AND type=? AND ref_id=? AND seen=0",
-            (uid, type_, ref_id)
-        ).fetchone()
-        if existing:
-            return
-        conn.execute(
-            "INSERT INTO notifications (uid, type, title, body, link, ref_id) VALUES (?,?,?,?,?,?)",
-            (uid, type_, title, body, link, ref_id)
-        )
-
-
-def get_notifications(uid: str, limit: int = 30) -> list:
-    with _db() as conn:
-        rows = conn.execute(
-            "SELECT id,type,title,body,link,ref_id,seen,created_at FROM notifications "
-            "WHERE uid=? ORDER BY created_at DESC LIMIT ?",
-            (uid, limit)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_unseen_count(uid: str) -> int:
-    with _db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM notifications WHERE uid=? AND seen=0", (uid,)
-        ).fetchone()
-        return row[0] if row else 0
-
-
-def mark_notifications_seen(uid: str) -> None:
-    with _db() as conn:
-        conn.execute("UPDATE notifications SET seen=1 WHERE uid=? AND seen=0", (uid,))
-
-
-def get_last_pm_count(uid: str) -> int | None:
-    with _db() as conn:
-        row = conn.execute("SELECT last_unreadpms FROM users WHERE uid=?", (uid,)).fetchone()
-        return int(row[0]) if row and row[0] is not None else None
-
-
-def set_last_pm_count(uid: str, count: int) -> None:
-    with _db() as conn:
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN last_unreadpms INTEGER")
-        except Exception:
-            pass
-        conn.execute("UPDATE users SET last_unreadpms=? WHERE uid=?", (count, uid))
-
-
-# ── Notifications ─────────────────────────────────────────────────────────────
-
-def init_notifications_table() -> None:
-    with _db() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                uid        TEXT NOT NULL,
-                type       TEXT NOT NULL,
-                title      TEXT NOT NULL,
-                body       TEXT,
-                link       TEXT,
-                ref_id     TEXT,
-                seen       INTEGER NOT NULL DEFAULT 0,
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_uid ON notifications(uid, seen, created_at)")
-
-
-def add_notification(uid: str, type_: str, title: str, body: str = '', link: str = '', ref_id: str = '') -> None:
-    with _db() as conn:
-        existing = conn.execute(
-            "SELECT id FROM notifications WHERE uid=? AND type=? AND ref_id=? AND seen=0",
-            (uid, type_, ref_id)
-        ).fetchone()
-        if existing:
-            return
-        conn.execute(
-            "INSERT INTO notifications (uid, type, title, body, link, ref_id) VALUES (?,?,?,?,?,?)",
-            (uid, type_, title, body, link, ref_id)
-        )
-
-
-def get_notifications(uid: str, limit: int = 30) -> list:
-    with _db() as conn:
-        rows = conn.execute(
-            "SELECT id,type,title,body,link,ref_id,seen,created_at FROM notifications "
-            "WHERE uid=? ORDER BY created_at DESC LIMIT ?",
-            (uid, limit)
-        ).fetchall()
-        return [dict(r) for r in rows]
-
-
-def get_unseen_count(uid: str) -> int:
-    with _db() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM notifications WHERE uid=? AND seen=0", (uid,)
-        ).fetchone()
-        return row[0] if row else 0
-
-
-def mark_notifications_seen(uid: str) -> None:
-    with _db() as conn:
-        conn.execute("UPDATE notifications SET seen=1 WHERE uid=? AND seen=0", (uid,))
-
-
-def get_existing_contract_cids(uid: str, cids: list) -> set:
-    """Return set of CIDs already in contracts_history for this user."""
-    if not cids:
-        return set()
-    with _db() as conn:
-        placeholders = ",".join("?" * len(cids))
-        rows = conn.execute(
-            f"SELECT cid FROM contracts_history WHERE uid=? AND cid IN ({placeholders})",
-            (uid, *cids)
-        ).fetchall()
-        return {row[0] for row in rows}
-
-
-def get_last_pm_count(uid: str) -> int | None:
-    with _db() as conn:
-        row = conn.execute("SELECT last_unreadpms FROM users WHERE uid=?", (uid,)).fetchone()
-        return int(row[0]) if row and row[0] is not None else None
-
-
-def set_last_pm_count(uid: str, count: int) -> None:
-    with _db() as conn:
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN last_unreadpms INTEGER")
-        except Exception:
-            pass
-        conn.execute("UPDATE users SET last_unreadpms=? WHERE uid=?", (count, uid))
-
-
 def update_user_groups(uid: str, groups: list) -> None:
-    """Update stored group list for a user. Called by crawl when groups change."""
-    import json
     with _db() as conn:
         conn.execute(
             "UPDATE users SET groups=? WHERE uid=?",
@@ -297,24 +144,18 @@ def get_all_uids() -> list[str]:
 
 
 def touch_last_active(uid: str) -> None:
-    """Update last_seen to now. Called on every authenticated endpoint hit."""
     import time as _t
     with _db() as conn:
-        conn.execute(
-            "UPDATE users SET last_seen=? WHERE uid=?",
-            (int(_t.time()), uid)
-        )
+        conn.execute("UPDATE users SET last_seen=? WHERE uid=?", (int(_t.time()), uid))
 
 
 def get_last_active(uid: str) -> int | None:
-    """Return last_seen unix timestamp for a user, or None."""
     with _db() as conn:
         row = conn.execute("SELECT last_seen FROM users WHERE uid=?", (uid,)).fetchone()
         return row[0] if row else None
 
 
 def set_needs_refresh(uid: str, flag: int) -> None:
-    """Mark user as needing a crawl on next activity."""
     with _db() as conn:
         conn.execute("UPDATE users SET needs_refresh=? WHERE uid=?", (flag, uid))
 
@@ -323,7 +164,6 @@ def get_needs_refresh(uid: str) -> bool:
     with _db() as conn:
         row = conn.execute("SELECT needs_refresh FROM users WHERE uid=?", (uid,)).fetchone()
         return bool(row[0]) if row else False
-
 
 
 # ── Module prefs ───────────────────────────────────────────────────────────────
@@ -355,7 +195,6 @@ def is_module_enabled(uid: str, module_id: str, default: bool = True) -> bool:
 # ── Profile cache ─────────────────────────────────────────────────────────────
 
 def update_profile_cache(uid: str, profile: dict) -> None:
-    """Cache extended HF profile data. Only updates fields that are provided."""
     fields = []
     values = []
     mapping = {
@@ -380,7 +219,6 @@ def update_profile_cache(uid: str, profile: dict) -> None:
 
 
 def get_cached_profile(uid: str) -> dict | None:
-    """Returns cached profile fields or None if never fetched."""
     with _db() as conn:
         row = conn.execute(
             "SELECT postnum, threadnum, reputation, myps, vault, usertitle, timeonline, profile_ts, username, avatar, groups FROM users WHERE uid=?",
@@ -391,6 +229,74 @@ def get_cached_profile(uid: str) -> dict | None:
         d = dict(row)
         d["groups"] = json.loads(d.get("groups") or "[]")
         return d
+
+
+# ── Notifications ─────────────────────────────────────────────────────────────
+
+def init_notifications_table() -> None:
+    with _db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                uid        TEXT NOT NULL,
+                type       TEXT NOT NULL,
+                title      TEXT NOT NULL,
+                body       TEXT,
+                link       TEXT,
+                ref_id     TEXT,
+                seen       INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_notif_uid ON notifications(uid, seen, created_at)")
+
+
+def add_notification(uid: str, type_: str, title: str, body: str = '', link: str = '', ref_id: str = '') -> None:
+    with _db() as conn:
+        existing = conn.execute(
+            "SELECT id FROM notifications WHERE uid=? AND type=? AND ref_id=? AND seen=0",
+            (uid, type_, ref_id)
+        ).fetchone()
+        if existing:
+            return
+        conn.execute(
+            "INSERT INTO notifications (uid, type, title, body, link, ref_id) VALUES (?,?,?,?,?,?)",
+            (uid, type_, title, body, link, ref_id)
+        )
+
+
+def get_notifications(uid: str, limit: int = 30) -> list:
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT id,type,title,body,link,ref_id,seen,created_at FROM notifications "
+            "WHERE uid=? ORDER BY created_at DESC LIMIT ?",
+            (uid, limit)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_unseen_count(uid: str) -> int:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM notifications WHERE uid=? AND seen=0", (uid,)
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def mark_notifications_seen(uid: str) -> None:
+    with _db() as conn:
+        conn.execute("UPDATE notifications SET seen=1 WHERE uid=? AND seen=0", (uid,))
+
+
+def get_last_pm_count(uid: str) -> int | None:
+    with _db() as conn:
+        row = conn.execute("SELECT last_unreadpms FROM users WHERE uid=?", (uid,)).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+
+def set_last_pm_count(uid: str, count: int) -> None:
+    with _db() as conn:
+        conn.execute("UPDATE users SET last_unreadpms=? WHERE uid=?", (count, uid))
 
 
 # ── Dash cache ─────────────────────────────────────────────────────────────────
@@ -407,9 +313,9 @@ def _init_dash_cache():
             )
         """)
 
+
 def get_dash_cache(uid: str, key: str, max_age: int = 1800) -> dict | None:
-    """Return cached data if fresh, else None."""
-    import time, json
+    import time
     with _db() as conn:
         row = conn.execute(
             "SELECT data, ts FROM dash_cache WHERE uid=? AND key=?", (uid, key)
@@ -418,23 +324,21 @@ def get_dash_cache(uid: str, key: str, max_age: int = 1800) -> dict | None:
             return None
         if time.time() - row[1] > max_age:
             return None
-        raw = row[0]
         try:
-            return json.loads(raw)
+            return json.loads(row[0])
         except Exception:
-            # Corrupt / wrong-key cache entry — nuke it so it regenerates fresh
             conn.execute("DELETE FROM dash_cache WHERE uid=? AND key=?", (uid, key))
             return None
 
+
 def set_dash_cache(uid: str, key: str, data: dict) -> None:
-    import time, json
-    raw = json.dumps(data)
-    stored = raw
+    import time
     with _db() as conn:
         conn.execute("""
             INSERT INTO dash_cache (uid, key, data, ts) VALUES (?,?,?,?)
             ON CONFLICT(uid,key) DO UPDATE SET data=excluded.data, ts=excluded.ts
-        """, (uid, key, stored, int(time.time())))
+        """, (uid, key, json.dumps(data), int(time.time())))
+
 
 def clear_dash_cache(uid: str, key: str) -> None:
     with _db() as conn:
@@ -479,7 +383,6 @@ def init_bytes_history():
 
 
 def upsert_bytes_txns(uid: str, txns: list) -> int:
-    """Insert new transactions, skip duplicates. Returns count inserted."""
     count = 0
     with _db() as conn:
         for t in txns:
@@ -496,15 +399,14 @@ def upsert_bytes_txns(uid: str, txns: list) -> int:
                         str(t.get("post_tid") or ""),
                     )
                 )
-                count += 1
+                count += conn.execute("SELECT changes()").fetchone()[0]
             except Exception:
                 pass
     return count
 
 
 def get_bytes_history(uid: str, limit: int = 50, offset: int = 0,
-                       direction: str = "all", type_filter: str = "", q: str = "") -> list:
-    """Filtered bytes history. direction=all|sent|received. type_filter=comma-sep codes. q=reason search."""
+                       direction: str = "all", type_filter: str = "", q: str = "") -> tuple:
     wheres, params = ["uid=?"], [uid]
     if direction == "sent":
         wheres.append("sent=1")
@@ -537,9 +439,9 @@ def get_bytes_history_all(uid: str) -> list:
             "SELECT id,amount,dateline,reason,sent,type,post_tid FROM bytes_history WHERE uid=? ORDER BY dateline DESC",
             (uid,)
         ).fetchall()
-        return [{"id": r["id"], "amount": r["amount"],
-                 "dateline": r["dateline"], "reason": r["reason"],
-                 "sent": r["sent"], "type": r["type"] or "", "post_tid": r["post_tid"] or ""}
+        return [{"id": r["id"], "amount": r["amount"], "dateline": r["dateline"],
+                 "reason": r["reason"], "sent": r["sent"],
+                 "type": r["type"] or "", "post_tid": r["post_tid"] or ""}
                 for r in rows]
 
 
@@ -549,7 +451,6 @@ def get_bytes_history_count(uid: str) -> int:
 
 
 def get_crawl_state(uid: str) -> dict:
-    import time as _t
     with _db() as conn:
         row = conn.execute("SELECT * FROM bytes_crawl_state WHERE uid=?", (uid,)).fetchone()
         if not row:
@@ -560,7 +461,6 @@ def get_crawl_state(uid: str) -> dict:
 
 
 def update_crawl_state(uid: str, **kwargs) -> None:
-    import time as _t
     fields = ", ".join(f"{k}=?" for k in kwargs)
     values = list(kwargs.values()) + [uid]
     with _db() as conn:
@@ -596,15 +496,13 @@ def init_contracts_history():
                 last_crawl INTEGER
             );
         """)
-        # Migration: add tid column to existing DBs
         try:
             conn.execute("ALTER TABLE contracts_history ADD COLUMN tid TEXT DEFAULT ''")
         except Exception:
-            pass  # Column already exists
+            pass
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
-    """Insert/update contracts. Returns count upserted."""
     e = lambda v: str(v) if v is not None else ""
     count = 0
     with _db() as conn:
@@ -637,81 +535,45 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     int(c.get("dateline") or 0),
                     e(c.get("tid","")),
                 ))
-                count += 1
+                count += conn.execute("SELECT changes()").fetchone()[0]
             except Exception:
                 pass
     return count
 
 
+def get_existing_contract_cids(uid: str, cids: list) -> set:
+    if not cids:
+        return set()
+    with _db() as conn:
+        placeholders = ",".join("?" * len(cids))
+        rows = conn.execute(
+            f"SELECT cid FROM contracts_history WHERE uid=? AND cid IN ({placeholders})",
+            (uid, *cids)
+        ).fetchall()
+        return {row[0] for row in rows}
+
+
 def get_contracts_history(uid: str, limit: int = 10, offset: int = 0,
                            status_n: str | None = None,
-                           sort_col: str = "dateline", sort_dir: str = "desc",
-) -> list:
-    # Whitelist columns to prevent SQL injection
+                           sort_col: str = "dateline", sort_dir: str = "desc") -> list:
     allowed_cols = {"cid", "status_n", "type_n", "dateline"}
     col = sort_col if sort_col in allowed_cols else "dateline"
-    # For cid sort we cast to int for numeric ordering
-    order_expr = f"CAST(cid AS INTEGER)" if col == "cid" else col
+    order_expr = "CAST(cid AS INTEGER)" if col == "cid" else col
     direction  = "ASC" if sort_dir.lower() == "asc" else "DESC"
     order      = f"{order_expr} {direction}"
     with _db() as conn:
         if status_n:
             rows = conn.execute(
-                f"""SELECT * FROM contracts_history WHERE uid=? AND status_n=?
-                   ORDER BY {order} LIMIT ? OFFSET ?""",
+                f"SELECT * FROM contracts_history WHERE uid=? AND status_n=? ORDER BY {order} LIMIT ? OFFSET ?",
                 (uid, status_n, limit, offset)
             ).fetchall()
         else:
             rows = conn.execute(
-                f"""SELECT * FROM contracts_history WHERE uid=?
-                   ORDER BY {order} LIMIT ? OFFSET ?""",
+                f"SELECT * FROM contracts_history WHERE uid=? ORDER BY {order} LIMIT ? OFFSET ?",
                 (uid, limit, offset)
             ).fetchall()
-        d = lambda v: v
-        return [{
-            "uid":       r["uid"],
-            "cid":       r["cid"],
-            "status_n":  r["status_n"],
-            "type_n":    r["type_n"],
-            "dateline":  r["dateline"],
-            "inituid":   d(r["inituid"]),
-            "otheruid":  d(r["otheruid"]),
-            "iprice":    d(r["iprice"]),
-            "icurrency": d(r["icurrency"]),
-            "oprice":    d(r["oprice"]),
-            "ocurrency": d(r["ocurrency"]),
-            "iproduct":  d(r["iproduct"]),
-            "oproduct":  d(r["oproduct"]),
-        } for r in rows]
+        return [dict(r) for r in rows]
 
-
-
-def backfill_contract_tids(uid: str, cid_tid_map: dict) -> int:
-    """Update tid for contracts that have an empty tid. Only sets non-empty values.
-    cid_tid_map: {cid_str: tid_str}. Returns count updated."""
-    if not cid_tid_map:
-        return 0
-    count = 0
-    with _db() as conn:
-        for cid, tid in cid_tid_map.items():
-            if not tid or tid == "0":
-                continue
-            conn.execute(
-                "UPDATE contracts_history SET tid=? WHERE uid=? AND cid=? AND (tid IS NULL OR tid='' OR tid='0')",
-                (str(tid), uid, str(cid))
-            )
-            count += conn.execute("SELECT changes()").fetchone()[0]
-    return count
-
-
-def get_contracts_with_empty_tid(uid: str) -> bool:
-    """Returns True if any contracts_history rows for uid have empty tid."""
-    with _db() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM contracts_history WHERE uid=? AND (tid IS NULL OR tid='' OR tid='0') LIMIT 1",
-            (uid,)
-        ).fetchone()
-    return row is not None
 
 def get_contracts_history_count(uid: str, status_n: str | None = None) -> int:
     with _db() as conn:
@@ -727,231 +589,23 @@ def get_contracts_history_count(uid: str, status_n: str | None = None) -> int:
 
 def get_contracts_export(uid: str, status_n: str | None = None,
                           date_from: int | None = None, date_to: int | None = None) -> list:
-    """Return ALL contracts for a user (no limit) for export. Optional filters."""
     conditions = ["uid=?"]
     params: list = [uid]
     if status_n:
-        conditions.append("status_n=?")
-        params.append(status_n)
+        conditions.append("status_n=?"); params.append(status_n)
     if date_from:
-        conditions.append("dateline >= ?")
-        params.append(int(date_from))
+        conditions.append("dateline >= ?"); params.append(int(date_from))
     if date_to:
-        conditions.append("dateline <= ?")
-        params.append(int(date_to))
+        conditions.append("dateline <= ?"); params.append(int(date_to))
     where = " AND ".join(conditions)
     with _db() as conn:
         rows = conn.execute(
-            f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC",
-            params,
+            f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC", params
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-
-def _perspective_type(r, uid: str) -> str:
-    TYPE_MAP = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
-    type_n = str(r.get("type_n") or "")
-    if type_n in ("3","5"):
-        return TYPE_MAP.get(type_n, "--")
-    trivial = {"","other","n/a","none","null"}
-    has_ip  = str(r.get("iproduct") or "").strip().lower() not in trivial
-    has_op  = str(r.get("oproduct") or "").strip().lower() not in trivial
-    try:    iprice = float(r.get("iprice") or 0)
-    except: iprice = 0
-    try:    oprice = float(r.get("oprice") or 0)
-    except: oprice = 0
-    if str(r.get("inituid") or "") == uid:
-        if has_ip:     return "Selling"
-        if has_op:     return "Purchasing"
-        if iprice > 0: return "Purchasing"
-        if oprice > 0: return "Selling"
-        return "Selling"
-    else:
-        if has_op:     return "Selling"
-        if has_ip:     return "Purchasing"
-        if oprice > 0: return "Purchasing"
-        if iprice > 0: return "Selling"
-        return "Selling"
-
-
-def get_contracts_preview(uid: str, status_n: str | None = None,
-                           date_from: int | None = None, date_to: int | None = None,
-                           limit: int = 10) -> dict:
-    """Summary stats + first N rows for the export preview panel."""
-    conditions = ["uid=?"]
-    params: list = [uid]
-    if status_n:
-        conditions.append("status_n=?")
-        params.append(status_n)
-    if date_from:
-        conditions.append("dateline >= ?")
-        params.append(int(date_from))
-    if date_to:
-        conditions.append("dateline <= ?")
-        params.append(int(date_to))
-    where = " AND ".join(conditions)
-
-    with _db() as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM contracts_history WHERE {where}", params
-        ).fetchone()[0]
-        date_row = conn.execute(
-            f"SELECT MIN(dateline) as mn, MAX(dateline) as mx FROM contracts_history WHERE {where}", params
-        ).fetchone()
-        status_rows = conn.execute(
-            f"SELECT status_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY status_n ORDER BY cnt DESC",
-            params
-        ).fetchall()
-        type_rows = conn.execute(
-            f"""SELECT CASE
-              WHEN type_n IN ('3','5') THEN type_n
-              WHEN inituid=? AND iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
-              WHEN inituid=? AND oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
-              WHEN inituid=? AND CAST(COALESCE(iprice,'0') AS REAL)>0 THEN '2'
-              WHEN inituid=? THEN '1'
-              WHEN oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
-              WHEN iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
-              WHEN CAST(COALESCE(oprice,'0') AS REAL)>0 THEN '2'
-              ELSE '1'
-            END AS type_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY 1 ORDER BY cnt DESC""",
-            [uid,uid,uid,uid] + params
-        ).fetchall()
-        preview_rows = conn.execute(
-            f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC LIMIT ?",
-            params + [limit]
-        ).fetchall()
-        # Top SALES threads — counterparty delivering a product, or exchanges
-        _sell_cond = "otheruid=? AND (type_n IN ('3','5') OR (oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null')))"
-        thread_rows = conn.execute(
-            f"""SELECT tid, COUNT(*) as cnt FROM contracts_history
-                WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0'
-                AND {_sell_cond}
-                GROUP BY tid ORDER BY cnt DESC LIMIT 10""",
-            params + [uid]
-        ).fetchall()
-        with_thread = conn.execute(
-            f"SELECT COUNT(*) FROM contracts_history WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0' AND {_sell_cond}",
-            params + [uid]
-        ).fetchone()[0]
-        # Type breakdown per top thread
-        top_tids = [r["tid"] for r in thread_rows]
-        thread_type_rows = []
-        if top_tids:
-            tid_placeholders = ",".join("?" * len(top_tids))
-            thread_type_rows = conn.execute(
-                f"""SELECT tid, CASE
-                        WHEN type_n IN ('3','5') THEN type_n
-                        WHEN inituid=? AND iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
-                        WHEN inituid=? AND oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
-                        WHEN inituid=? AND CAST(COALESCE(iprice,'0') AS REAL)>0 THEN '2'
-                        WHEN inituid=? THEN '1'
-                        WHEN oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
-                        WHEN iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
-                        WHEN CAST(COALESCE(oprice,'0') AS REAL)>0 THEN '2'
-                        ELSE '1'
-                      END AS type_n, COUNT(*) as cnt FROM contracts_history
-                    WHERE {where} AND tid IN ({tid_placeholders})
-                    GROUP BY tid, 2""",
-                [uid,uid,uid,uid] + params + top_tids
-            ).fetchall()
-        # Most common value (iproduct/oproduct) per top thread
-        thread_value_rows = []
-        if top_tids:
-            thread_value_rows = conn.execute(
-                f"""SELECT tid, iproduct, oproduct, iprice, icurrency, oprice, ocurrency, COUNT(*) as cnt
-                    FROM contracts_history
-                    WHERE {where} AND tid IN ({tid_placeholders})
-                    GROUP BY tid, iproduct, oproduct, iprice, icurrency, oprice, ocurrency
-                    ORDER BY cnt DESC""",
-                params + top_tids
-            ).fetchall()
-
-    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
-                  "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
-    TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
-
-    counts    = {r["status_n"]: r["cnt"] for r in status_rows}
-    complete  = counts.get("6", 0)
-    cancelled = counts.get("2", 0)
-    non_canc  = total - cancelled
-    comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
-
-    def _val(r):
-        ip, ic = r.get("iprice","0") or "0", r.get("icurrency","other") or "other"
-        op, oc = r.get("oprice","0") or "0", r.get("ocurrency","other") or "other"
-        ipr, opr = r.get("iproduct","") or "", r.get("oproduct","") or ""
-        if ip != "0" and ic.lower() != "other":  return f"{ip} {ic}"
-        if op != "0" and oc.lower() != "other":  return f"{op} {oc}"
-        if ipr not in ("","other","n/a"):         return ipr
-        if opr not in ("","other","n/a"):         return opr
-        return ""
-
-    rows = []
-    for _r in preview_rows:
-        r = dict(_r)  # sqlite3.Row → dict so .get() works
-        rows.append({
-            "cid":      r["cid"],
-            "status":   STATUS_MAP.get(str(r.get("status_n") or ""), "Unknown"),
-            "type":     _perspective_type(r, uid),
-            "value":    _val(r),
-            "inituid":  r.get("inituid") or "",
-            "otheruid": r.get("otheruid") or "",
-            "tid":      r.get("tid") or "",
-            "dateline": r.get("dateline") or 0,
-        })
-
-    # Lookup cached thread titles
-    all_tids = [r["tid"] for r in thread_rows]
-    tid_title_map = get_tid_titles(all_tids)
-
-    # Build per-thread type breakdown
-    thread_types: dict = {}
-    for r in thread_type_rows:
-        tid = r["tid"]
-        if tid not in thread_types:
-            thread_types[tid] = []
-        thread_types[tid].append({
-            "type": TYPE_MAP.get(str(r["type_n"] or ""), "--"),
-            "count": r["cnt"],
-        })
-
-    # Build per-thread most common value
-    thread_values: dict = {}
-    for r in thread_value_rows:
-        tid = r["tid"]
-        if tid in thread_values:
-            continue  # already have the top one
-        # Reuse _val logic inline
-        ip = str(r["iprice"] or "0"); ic = str(r["icurrency"] or "other")
-        op = str(r["oprice"] or "0"); oc = str(r["ocurrency"] or "other")
-        ipr = str(r["iproduct"] or ""); opr = str(r["oproduct"] or "")
-        if ip != "0" and ic.lower() != "other": thread_values[tid] = f"{ip} {ic}"
-        elif op != "0" and oc.lower() != "other": thread_values[tid] = f"{op} {oc}"
-        elif ipr not in ("", "other", "n/a"): thread_values[tid] = ipr
-        elif opr not in ("", "other", "n/a"): thread_values[tid] = opr
-
-    return {
-        "total":       total,
-        "comp_rate":   comp_rate,
-        "date_min":    date_row["mn"] if date_row else None,
-        "date_max":    date_row["mx"] if date_row else None,
-        "by_status":   [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in status_rows],
-        "by_type":     [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in type_rows],
-        "rows":        rows,
-        "with_thread": with_thread,
-        "top_threads": [{
-            "tid":        r["tid"],
-            "title":      tid_title_map.get(r["tid"], ""),
-            "count":      r["cnt"],
-            "types":      sorted(thread_types.get(r["tid"], []), key=lambda x: -x["count"]),
-            "top_value":  thread_values.get(r["tid"], ""),
-        } for r in thread_rows],
-    }
-
-
 def get_contracts_stats(uid: str) -> dict:
-    """Aggregate counts from contracts_history for stats bar."""
     with _db() as conn:
         rows = conn.execute(
             "SELECT status_n, COUNT(*) AS cnt FROM contracts_history WHERE uid=? GROUP BY status_n",
@@ -974,40 +628,56 @@ def get_contracts_stats(uid: str) -> dict:
     }
 
 
+def backfill_contract_tids(uid: str, cid_tid_map: dict) -> int:
+    if not cid_tid_map:
+        return 0
+    count = 0
+    with _db() as conn:
+        for cid, tid in cid_tid_map.items():
+            if not tid or tid == "0":
+                continue
+            conn.execute(
+                "UPDATE contracts_history SET tid=? WHERE uid=? AND cid=? AND (tid IS NULL OR tid='' OR tid='0')",
+                (str(tid), uid, str(cid))
+            )
+            count += conn.execute("SELECT changes()").fetchone()[0]
+    return count
+
+
+def get_contracts_with_empty_tid(uid: str) -> bool:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM contracts_history WHERE uid=? AND (tid IS NULL OR tid='' OR tid='0') LIMIT 1",
+            (uid,)
+        ).fetchone()
+    return row is not None
+
+
 def get_contracts_analytics(uid: str, status_n: str | None = None,
                               date_from: int | None = None, date_to: int | None = None) -> dict:
-    """Rich aggregate analytics for the contracts preview panel."""
     conditions = ["uid=?"]
     params: list = [uid]
     if status_n:
-        conditions.append("status_n=?")
-        params.append(status_n)
+        conditions.append("status_n=?"); params.append(status_n)
     if date_from:
-        conditions.append("dateline >= ?")
-        params.append(int(date_from))
+        conditions.append("dateline >= ?"); params.append(int(date_from))
     if date_to:
-        conditions.append("dateline <= ?")
-        params.append(int(date_to))
+        conditions.append("dateline <= ?"); params.append(int(date_to))
     where = " AND ".join(conditions)
 
-    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Unknown",
-                  "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
+    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
+                  "6":"Complete","7":"Disputed","8":"Expired"}
     TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
 
     with _db() as conn:
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM contracts_history WHERE {where}", params
-        ).fetchone()[0]
-
+        total = conn.execute(f"SELECT COUNT(*) FROM contracts_history WHERE {where}", params).fetchone()[0]
         date_row = conn.execute(
             f"SELECT MIN(dateline) as mn, MAX(dateline) as mx FROM contracts_history WHERE {where}", params
         ).fetchone()
-
         by_status_rows = conn.execute(
             f"SELECT status_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY status_n ORDER BY cnt DESC",
             params
         ).fetchall()
-
         by_type_rows = conn.execute(
             f"""SELECT CASE
               WHEN type_n IN ('3','5') THEN type_n
@@ -1022,42 +692,26 @@ def get_contracts_analytics(uid: str, status_n: str | None = None,
             END AS type_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY 1 ORDER BY cnt DESC""",
             [uid,uid,uid,uid] + params
         ).fetchall()
-
-        # Counterparty = the other party (not the session user)
         cp_rows = conn.execute(
             f"""SELECT
                     CASE WHEN inituid=uid THEN otheruid ELSE inituid END AS cp,
                     COUNT(*) AS cnt
                 FROM contracts_history
                 WHERE {where} AND (inituid != '' OR otheruid != '')
-                GROUP BY cp
-                ORDER BY cnt DESC
-                LIMIT 8""",
+                GROUP BY cp ORDER BY cnt DESC LIMIT 8""",
             params
         ).fetchall()
-
         monthly_rows = conn.execute(
             f"""SELECT
                     strftime('%Y-%m', datetime(dateline, 'unixepoch')) AS month,
                     COUNT(*) AS cnt
                 FROM contracts_history
                 WHERE {where} AND dateline > 0
-                GROUP BY month
-                ORDER BY month DESC
-                LIMIT 24""",
+                GROUP BY month ORDER BY month DESC LIMIT 24""",
             params
         ).fetchall()
 
-        # Simple value stats: count how many have a non-trivial price vs product description
-        val_row = conn.execute(
-            f"""SELECT
-                    SUM(CASE WHEN icurrency NOT IN ('','other') AND iprice NOT IN ('','0') THEN 1 ELSE 0 END) AS has_price,
-                    SUM(CASE WHEN iproduct NOT IN ('','other','n/a','None') AND iproduct IS NOT NULL AND LENGTH(iproduct)>1 THEN 1 ELSE 0 END) AS has_product
-                FROM contracts_history WHERE {where}""",
-            params
-        ).fetchone()
-
-    counts = {r["status_n"]: r["cnt"] for r in by_status_rows}
+    counts    = {r["status_n"]: r["cnt"] for r in by_status_rows}
     complete  = counts.get("6", 0)
     cancelled = counts.get("2", 0)
     non_canc  = total - cancelled
@@ -1072,13 +726,121 @@ def get_contracts_analytics(uid: str, status_n: str | None = None,
         "by_type":   [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in by_type_rows],
         "top_counterparties": [{"uid": r["cp"], "count": r["cnt"]} for r in cp_rows if r["cp"]],
         "monthly":   [{"month": r["month"], "count": r["cnt"]} for r in monthly_rows],
-        "has_price":   val_row["has_price"]   or 0,
-        "has_product": val_row["has_product"] or 0,
     }
 
 
+def get_contracts_preview(uid: str, status_n: str | None = None,
+                           date_from: int | None = None, date_to: int | None = None,
+                           limit: int = 10) -> dict:
+    conditions = ["uid=?"]
+    params: list = [uid]
+    if status_n:
+        conditions.append("status_n=?"); params.append(status_n)
+    if date_from:
+        conditions.append("dateline >= ?"); params.append(int(date_from))
+    if date_to:
+        conditions.append("dateline <= ?"); params.append(int(date_to))
+    where = " AND ".join(conditions)
+
+    STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
+                  "6":"Complete","7":"Disputed","8":"Expired"}
+    TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
+
+    with _db() as conn:
+        total     = conn.execute(f"SELECT COUNT(*) FROM contracts_history WHERE {where}", params).fetchone()[0]
+        date_row  = conn.execute(f"SELECT MIN(dateline) as mn, MAX(dateline) as mx FROM contracts_history WHERE {where}", params).fetchone()
+        status_rows = conn.execute(
+            f"SELECT status_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY status_n ORDER BY cnt DESC", params
+        ).fetchall()
+        type_rows = conn.execute(
+            f"""SELECT CASE
+              WHEN type_n IN ('3','5') THEN type_n
+              WHEN inituid=? AND iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+              WHEN inituid=? AND oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+              WHEN inituid=? AND CAST(COALESCE(iprice,'0') AS REAL)>0 THEN '2'
+              WHEN inituid=? THEN '1'
+              WHEN oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null') THEN '1'
+              WHEN iproduct IS NOT NULL AND LOWER(TRIM(iproduct)) NOT IN ('','other','n/a','none','null') THEN '2'
+              WHEN CAST(COALESCE(oprice,'0') AS REAL)>0 THEN '2'
+              ELSE '1'
+            END AS type_n, COUNT(*) as cnt FROM contracts_history WHERE {where} GROUP BY 1 ORDER BY cnt DESC""",
+            [uid,uid,uid,uid] + params
+        ).fetchall()
+        preview_rows = conn.execute(
+            f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC LIMIT ?",
+            params + [limit]
+        ).fetchall()
+        _sell_cond = "otheruid=? AND (type_n IN ('3','5') OR (oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null')))"
+        thread_rows = conn.execute(
+            f"""SELECT tid, COUNT(*) as cnt FROM contracts_history
+                WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0'
+                AND {_sell_cond}
+                GROUP BY tid ORDER BY cnt DESC LIMIT 10""",
+            params + [uid]
+        ).fetchall()
+        with_thread = conn.execute(
+            f"SELECT COUNT(*) FROM contracts_history WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0' AND {_sell_cond}",
+            params + [uid]
+        ).fetchone()[0]
+
+    counts    = {r["status_n"]: r["cnt"] for r in status_rows}
+    complete  = counts.get("6", 0)
+    cancelled = counts.get("2", 0)
+    non_canc  = total - cancelled
+    comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    def _val(r):
+        ip, ic = (r.get("iprice") or "0"), (r.get("icurrency") or "other")
+        op, oc = (r.get("oprice") or "0"), (r.get("ocurrency") or "other")
+        ipr, opr = (r.get("iproduct") or ""), (r.get("oproduct") or "")
+        if ip != "0" and ic.lower() != "other": return f"{ip} {ic}"
+        if op != "0" and oc.lower() != "other": return f"{op} {oc}"
+        if ipr not in ("","other","n/a"): return ipr
+        if opr not in ("","other","n/a"): return opr
+        return ""
+
+    tid_title_map = get_tid_titles([r["tid"] for r in thread_rows])
+    rows = []
+    for _r in preview_rows:
+        r = dict(_r)
+        rows.append({
+            "cid": r["cid"], "status": STATUS_MAP.get(str(r.get("status_n") or ""), "Unknown"),
+            "type": r.get("type_n") or "", "value": _val(r),
+            "inituid": r.get("inituid") or "", "otheruid": r.get("otheruid") or "",
+            "tid": r.get("tid") or "", "dateline": r.get("dateline") or 0,
+        })
+
+    return {
+        "total": total, "comp_rate": comp_rate,
+        "date_min": date_row["mn"] if date_row else None,
+        "date_max": date_row["mx"] if date_row else None,
+        "by_status": [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in status_rows],
+        "by_type":   [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in type_rows],
+        "rows": rows,
+        "with_thread": with_thread,
+        "top_threads": [{"tid": r["tid"], "title": tid_title_map.get(r["tid"],""), "count": r["cnt"]} for r in thread_rows],
+    }
+
+
+def get_contracts_crawl_state(uid: str) -> dict:
+    with _db() as conn:
+        row = conn.execute("SELECT * FROM contracts_crawl_state WHERE uid=?", (uid,)).fetchone()
+        if not row:
+            conn.execute("INSERT OR IGNORE INTO contracts_crawl_state (uid) VALUES (?)", (uid,))
+            return {"uid": uid, "page": 1, "done": 0, "last_crawl": None}
+        return dict(row)
+
+
+def update_contracts_crawl_state(uid: str, **kwargs) -> None:
+    fields = ", ".join(f"{k}=?" for k in kwargs)
+    values = list(kwargs.values()) + [uid]
+    with _db() as conn:
+        conn.execute(f"UPDATE contracts_crawl_state SET {fields} WHERE uid=?", values)
+
+
+# ── UID / TID cache ─────────────────────────────────────────────────────────────
+
 def init_uid_usernames() -> None:
-    """Create uid_usernames table and add it to init_db flow."""
     with _db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS uid_usernames (
@@ -1090,7 +852,6 @@ def init_uid_usernames() -> None:
 
 
 def upsert_uid_usernames(uid_map: dict) -> None:
-    """Store uid→username. Safe to call repeatedly."""
     if not uid_map:
         return
     import time as _t
@@ -1104,7 +865,6 @@ def upsert_uid_usernames(uid_map: dict) -> None:
 
 
 def get_uid_usernames(uids: list) -> dict:
-    """Lookup usernames from local cache. Returns {uid: username}. Zero HF calls."""
     if not uids:
         return {}
     uids = [str(u) for u in uids if u]
@@ -1117,8 +877,6 @@ def get_uid_usernames(uids: list) -> dict:
 
 
 def get_unknown_uids_from_contracts(uid: str, limit: int = 60) -> list:
-    """Return counterparty UIDs from contracts_history not yet in uid_usernames.
-    Used by crawl to know which UIDs still need resolving."""
     with _db() as conn:
         rows = conn.execute("""
             SELECT DISTINCT cp FROM (
@@ -1144,7 +902,6 @@ def init_tid_titles() -> None:
 
 
 def upsert_tid_titles(tid_map: dict) -> None:
-    """Store tid→title. {tid: title}"""
     if not tid_map:
         return
     import time as _t
@@ -1158,7 +915,6 @@ def upsert_tid_titles(tid_map: dict) -> None:
 
 
 def get_tid_titles(tids: list) -> dict:
-    """Lookup thread titles from cache. Returns {tid: title}."""
     if not tids:
         return {}
     tids = [str(t) for t in tids if t]
@@ -1171,7 +927,6 @@ def get_tid_titles(tids: list) -> dict:
 
 
 def get_unknown_tids_from_contracts(uid: str, limit: int = 30) -> list:
-    """Return TIDs from contracts_history (for this user) not yet in tid_titles."""
     with _db() as conn:
         rows = conn.execute("""
             SELECT DISTINCT tid FROM contracts_history
@@ -1182,36 +937,9 @@ def get_unknown_tids_from_contracts(uid: str, limit: int = 30) -> list:
     return [r["tid"] for r in rows]
 
 
-def get_contracts_crawl_state(uid: str) -> dict:
-    with _db() as conn:
-        row = conn.execute(
-            "SELECT * FROM contracts_crawl_state WHERE uid=?", (uid,)
-        ).fetchone()
-        if not row:
-            conn.execute(
-                "INSERT OR IGNORE INTO contracts_crawl_state (uid) VALUES (?)", (uid,)
-            )
-            return {"uid": uid, "page": 1, "done": 0, "last_crawl": None}
-        return dict(row)
+# ── Profile cache helpers ──────────────────────────────────────────────────────
 
-
-def update_contracts_crawl_state(uid: str, **kwargs) -> None:
-    fields = ", ".join(f"{k}=?" for k in kwargs)
-    values = list(kwargs.values()) + [uid]
-    with _db() as conn:
-        conn.execute(
-            f"UPDATE contracts_crawl_state SET {fields} WHERE uid=?", values
-        )
-
-
-# ── Async helper ───────────────────────────────────────────────────────────────
-
-async def run(fn, *args):
-    """Run a sync DB function in the thread pool. Uses get_running_loop() — Python 3.10+ safe."""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, fn, *args)
-
-# ── User settings (polling intervals, API floor, etc.) ─────────────────────────
+# ── User settings ──────────────────────────────────────────────────────────────
 
 def init_user_settings() -> None:
     with _db() as conn:
@@ -1224,7 +952,6 @@ def init_user_settings() -> None:
 
 
 def get_user_settings(uid: str) -> dict:
-    import json
     with _db() as conn:
         row = conn.execute("SELECT settings FROM user_settings WHERE uid=?", (uid,)).fetchone()
         if not row:
@@ -1236,7 +963,6 @@ def get_user_settings(uid: str) -> dict:
 
 
 def save_user_settings(uid: str, settings: dict) -> None:
-    import json
     with _db() as conn:
         conn.execute(
             "INSERT INTO user_settings (uid, settings) VALUES (?,?) "
@@ -1247,7 +973,6 @@ def save_user_settings(uid: str, settings: dict) -> None:
 
 # ── Account deletion ────────────────────────────────────────────────────────────
 
-
 def delete_user_data(uid: str) -> None:
     """Hard delete all stored data for a user. Irreversible."""
     with _db() as conn:
@@ -1255,15 +980,23 @@ def delete_user_data(uid: str) -> None:
             "users", "module_prefs", "user_settings",
             "dash_cache", "bytes_history", "bytes_crawl_state",
             "contracts_history", "contracts_crawl_state",
+            "contract_templates",
+            "notifications",
         ]:
             try:
                 conn.execute(f"DELETE FROM {tbl} WHERE uid=?", (uid,))
             except Exception:
                 pass
-    # Autobump tables live in main DB too
+    # Autobump + posting tables managed by their own modules
     try:
         from modules.autobump.autobump_db import delete_user_jobs
         delete_user_jobs(uid)
     except Exception:
         pass
 
+
+# ── Async helper ────────────────────────────────────────────────────────────────
+
+async def run(fn, *args):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, fn, *args)

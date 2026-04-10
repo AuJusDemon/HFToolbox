@@ -27,6 +27,22 @@ async function req(method, path, body) {
 export const api = {
   get:    path       => req('GET',    path),
   post:   (path, b)  => req('POST',   path, b),
+  put:    (path, b)  => req('PUT',    path, b),
   patch:  (path, b)  => req('PATCH',  path, b),
   delete: path       => req('DELETE', path),
+}
+
+// ── Throttle-aware polling multipliers ────────────────────────────────────────
+// Import this + useStore in any component to get a dynamic interval.
+// Normal: 1x. Caution: 1.5x. Low: 2x. Critical: 3x.
+export const THROTTLE_MULT = {
+  normal:   1,
+  caution:  1.5,
+  low:      2,
+  critical: 3,
+}
+
+export function throttledInterval(baseMs, throttle) {
+  const mult = THROTTLE_MULT[throttle] ?? 1
+  return Math.round(baseMs * mult)
 }

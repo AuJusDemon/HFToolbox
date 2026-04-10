@@ -9,14 +9,22 @@ import Settings    from './core/Settings.jsx'
 import BytesPage   from './core/BytesPage.jsx'
 import extraRoutes from './modules.jsx'
 
-// Lazy-load heavier pages
-const ContractsPage      = lazy(() => import('./core/ContractsPage.jsx'))
-const BumperPage         = lazy(() => import('./core/BumperPage.jsx'))
-const ContractDetailPage = lazy(() => import('./core/ContractDetailPage.jsx'))
-const GroupsPage         = lazy(() => import('./core/GroupsPage.jsx'))
-const UserPage           = lazy(() => import('./core/UserPage.jsx'))
-const PostingPage        = lazy(() => import('./core/PostingPage.jsx'))
-const SigmarketPage      = lazy(() => import('./core/SigmarketPage.jsx'))
+// Lazy-load heavier pages — preloaded immediately so first nav is instant
+const _preloadContracts = import('./core/ContractsPage.jsx')
+const _preloadBumper    = import('./core/BumperPage.jsx')
+const _preloadDetail    = import('./core/ContractDetailPage.jsx')
+const _preloadGroups    = import('./core/GroupsPage.jsx')
+const _preloadUser      = import('./core/UserPage.jsx')
+const _preloadPosting   = import('./core/PostingPage.jsx')
+const _preloadSigmarket = import('./core/SigmarketPage.jsx')
+
+const ContractsPage      = lazy(() => _preloadContracts)
+const BumperPage         = lazy(() => _preloadBumper)
+const ContractDetailPage = lazy(() => _preloadDetail)
+const GroupsPage         = lazy(() => _preloadGroups)
+const UserPage           = lazy(() => _preloadUser)
+const PostingPage        = lazy(() => _preloadPosting)
+const SigmarketPage      = lazy(() => _preloadSigmarket)
 
 function RequireAuth({ children }) {
   const { user, authLoading } = useStore()
@@ -29,11 +37,8 @@ function RequireAuth({ children }) {
   return children
 }
 
-const Spin = () => (
-  <div className="empty" style={{ padding:60 }}>
-    <div className="spin" />
-  </div>
-)
+// Invisible fallback — chunks preload immediately so this rarely shows
+const Spin = () => null
 
 export default function App() {
   const bootstrap = useStore(s => s.bootstrap)

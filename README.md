@@ -84,7 +84,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Edit .env — set HF_CLIENT_ID, HF_CLIENT_SECRET, SESSION_SECRET, FRONTEND_URL
+# Edit .env — set HF_CLIENT_ID, HF_CLIENT_SECRET, SESSION_SECRET, TOKEN_ENCRYPT_KEY, FRONTEND_URL
 ```
 
 Run manually:
@@ -175,6 +175,7 @@ Copy `.env.example` to `.env` and fill in your credentials:
 | `HF_CLIENT_SECRET` | Your HF OAuth app client secret |
 | `HF_REDIRECT_URI` | Must exactly match what you set in your HF app (e.g. `https://yourdomain.com/auth/callback`) |
 | `SESSION_SECRET` | Random secret for session signing — use `python -c "import secrets; print(secrets.token_hex(32))"` |
+| `TOKEN_ENCRYPT_KEY` | Fernet key for token-at-rest encryption — use `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `FRONTEND_URL` | Your frontend URL (used for CORS) |
 | `HF_PROXY_URL` | Optional residential proxy URL — needed on datacenter IPs |
 | `ENV` | `production` or `development` |

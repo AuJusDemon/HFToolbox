@@ -2,6 +2,49 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from './api.js'
 import useStore from '../store.js'
 
+const isUpgraded = (groups) => (groups || []).some(g => ['9','28','67'].includes(String(g)))
+
+function AccessDenied({ feature }) {
+  return (
+    <div style={{
+      padding: '22px 20px',
+      fontFamily: 'var(--mono)',
+      borderRadius: 'var(--r)',
+      background: 'rgba(232,84,84,.04)',
+      border: '1px solid rgba(232,84,84,.18)',
+    }}>
+      <div style={{ fontSize: 10, color: 'var(--red)', letterSpacing: '.1em', marginBottom: 8, textTransform: 'uppercase' }}>
+        // permission denied
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--text)', letterSpacing: '.04em', marginBottom: 10 }}>
+        ACCESS DENIED
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--sub)', lineHeight: 1.9, marginBottom: 18 }}>
+        <div><span style={{ color: 'var(--dim)' }}>$ check_access --feature=</span><span style={{ color: 'var(--yellow)' }}>{feature}</span></div>
+        <div><span style={{ color: 'var(--red)' }}>  ✕ DENIED</span><span style={{ color: 'var(--dim)' }}> — requires usergroup </span><span style={{ color: 'var(--acc)' }}>L33t</span><span style={{ color: 'var(--dim)' }}> or </span><span style={{ color: 'var(--acc)' }}>Ub3r</span></div>
+        <div><span style={{ color: 'var(--dim)' }}>$ resolve --action=</span><span style={{ color: 'var(--yellow)' }}>upgrade</span></div>
+      </div>
+      <a
+        href="https://hackforums.net/upgrade.php"
+        target="_blank"
+        rel="noreferrer"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 6,
+          textDecoration: 'none', fontSize: 11, fontFamily: 'var(--mono)',
+          padding: '6px 14px', borderRadius: 'var(--r)',
+          background: 'rgba(232,84,84,.12)', border: '1px solid rgba(232,84,84,.35)',
+          color: 'var(--red)', fontWeight: 600, letterSpacing: '.03em',
+          transition: 'background var(--ease)',
+        }}
+        onMouseOver={e => e.currentTarget.style.background='rgba(232,84,84,.22)'}
+        onMouseOut={e => e.currentTarget.style.background='rgba(232,84,84,.12)'}
+      >
+        ↗ hackforums.net/upgrade.php
+      </a>
+    </div>
+  )
+}
+
 // ── Forum data (hardcoded from FID map, zero API calls) ──────────────────────
 const CATEGORY_FIDS = new Set([1,7,45,88,105,120,141,151,156,241,259,444,445,446,447,448,449,450,451,452,453,460])
 
@@ -313,12 +356,17 @@ const FORUM_RULES = {
 
 // ── BBCode → HTML renderer ───────────────────────────────────────────────────
 // ── Group CSS styles for preview rendering ────────────────────────────────────
+// Styles for groups that don't have a confirmed CSS string are marked [APPROX]
+// and will render as a reasonable approximation. The [css] button still inserts
+// correct BBCode regardless of preview accuracy.
 const GROUP_CSS_STYLES = {
-  68: 'font-family:Cinzel,serif;font-weight:900;letter-spacing:1.15px;background:linear-gradient(90deg,#9a9a9a 0%,#cfcfcf 20%,#ffffff 35%,#ffffff 45%,#e6e6e6 55%,#cfcfcf 70%,#9a9a9a 100%);background-size:300% auto;animation:brotherhood-shine 4s ease-in-out infinite;-webkit-background-clip:text;-webkit-text-fill-color:transparent;',
-  78: 'display:inline-block;font-family:Orbitron,Cinzel,serif;font-weight:900;letter-spacing:1.15px;background:linear-gradient(90deg,#00ffb2 0%,#00e6ff 35%,#b7fff1 50%,#00e6ff 65%,#00ffb2 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:vibe-glitch 3.5s infinite;',
+  // Core / rank groups
   67: 'color:#2D7E52;font-weight:bold;text-shadow:0px 2px 3px #000;',
   9:  'color:#FFCC00;',
   28: 'color:#0066FF;',
+  // Member groups — confirmed
+  68: 'font-family:Cinzel,serif;font-weight:900;letter-spacing:1.15px;background:linear-gradient(90deg,#9a9a9a 0%,#cfcfcf 20%,#ffffff 35%,#ffffff 45%,#e6e6e6 55%,#cfcfcf 70%,#9a9a9a 100%);background-size:300% auto;animation:brotherhood-shine 4s ease-in-out infinite;-webkit-background-clip:text;-webkit-text-fill-color:transparent;',
+  78: 'display:inline-block;font-family:Orbitron,Cinzel,serif;font-weight:900;letter-spacing:1.15px;background:linear-gradient(90deg,#00ffb2 0%,#00e6ff 35%,#b7fff1 50%,#00e6ff 65%,#00ffb2 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:vibe-glitch 3.5s infinite;',
   52: 'color:#FF99CC;font-weight:bold;font-family:Comic Sans MS;text-shadow:2px 2px 2px #4020dd;',
   50: 'font-weight:700;font-family:Cinzel,serif;letter-spacing:2px;background:linear-gradient(135deg,#FFD700,#FFC200,#B8860B);-webkit-background-clip:text;-webkit-text-fill-color:transparent;',
   77: 'color:#ffffff;font-family:graduate;letter-spacing:2px;text-shadow:-1px -1px 0 #467fff,1px -1px 0 #098ed9,-1px 1px 0 #1199df,1px 1px 0 #139add;',
@@ -326,6 +374,15 @@ const GROUP_CSS_STYLES = {
   71: 'color:#00feb0;text-shadow:0px 2px 3px #000;',
   48: 'color:#dfcbff;font-weight:bold;font-family:New Rocker,system-ui;letter-spacing:1.75px;text-shadow:0 0 1px #b380ff,0 0 3px #9933ff,0 0 6px #7722cc;',
   46: 'color:#222;font-weight:bold;font-family:Amarante,serif;text-shadow:-1px -1px 0 #00ff00,1px -1px 0 #00ff00,-1px 1px 0 #00ff00,1px 1px 0 #00ff00,0 0 5px #00ff00,0 0 10px #00ff00,0 0 15px #008000;',
+  49: 'color:#cc0000;font-weight:bold;font-family:system-ui;letter-spacing:1px;text-shadow:0 0 4px #ff0000,0 0 8px #880000;',                         // [APPROX] Sociopaths
+  56: 'color:#ff2222;font-weight:bold;font-family:system-ui;text-decoration:line-through;text-shadow:0 0 3px #ff0000;',                               // [APPROX] Blacklisted
+  63: 'color:#c0c0c0;font-weight:bold;font-family:Georgia,serif;letter-spacing:1.5px;text-shadow:0 1px 3px #000,0 0 8px rgba(200,200,200,.4);',        // [APPROX] Infamous
+  53: 'color:#4caf50;font-weight:bold;font-family:Georgia,serif;letter-spacing:1px;text-shadow:0 0 6px rgba(76,175,80,.6);',                           // [APPROX] Eden
+  57: 'color:#f0a500;font-weight:bold;font-family:Georgia,serif;letter-spacing:1px;text-shadow:0 1px 3px #000,0 0 6px rgba(240,165,0,.5);',            // [APPROX] Lions League
+  12: 'color:#00bcd4;font-weight:bold;font-family:system-ui;letter-spacing:.5px;text-shadow:0 0 5px rgba(0,188,212,.5);',                             // [APPROX] Benevolence
+  54: 'color:#e91e8c;font-weight:bold;font-family:system-ui;letter-spacing:1px;text-shadow:0 0 4px #ff1a8c,0 0 10px #880044;',                         // [APPROX] Succubus
+  59: 'color:#ffd700;font-weight:bold;font-family:Georgia,serif;letter-spacing:1.5px;text-shadow:0 1px 3px #000,0 0 8px rgba(255,215,0,.6);',          // [APPROX] Olympians
+  23: 'color:#999;font-weight:bold;font-family:system-ui;letter-spacing:.5px;text-shadow:0 1px 2px #000;',                                             // [APPROX] Mob
 }
 
 function bbToHtml(raw, userGroups) {
@@ -641,18 +698,20 @@ function Modal({ fields, onOk, onCancel }) {
 
 // ── Group asset dropdown ─────────────────────────────────────────────────────
 function GroupDropdown({ groups }) {
-  const [open, setOpen] = useState(false)
+  const [open,        setOpen]        = useState(false)
   const [activeGroup, setActiveGroup] = useState(null)
   const ref = useRef(null)
 
-  // Close on outside click
   useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
   }, [])
 
-  const active = groups.find(g => g.gid === activeGroup) || groups[0]
+  // Default to first group when opening
+  const activeGid    = activeGroup || groups[0]?.gid
+  const active       = groups.find(g => g.gid === activeGid) || groups[0]
+  const multiGroup   = groups.length > 1
 
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-flex', alignSelf: 'center', marginLeft: 2 }}>
@@ -674,44 +733,66 @@ function GroupDropdown({ groups }) {
         <div style={{
           position: 'absolute', top: '100%', left: 0, zIndex: 200, marginTop: 3,
           background: 'var(--s2)', border: '1px solid var(--b2)', borderRadius: 4,
-          minWidth: 180, boxShadow: '0 4px 16px rgba(0,0,0,.4)',
+          boxShadow: '0 4px 20px rgba(0,0,0,.5)',
+          display: 'flex', flexDirection: 'row',
+          // Fixed width: left sidebar + right panel
+          width: multiGroup ? 300 : 160,
         }}>
-          {/* Group tabs — if multiple groups */}
-          {groups.length > 1 && (
-            <div style={{ display: 'flex', borderBottom: '1px solid var(--b1)' }}>
-              {groups.map(g => (
-                <button key={g.gid} type="button"
-                  onClick={() => setActiveGroup(g.gid)}
-                  style={{
-                    flex: 1, padding: '5px 8px', fontSize: 10, fontWeight: 600,
-                    fontFamily: 'var(--mono)', border: 'none', cursor: 'pointer',
-                    background: (activeGroup || groups[0].gid) === g.gid ? 'var(--s3)' : 'transparent',
-                    color: (activeGroup || groups[0].gid) === g.gid ? 'var(--acc)' : 'var(--dim)',
-                    borderBottom: (activeGroup || groups[0].gid) === g.gid ? '2px solid var(--acc)' : '2px solid transparent',
-                  }}
-                >{g.name}</button>
-              ))}
+
+          {/* Left sidebar — group list (only shown when 2+ groups) */}
+          {multiGroup && (
+            <div style={{
+              width: 120, flexShrink: 0,
+              borderRight: '1px solid var(--b1)',
+              overflowY: 'auto', maxHeight: 260,
+              padding: '4px 0',
+            }}>
+              {groups.map(g => {
+                const isActive = g.gid === activeGid
+                return (
+                  <button key={g.gid} type="button"
+                    onClick={() => setActiveGroup(g.gid)}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left',
+                      padding: '6px 10px', fontSize: 11, fontWeight: isActive ? 700 : 400,
+                      fontFamily: 'var(--sans)', border: 'none', cursor: 'pointer',
+                      background: isActive ? 'var(--s3)' : 'transparent',
+                      color: isActive ? 'var(--acc)' : 'var(--sub)',
+                      borderLeft: isActive ? '2px solid var(--acc)' : '2px solid transparent',
+                      transition: 'all 100ms', whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}
+                    onMouseOver={e => { if (!isActive) { e.currentTarget.style.background='rgba(255,255,255,.04)'; e.currentTarget.style.color='var(--text)' } }}
+                    onMouseOut={e  => { if (!isActive) { e.currentTarget.style.background='transparent'; e.currentTarget.style.color='var(--sub)' } }}
+                  >{g.name}</button>
+                )
+              })}
             </div>
           )}
 
-          {/* Items for active group */}
-          <div style={{ padding: '4px 0' }}>
-            {groups.length === 1 && (
-              <div style={{ padding: '4px 12px 2px', fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.08em', fontFamily: 'var(--mono)' }}>
-                {groups[0].name}
-              </div>
-            )}
-            {active.items.map(item => (
+          {/* Right panel — items for the active group */}
+          <div style={{ flex: 1, padding: '4px 0', minWidth: 0 }}>
+            {/* Group name header */}
+            <div style={{
+              padding: '5px 12px 4px',
+              fontSize: 9, fontFamily: 'var(--mono)', fontWeight: 700,
+              color: 'var(--acc)', textTransform: 'uppercase', letterSpacing: '.1em',
+              borderBottom: '1px solid var(--b1)', marginBottom: 2,
+            }}>
+              {active?.name}
+            </div>
+            {active?.items.map(item => (
               <button key={item.label} type="button"
                 onClick={() => { item.action(); setOpen(false) }}
                 style={{
                   display: 'block', width: '100%', textAlign: 'left',
                   padding: '6px 12px', fontSize: 11.5, background: 'none',
                   border: 'none', color: 'var(--sub)', cursor: 'pointer',
-                  fontFamily: 'var(--sans)', transition: 'all 120ms',
+                  fontFamily: 'var(--sans)', transition: 'all 100ms',
+                  whiteSpace: 'nowrap',
                 }}
                 onMouseOver={e => { e.currentTarget.style.background='var(--s3)'; e.currentTarget.style.color='var(--text)' }}
-                onMouseOut={e => { e.currentTarget.style.background='none'; e.currentTarget.style.color='var(--sub)' }}
+                onMouseOut={e  => { e.currentTarget.style.background='none'; e.currentTarget.style.color='var(--sub)' }}
               >
                 {item.label}
               </button>
@@ -1220,10 +1301,11 @@ function BBEditor({ value, onChange, userGroups }) {
         {/* Group assets — collapsed dropdown */}
         {(() => {
           const GROUP_ASSETS = [
+            // ── Groups with confirmed assets ──────────────────────────────────
             {
               gid: '68', name: 'Brotherhood',
               items: [
-                { label: 'Header',  action: () => insert('[align=center][img]https://i.ibb.co/C33BJJJg/header4.gif[/img][/align]') },
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.ibb.co/C33BJJJg/header4.gif[/img][/align]') },
                 { label: 'Div 1',   action: () => insert('[align=center][img]https://i.ibb.co/bpzTMYh/divider3.gif[/img][/align]') },
                 { label: 'Div 2',   action: () => insert('[align=center][img]https://i.ibb.co/N2NSzmv9/divider.gif[/img][/align]') },
                 { label: '[css]',   action: () => wrap('[css=68]','[/css]') },
@@ -1232,9 +1314,138 @@ function BBEditor({ value, onChange, userGroups }) {
             {
               gid: '78', name: 'VIBE',
               items: [
-                { label: 'Header',  action: () => insert('[align=center][img]https://i.ibb.co/4RGC0JNd/Vibe-Header.gif[/img][/align]') },
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.ibb.co/4RGC0JNd/Vibe-Header.gif[/img][/align]') },
                 { label: 'Divider', action: () => insert('[align=center][img]https://i.ibb.co/8LvxwtYQ/vibesignature.gif[/img][/align]') },
                 { label: '[css]',   action: () => wrap('[css=78]','[/css]') },
+              ]
+            },
+            {
+              gid: '77', name: 'Academy',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.imgur.com/ZopETWz.png[/img][/align]') },
+                { label: 'Icon',    action: () => insert('[img]https://i.imgur.com/EAbQz15.png[/img]') },
+                { label: '[css]',   action: () => wrap('[css=77]','[/css]') },
+              ]
+            },
+            {
+              gid: '71', name: 'Warriors',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.imgur.com/I56l7zY.gif[/img][/align]') },
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.imgur.com/g3FK62G.gif[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=71]','[/css]') },
+              ]
+            },
+            {
+              gid: '48', name: 'Quantum',
+              items: [
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.imgur.com/ZLazS1C.gif[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=48]','[/css]') },
+              ]
+            },
+            {
+              gid: '70', name: 'Gamblers',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/b/b9/Gamblers_%28Banner%29.jpg[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=70]','[/css]') },
+              ]
+            },
+            {
+              gid: '50', name: 'Legends',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://hackforums.net/images/groupimages/custom/legends3.gif[/img][/align]') },
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.ibb.co/VYzpsSCJ/divider.gif[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=50]','[/css]') },
+              ]
+            },
+            {
+              gid: '52', name: 'PinkLSZ',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/5/5a/Pink_LSZ_%28Banner%29.png[/img][/align]') },
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.imgur.com/CJGA0QS.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=52]','[/css]') },
+              ]
+            },
+            {
+              gid: '46', name: 'H4CK3R$',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/e/e8/Hackersheader.gif[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=46]','[/css]') },
+              ]
+            },
+            {
+              gid: '49', name: 'Sociopaths',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/b/ba/Sociopaths_%28Banner%29.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=49]','[/css]') },
+              ]
+            },
+            {
+              gid: '56', name: 'Blacklisted',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/1/14/Blacklisted_%28Banner%29.gif[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=56]','[/css]') },
+              ]
+            },
+            {
+              gid: '63', name: 'Infamous',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/7/70/Infamous_III_%28Banner%29.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=63]','[/css]') },
+              ]
+            },
+            {
+              gid: '53', name: 'Eden',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/1/10/Eden_%28Banner%29.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=53]','[/css]') },
+              ]
+            },
+            {
+              gid: '57', name: 'Lions League',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/1/18/Lions_League_%28Banner%29.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=57]','[/css]') },
+              ]
+            },
+            {
+              gid: '12', name: 'Benevolence',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.imgur.com/C281EBQ.gif[/img][/align]') },
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.imgur.com/pvxwHgf.gif[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=12]','[/css]') },
+              ]
+            },
+            {
+              gid: '54', name: 'Succubus',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/3/37/Succubus_%28Banner%29.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=54]','[/css]') },
+              ]
+            },
+            {
+              gid: '59', name: 'Olympians',
+              items: [
+                { label: 'Banner',  action: () => insert('[align=center][img]https://wiki.hackforums.net/images/d/dd/Olympians_%28Banner%29.png[/img][/align]') },
+                { label: '[css]',   action: () => wrap('[css=59]','[/css]') },
+              ]
+            },
+            {
+              gid: '23', name: 'Mob',
+              items: [
+                { label: '[css]',   action: () => wrap('[css=23]','[/css]') },
+              ]
+            },
+            // ── Banner-only groups (no group CSS tag on HF) ───────────────────────
+            {
+              gid: '74', name: 'Terminal',
+              items: [
+                { label: 'Banner', action: () => insert('[align=center][img]https://wiki.hackforums.net/images/9/92/Terminal_%28Banner%29.jpg[/img][/align]') },
+              ]
+            },
+            {
+              gid: '39', name: 'Equilibrium',
+              items: [
+                { label: 'Banner', action: () => insert('[align=center][img]https://wiki.hackforums.net/images/a/a7/Equilibrium_%28Banner%29.png[/img][/align]') },
               ]
             },
           ]
@@ -1320,31 +1531,124 @@ function BBPreview({ message, title, userGroups, compact }) {
 }
 
 // ── Composer ──────────────────────────────────────────────────────────────────
-const FOOTER_TEXT = '[align=center][color=#7b94b5][size=small]Posted via [url=https://hftoolbox.com]HFToolbox[/url][/size][/color][/align]'
+// ── Image split utilities ─────────────────────────────────────────────────────
+const IMG_LIMIT = 15
+
+function countImages(bbcode) {
+  // Both [img] and [uimg] count toward HF's 15-image-per-post limit
+  return (bbcode.match(/\[u?img\]/gi) || []).length
+}
+
+function splitAtImage(bbcode, n) {
+  // Split after the closing tag of the Nth image ([img] or [uimg])
+  let count = 0, i = 0
+  const lower = bbcode.toLowerCase()
+  while (i < lower.length) {
+    const ni  = lower.indexOf('[img]',  i)
+    const nui = lower.indexOf('[uimg]', i)
+    if (ni === -1 && nui === -1) break
+    let imgOpen, closeTag, closeLen
+    if (ni === -1 || (nui !== -1 && nui < ni)) {
+      imgOpen = nui; closeTag = '[/uimg]'; closeLen = 7
+    } else {
+      imgOpen = ni;  closeTag = '[/img]';  closeLen = 6
+    }
+    const imgClose = lower.indexOf(closeTag, imgOpen)
+    if (imgClose === -1) break
+    count++
+    if (count === n) {
+      const at = imgClose + closeLen
+      return [bbcode.slice(0, at).trimEnd(), bbcode.slice(at).trimStart()]
+    }
+    i = imgClose + closeLen
+  }
+  return [bbcode, '']
+}
+
+const FOOTER_TEXT = '[align=center][color=#2a5c2a]─────────────────────────────[/color]\n[color=#4a8a4a][size=small]posted via [/size][/color][size=small][b][color=#39ff14][url=https://hftoolbox.com]HF.Toolbox[/url][/color][/b][/size][color=#4a8a4a][size=small] // hackforums dashboard[/size][/color]\n[color=#2a5c2a]─────────────────────────────[/color][/align]'
 const BUMP_INTERVALS = [6, 8, 12, 18, 24]
+
+// ── Image count badge ─────────────────────────────────────────────────────────
+function ImgBadge({ count }) {
+  if (count === 0) return null
+  const ok    = count < IMG_LIMIT
+  const exact = count === IMG_LIMIT
+  const over  = count > IMG_LIMIT
+  const col   = over ? 'var(--red)' : exact ? 'var(--yellow)' : 'var(--acc)'
+  const bg    = over ? 'rgba(232,82,82,.12)' : exact ? 'rgba(232,168,40,.12)' : 'rgba(0,212,180,.08)'
+  return (
+    <span style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 3,
+      background: bg, color: col, border: `1px solid ${col}`, whiteSpace: 'nowrap' }}>
+      {over ? `⚠ ${count}/15 images — over limit` : `${count}/15 imgs`}
+    </span>
+  )
+}
+
+// ── Section editor (Post 1 / Reply 1 / Reply 2) ───────────────────────────────
+function SectionEditor({ label, index, value, onChange, userGroups, preview, sideBySide, addFooter, title }) {
+  const imgCount   = countImages(value)
+  const previewMsg = index === 0 && addFooter ? value + '\n\n' + FOOTER_TEXT : value
+  const prevTitle  = index === 0 ? title : `↩ Reply ${index}`
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '.08em',
+          fontFamily: 'var(--mono)', padding: '2px 8px', borderRadius: 3,
+          background: index === 0 ? 'rgba(0,212,180,.1)' : 'rgba(100,100,200,.1)',
+          border: `1px solid ${index === 0 ? 'rgba(0,212,180,.25)' : 'rgba(100,100,200,.25)'}`,
+          color: index === 0 ? 'var(--acc)' : 'var(--blue)' }}>
+          {label}
+        </div>
+        <ImgBadge count={imgCount} />
+        {imgCount > IMG_LIMIT && (
+          <span style={{ fontSize: 10, color: 'var(--red)' }}>
+            Remove {imgCount - IMG_LIMIT} image{imgCount - IMG_LIMIT !== 1 ? 's' : ''} from this section
+          </span>
+        )}
+      </div>
+      {preview && sideBySide ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
+          <BBEditor value={value} onChange={onChange} userGroups={userGroups} />
+          <BBPreview message={previewMsg} title={prevTitle} userGroups={userGroups} />
+        </div>
+      ) : (
+        <>
+          <BBEditor value={value} onChange={onChange} userGroups={userGroups} />
+          {preview && <BBPreview message={previewMsg} title={prevTitle} userGroups={userGroups} />}
+        </>
+      )}
+    </div>
+  )
+}
 
 function Composer({ onPosted }) {
   const user = useStore(s => s.user)
   const userGroups = user?.groups || []
-  const [forum,       setForum]       = useState(null)
-  const [title,       setTitle]       = useState('')
-  const [message,     setMessage]     = useState('')
-  const [scheduled,   setScheduled]   = useState(false)
-  const [fireAt,      setFireAt]      = useState(() => { const d=new Date(Date.now()+3600000); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })
-  const [preview,     setPreview]     = useState(false)
-  const [sideBySide,  setSideBySide]  = useState(false)
-  const [submitting,  setSubmitting]  = useState(false)
-  const [result,      setResult]      = useState(null)
-  const [recents,     setRecents]     = useState([])
-  const [confirm,     setConfirm]     = useState(false)
-  // New options
-  const [addFooter,   setAddFooter]   = useState(false)
-  const [autoBump,    setAutoBump]    = useState(false)
-  const [bumpInterval,setBumpInterval]= useState(12)
+  const [forum,        setForum]        = useState(null)
+  const [title,        setTitle]        = useState('')
+  const [message,      setMessage]      = useState('')
+  const [reply1,       setReply1]       = useState('')
+  const [reply2,       setReply2]       = useState('')
+  const [multiPost,    setMultiPost]    = useState(false)
+  const [replyCount,   setReplyCount]   = useState(1) // 1 or 2 replies when multiPost
+  const [scheduled,    setScheduled]    = useState(false)
+  const [fireAt,       setFireAt]       = useState(() => { const d=new Date(Date.now()+3600000); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })
+  const [preview,      setPreview]      = useState(false)
+  const [sideBySide,   setSideBySide]   = useState(false)
+  const [submitting,   setSubmitting]   = useState(false)
+  const [result,       setResult]       = useState(null)
+  const [recents,      setRecents]      = useState([])
+  const [confirm,      setConfirm]      = useState(false)
+  const [addFooter,    setAddFooter]    = useState(false)
+  const [autoBump,     setAutoBump]     = useState(false)
+  const [bumpInterval, setBumpInterval] = useState(12)
+
+  // Single-post image count for warning badge
+  const imgCount    = countImages(message)
+  const imgOverPost = !multiPost && imgCount > IMG_LIMIT
 
   useEffect(() => {
     api.get('/api/posting/recents').then(d => setRecents(d.recents || [])).catch(() => {})
-    // Load saved prefs
     api.get('/api/settings').then(d => {
       const s = d.settings || {}
       if (s.postingFooter !== undefined) setAddFooter(Boolean(s.postingFooter))
@@ -1352,17 +1656,23 @@ function Composer({ onPosted }) {
     }).catch(() => {})
   }, [])
 
-  // Persist footer toggle when changed
   const toggleFooter = (val) => {
     setAddFooter(val)
     api.post('/api/settings', { postingFooter: val }).catch(() => {})
   }
 
-  const rule = forum ? FORUM_RULES[parseInt(forum.fid)] : null
-  const canSubmit = forum && title.trim() && message.trim() && !submitting
+  const rule      = forum ? FORUM_RULES[parseInt(forum.fid)] : null
+  const canSubmit = forum && title.trim() && message.trim() && !submitting && !imgOverPost
+
+  // All sections must be ≤15 images in multi-post mode
+  const sectionsOk = !multiPost || (
+    countImages(message) <= IMG_LIMIT &&
+    countImages(reply1)  <= IMG_LIMIT &&
+    (replyCount < 2 || countImages(reply2) <= IMG_LIMIT)
+  )
 
   const submit = async () => {
-    if (!canSubmit) return
+    if (!canSubmit || !sectionsOk) return
     setConfirm(false)
     setSubmitting(true)
     setResult(null)
@@ -1382,14 +1692,16 @@ function Composer({ onPosted }) {
         : message.trim()
 
       const d = await api.post('/api/posting/thread', {
-        fid:             forum.fid,
-        forum_name:      forum.name,
-        category_name:   forum.cat,
-        subject:         title.trim(),
-        message:         finalMessage,
+        fid:               forum.fid,
+        forum_name:        forum.name,
+        category_name:     forum.cat,
+        subject:           title.trim(),
+        message:           finalMessage,
+        overflow_message:  multiPost ? reply1.trim() : '',
+        overflow_message_2: multiPost && replyCount >= 2 ? reply2.trim() : '',
         fire_at,
-        auto_bump:       autoBump,
-        bump_interval_h: bumpInterval,
+        auto_bump:         autoBump,
+        bump_interval_h:   bumpInterval,
       })
 
       setResult({
@@ -1400,11 +1712,11 @@ function Composer({ onPosted }) {
         scheduled: d.scheduled,
         fire_at: d.fire_at,
         bumperAdded: autoBump && !d.scheduled,
+        replyCount: multiPost ? replyCount : 0,
       })
       if (!d.scheduled) {
-        setTitle('')
-        setMessage('')
-        setForum(null)
+        setTitle(''); setMessage(''); setReply1(''); setReply2('')
+        setForum(null); setMultiPost(false); setReplyCount(1)
       }
       onPosted?.()
     } catch (e) {
@@ -1415,13 +1727,12 @@ function Composer({ onPosted }) {
 
   const editorContent = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minWidth: 0 }}>
-      {/* Forum selector */}
+      {/* Forum */}
       <div>
         <div style={{ fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.08em', fontFamily: 'var(--mono)', marginBottom: 5 }}>Forum</div>
         <ForumSelector value={forum} onChange={setForum} recents={recents} userGroups={userGroups} />
       </div>
 
-      {/* Forum rules */}
       {rule && (
         <div style={{ background: 'rgba(255,165,2,.06)', border: '1px solid rgba(255,165,2,.2)', borderRadius: 4, padding: '7px 10px', fontSize: 11, color: 'var(--yellow)', lineHeight: 1.5 }}>
           {rule}
@@ -1438,41 +1749,114 @@ function Composer({ onPosted }) {
         </div>
       </div>
 
-      {/* Editor */}
-      <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-          <div style={{ fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.08em', fontFamily: 'var(--mono)' }}>Content</div>
-          <div style={{ display: 'flex', gap: 5 }}>
-            <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px' }}
-              onClick={() => { setPreview(!preview); if (!preview) setSideBySide(false) }}>
-              {preview ? 'Hide Preview' : 'Preview'}
-            </button>
-            {preview && (
-              <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px' }}
-                onClick={() => setSideBySide(!sideBySide)}>
-                {sideBySide ? 'Stack' : 'Side by Side'}
-              </button>
-            )}
-          </div>
-        </div>
-        {sideBySide ? (
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
-            <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
-            <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />
-          </div>
-        ) : (
-          <>
-            <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
-            {preview && <div style={{ marginTop: 8 }}><BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} /></div>}
-          </>
+      {/* Preview toggle row */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+        <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px' }}
+          onClick={() => { setPreview(!preview); if (preview) setSideBySide(false) }}>
+          {preview ? 'Hide Preview' : 'Preview'}
+        </button>
+        {preview && (
+          <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px' }}
+            onClick={() => setSideBySide(!sideBySide)}>
+            {sideBySide ? 'Stack' : 'Side by Side'}
+          </button>
         )}
       </div>
+
+      {/* Content sections */}
+      {!multiPost ? (
+        /* Single-post mode */
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.08em', fontFamily: 'var(--mono)' }}>Content</div>
+            <ImgBadge count={imgCount} />
+            {imgOverPost && (
+              <span style={{ fontSize: 10, color: 'var(--red)' }}>
+                Over the 15-image HF limit — enable multi-post mode below to split across replies
+              </span>
+            )}
+          </div>
+          {sideBySide ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
+              <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
+              <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />
+            </div>
+          ) : (
+            <>
+              <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
+              {preview && (
+                <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        /* Multi-post mode — stacked section editors */
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <SectionEditor label="Post 1 — Thread" index={0}
+            value={message} onChange={setMessage}
+            userGroups={userGroups} preview={preview} sideBySide={sideBySide} addFooter={addFooter} title={title} />
+
+          <div style={{ borderTop: '2px dashed var(--b2)', position: 'relative' }}>
+            <span style={{ position: 'absolute', top: -9, left: '50%', transform: 'translateX(-50%)',
+              background: 'var(--s2)', padding: '0 8px', fontSize: 10, color: 'var(--dim)',
+              fontFamily: 'var(--mono)' }}>— HF posts below this as Reply 1 —</span>
+          </div>
+
+          <SectionEditor label="Reply 1" index={1}
+            value={reply1} onChange={setReply1}
+            userGroups={userGroups} preview={preview} sideBySide={sideBySide} addFooter={false} title={title} />
+
+          {replyCount >= 2 ? (
+            <>
+              <div style={{ borderTop: '2px dashed var(--b2)', position: 'relative' }}>
+                <span style={{ position: 'absolute', top: -9, left: '50%', transform: 'translateX(-50%)',
+                  background: 'var(--s2)', padding: '0 8px', fontSize: 10, color: 'var(--dim)',
+                  fontFamily: 'var(--mono)' }}>— HF posts below this as Reply 2 —</span>
+              </div>
+              <SectionEditor label="Reply 2" index={2}
+                value={reply2} onChange={setReply2}
+                userGroups={userGroups} preview={preview} sideBySide={sideBySide} addFooter={false} title={title} />
+              <button className="btn btn-ghost" style={{ fontSize: 11, alignSelf: 'flex-start', color: 'var(--red)' }}
+                onClick={() => { setReplyCount(1); setReply2('') }}>
+                − Remove Reply 2
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-ghost" style={{ fontSize: 11, alignSelf: 'flex-start' }}
+              onClick={() => setReplyCount(2)}>
+              + Add Reply 2
+            </button>
+          )}
+
+          {!sectionsOk && (
+            <div style={{ fontSize: 11, color: 'var(--red)', padding: '7px 10px',
+              background: 'rgba(232,82,82,.08)', border: '1px solid rgba(232,82,82,.2)', borderRadius: 4 }}>
+              ⚠ Each section must be 15 images or fewer before posting
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── Bottom options panel ── */}
       <div style={{ border: '1px solid var(--b1)', borderRadius: 4, overflow: 'hidden' }}>
 
+        {/* Multi-post toggle */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
+          borderBottom: '1px solid var(--b1)', background: 'var(--s3)' }}>
+          <button className={`tog${multiPost ? '' : ' off'}`} onClick={() => {
+            setMultiPost(!multiPost)
+            if (multiPost) { setReply1(''); setReply2(''); setReplyCount(1) }
+          }} />
+          <span style={{ fontSize: 12, color: 'var(--sub)', fontWeight: 500 }}>Multi-post mode</span>
+          <span style={{ fontSize: 10, color: 'var(--dim)', marginLeft: 4 }}>
+            Split content across 2–3 HF posts (15-image limit per post)
+          </span>
+        </div>
+
         {/* Schedule row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: scheduled ? '1px solid var(--b1)' : 'none', background: 'var(--s3)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px',
+          borderBottom: scheduled ? '1px solid var(--b1)' : 'none', background: 'var(--s3)' }}>
           <button className={`tog${scheduled ? '' : ' off'}`} onClick={() => setScheduled(!scheduled)} />
           <span style={{ fontSize: 12, color: 'var(--sub)', fontWeight: 500 }}>Schedule post</span>
           {scheduled && fireAt && (() => {
@@ -1482,118 +1866,92 @@ function Composer({ onPosted }) {
         </div>
         {scheduled && (
           <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap', padding:'10px 12px', background:'var(--bg)', borderBottom:'1px solid var(--b1)' }}>
-            <input type="datetime-local" className="inp"
-              value={fireAt}
-              min={(() => { const n=new Date(); return n.getFullYear()+'-'+String(n.getMonth()+1).padStart(2,'0')+'-'+String(n.getDate()).padStart(2,'0')+'T'+String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0') })()}
-              onChange={e => setFireAt(e.target.value)}
-              style={{ fontSize:12 }}
-            />
-            <div style={{ display:'flex', gap:3 }}>
-              {[['1h',1],['6h',6],['12h',12],['1d',24],['2d',48],['1wk',168]].map(([lbl,hrs]) => (
-                <button key={lbl} className="btn btn-ghost" style={{ fontSize:10, padding:'4px 9px' }}
-                  onClick={() => { const d=new Date(Date.now()+hrs*3600000); setFireAt(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')) }}>
-                  {lbl}
-                </button>
-              ))}
-            </div>
+            <input type="datetime-local" className="inp" style={{ flex:1, minWidth:180, colorScheme:'dark' }}
+              value={fireAt} onChange={e => setFireAt(e.target.value)} />
           </div>
         )}
 
-        {/* Footer row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid var(--b1)', background: 'var(--s3)' }}>
-          <button className={`tog${addFooter ? '' : ' off'}`} onClick={() => toggleFooter(!addFooter)} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: 12, color: 'var(--sub)', fontWeight: 500 }}>HFToolbox footer</span>
-            <span style={{ fontSize: 10, color: 'var(--dim)', marginLeft: 8 }}>— promotes the tool at the bottom of your post</span>
-          </div>
-          {addFooter && (
-            <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', fontStyle: 'italic' }}>visible in preview ↑</span>
-          )}
-        </div>
-
-        {/* Auto-bump row */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', background: 'var(--s3)' }}>
-          <button className={`tog${autoBump ? '' : ' off'}`} onClick={() => setAutoBump(!autoBump)} />
-          <span style={{ fontSize: 12, color: 'var(--sub)', fontWeight: 500 }}>Add to Auto Bumper</span>
+        {/* Footer + auto-bump */}
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', padding: '9px 12px', background: 'var(--s3)', flexWrap: 'wrap' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--sub)', cursor: 'pointer' }}>
+            <button className={`tog${addFooter ? '' : ' off'}`} onClick={() => toggleFooter(!addFooter)} />
+            HFToolbox footer
+            <span style={{ fontSize: 10, color: 'var(--dim)' }}>— promotes the tool at the bottom of your post</span>
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--sub)', cursor: 'pointer' }}>
+            <button className={`tog${autoBump ? '' : ' off'}`} onClick={() => setAutoBump(!autoBump)} />
+            Add to Auto Bumper
+          </label>
           {autoBump && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 4 }}>
-              <span style={{ fontSize: 10, color: 'var(--dim)' }}>every</span>
-              {BUMP_INTERVALS.map(h => (
-                <button key={h}
-                  className={bumpInterval === h ? 'btn btn-acc' : 'btn btn-ghost'}
-                  style={{ fontSize: 10, padding: '2px 8px' }}
-                  onClick={() => setBumpInterval(h)}
-                >{h}h</button>
-              ))}
+            <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--sub)' }}>
+              <span>Interval:</span>
+              <select className="inp" value={bumpInterval} onChange={e => setBumpInterval(Number(e.target.value))}
+                style={{ padding:'2px 6px', fontSize:11 }}>
+                {BUMP_INTERVALS.map(h => <option key={h} value={h}>{h}h</option>)}
+              </select>
             </div>
           )}
         </div>
-
       </div>
 
-      {/* Result */}
-      {result && (
-        <div style={{
-          padding: '8px 12px', borderRadius: 4, fontSize: 12,
-          background: result.ok ? 'rgba(0,212,180,.06)' : 'var(--red2)',
-          border: `1px solid ${result.ok ? 'rgba(0,212,180,.2)' : 'rgba(255,71,87,.2)'}`,
-          color: result.ok ? 'var(--acc)' : 'var(--red)',
-        }}>
-          {result.ok
-            ? <div>
-                {result.message}
-                {result.bumperAdded && <span style={{ marginLeft: 10, color: 'var(--yellow)' }}>⬆ Added to bumper ({bumpInterval}h)</span>}
-                {result.tid && <span style={{ marginLeft: 10 }}><a href={`https://hackforums.net/showthread.php?tid=${result.tid}`} target="_blank" rel="noreferrer" style={{ color: 'var(--acc)' }}>View thread →</a></span>}
-              </div>
-            : `Error: ${result.error}`
-          }
-        </div>
-      )}
-
       {/* Submit */}
-      {!confirm ? (
-        <div style={{ display:'flex', gap:8, alignItems:'center' }}>
-          <button
-            className="btn btn-acc"
-            style={{ padding: '7px 20px', fontSize: 12 }}
-            disabled={!canSubmit}
-            onClick={() => scheduled ? submit() : setConfirm(true)}
-          >
-            {submitting ? 'Queuing…' : scheduled ? 'Schedule Thread' : 'Post Thread'}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        {!confirm ? (
+          <button className="btn btn-acc" style={{ fontSize: 13 }}
+            disabled={!canSubmit || !sectionsOk}
+            onClick={() => setConfirm(true)}>
+            {scheduled ? 'Schedule Thread' : 'Post Thread'}
           </button>
-          <button
-            className="btn btn-ghost"
-            style={{ fontSize: 11 }}
-            disabled={!(forum && title.trim() && message.trim())}
-            onClick={async () => {
-              if (!forum || !title.trim() || !message.trim()) return
-              await api.post('/api/posting/drafts', {
-                fid: forum.fid, forum_name: forum.name,
-                subject: title.trim(), message: message.trim()
-              })
-              setResult({ ok: true, draft: true })
-            }}
-          >
-            Save as draft
-          </button>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 12, color: 'var(--yellow)' }}>
-            Post to <strong>{forum?.name}</strong>?
+        ) : (
+          <>
+            <button className="btn btn-acc" style={{ fontSize: 13 }} onClick={submit} disabled={submitting}>
+              {submitting ? '…' : `Confirm ${scheduled ? 'Schedule' : 'Post'}`}
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 12 }} onClick={() => setConfirm(false)}>Cancel</button>
+          </>
+        )}
+        {multiPost && (
+          <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
+            {replyCount + 1} posts total
           </span>
-          <button className="btn btn-acc" style={{ fontSize: 11, padding: '4px 14px' }}
-            disabled={submitting} onClick={submit}>
-            {submitting ? '…' : 'Yes, Post Now'}
-          </button>
-          <button className="btn btn-ghost" style={{ fontSize: 11 }}
-            onClick={() => setConfirm(false)}>Cancel</button>
+        )}
+      </div>
+
+      {result && (
+        <div style={{ padding: '10px 12px', borderRadius: 4, fontSize: 12,
+          background: result.ok ? 'rgba(0,212,180,.08)' : 'rgba(232,82,82,.08)',
+          border: `1px solid ${result.ok ? 'rgba(0,212,180,.2)' : 'rgba(232,82,82,.2)'}`,
+          color: result.ok ? 'var(--acc)' : 'var(--red)' }}>
+          {result.ok ? (
+            <>
+              ✓ {result.message}
+              {result.replyCount > 0 && ` — ${result.replyCount} repl${result.replyCount > 1 ? 'ies' : 'y'} will be posted immediately after`}
+              {result.bumperAdded && ' · Added to Auto Bumper'}
+              {result.tid && (
+                <a href={`https://hackforums.net/showthread.php?tid=${result.tid}`}
+                  target="_blank" rel="noreferrer"
+                  style={{ marginLeft: 8, color: 'var(--acc)', fontSize: 11 }}>
+                  View thread →
+                </a>
+              )}
+            </>
+          ) : `✕ ${result.error}`}
         </div>
       )}
     </div>
   )
 
-  return editorContent
+  return (
+    <div className="card">
+      <div className="card-head">
+        <span className="card-icon">✍️</span>
+        <span className="card-title">New Thread</span>
+      </div>
+      <div className="card-body">
+        {editorContent}
+      </div>
+    </div>
+  )
 }
 
 // ── Reply Queue ───────────────────────────────────────────────────────────────
@@ -1602,43 +1960,31 @@ function Composer({ onPosted }) {
 function PostToThread() {
   const user       = useStore(s => s.user)
   const userGroups = user?.groups || []
-  const [threads,     setThreads]     = useState([])
-  const [loading,     setLoading]     = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [pgNum,       setPgNum]       = useState(1)
-  const [hasMore,     setHasMore]     = useState(true)
-  const [selected,    setSelected]    = useState(null)
-  const [search,      setSearch]      = useState('')
-  const [message,     setMessage]     = useState('')
-  const [preview,     setPreview]     = useState(false)
-  const [addFooter,   setAddFooter]   = useState(false)
-  const [submitting,  setSubmitting]  = useState(false)
-  const [result,      setResult]      = useState(null)
-
-  const loadPage = useCallback((pg, append) => {
-    if (pg === 1) setLoading(true); else setLoadingMore(true)
-    api.get(`/api/posting/hf-threads?page=${pg}`)
-      .then(d => {
-        const rows = d.threads || []
-        setThreads(t => append ? [...t, ...rows] : rows)
-        setHasMore(rows.length === 30)
-        setPgNum(pg)
-        setLoading(false)
-        setLoadingMore(false)
-      })
-      .catch(() => { setLoading(false); setLoadingMore(false) })
-  }, [])
+  const [threads,    setThreads]  = useState([])
+  const [loading,    setLoading]  = useState(true)
+  const [selected,   setSelected] = useState(null)
+  const [search,     setSearch]   = useState('')
+  const [message,    setMessage]  = useState('')
+  const [preview,    setPreview]  = useState(false)
+  const [addFooter,  setAddFooter]= useState(false)
+  const [submitting, setSubmitting]= useState(false)
+  const [result,     setResult]   = useState(null)
 
   useEffect(() => {
-    loadPage(1, false)
+    api.get('/api/posting/threads')
+      .then(d => { setThreads(d.threads || []); setLoading(false) })
+      .catch(() => setLoading(false))
     api.get('/api/settings').then(d => {
       const s = d.settings || {}
       if (s.postingFooter !== undefined) setAddFooter(Boolean(s.postingFooter))
     }).catch(() => {})
-  }, [loadPage])
+  }, [])
 
   const filtered = search.trim()
-    ? threads.filter(t => (t.subject||'').toLowerCase().includes(search.toLowerCase()) || String(t.tid).includes(search))
+    ? threads.filter(t =>
+        (t.title || t.subject || '').toLowerCase().includes(search.toLowerCase()) ||
+        String(t.tid).includes(search)
+      )
     : threads
 
   const submit = async () => {
@@ -1660,7 +2006,20 @@ function PostToThread() {
     setSubmitting(false)
   }
 
-  if (loading) return <div style={{ padding: 30, display: 'flex', justifyContent: 'center' }}><div className="spin"/></div>
+  function fmtAge(ts) {
+    if (!ts) return null
+    const s = Math.floor(Date.now() / 1000) - Number(ts)
+    if (s < 60)    return `${s}s ago`
+    if (s < 3600)  return `${Math.floor(s/60)}m ago`
+    if (s < 86400) return `${Math.floor(s/3600)}h ago`
+    return `${Math.floor(s/86400)}d ago`
+  }
+
+  if (loading) return (
+    <div style={{ padding: 30, display: 'flex', justifyContent: 'center' }}>
+      <div className="spin"/>
+    </div>
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '10px 0' }}>
@@ -1671,41 +2030,55 @@ function PostToThread() {
             <input className="inp" placeholder="Search…" value={search}
               onChange={e => setSearch(e.target.value)} style={{ flex: 1, maxWidth: 260 }} />
             <span style={{ marginLeft: 'auto', fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
-              {filtered.length}{hasMore && !search.trim() ? '+' : ''} threads
+              {filtered.length}{filtered.length < threads.length ? `/${threads.length}` : ''} threads
             </span>
           </div>
 
-          {filtered.length === 0 && !loading && (
+          {filtered.length === 0 && (
             <div style={{ fontSize: 12, color: 'var(--dim)', fontStyle: 'italic' }}>No threads found.</div>
           )}
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 320, overflowY: 'auto' }}>
-            {filtered.map(t => (
-              <div key={t.tid} onClick={() => { setSelected(t); setResult(null) }}
-                style={{ padding: '8px 10px', borderRadius: 4, cursor: 'pointer',
-                  border: '1px solid var(--b1)', background: 'var(--card)', transition: 'border-color 120ms' }}
-                onMouseOver={e => e.currentTarget.style.borderColor='var(--blue)'}
-                onMouseOut={e => e.currentTarget.style.borderColor='var(--b1)'}
-              >
-                <div style={{ fontSize: 12, color: 'var(--text)', fontWeight: 500, marginBottom: 2,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.subject}</div>
-                <div style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
-                  TID {t.tid}
-                  <a href={`https://hackforums.net/showthread.php?tid=${t.tid}`}
-                    target="_blank" rel="noreferrer"
-                    style={{ color: 'var(--blue)', marginLeft: 8 }}
-                    onClick={e => e.stopPropagation()}>view →</a>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 340, overflowY: 'auto' }}>
+            {filtered.map(t => {
+              const title   = t.title || t.subject || `TID ${t.tid}`
+              const poster  = t.lastposter_username || (t.lastposteruid ? `UID ${t.lastposteruid}` : null)
+              const age     = fmtAge(t.lastpost)
+              const closed  = Boolean(t.closed)
+              return (
+                <div key={t.tid}
+                  onClick={() => { setSelected(t); setResult(null) }}
+                  style={{ padding: '8px 10px', borderRadius: 4, cursor: 'pointer',
+                    border: `1px solid ${closed ? 'var(--border2)' : 'var(--b1)'}`,
+                    background: 'var(--card)',
+                    opacity: closed ? 0.6 : 1,
+                    transition: 'border-color 120ms' }}
+                  onMouseOver={e => e.currentTarget.style.borderColor = closed ? 'var(--border2)' : 'var(--blue)'}
+                  onMouseOut={e  => e.currentTarget.style.borderColor = closed ? 'var(--border2)' : 'var(--b1)'}
+                >
+                  <div style={{ fontSize: 12, color: 'var(--text)', fontWeight: 500, marginBottom: 4,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+                    {closed && <span style={{ fontSize: 9, fontFamily: 'var(--mono)', color: 'var(--red)', background: 'rgba(232,84,84,.12)', border: '1px solid rgba(232,84,84,.25)', borderRadius: 3, padding: '1px 5px', flexShrink: 0, letterSpacing: '0.04em' }}>CLOSED</span>}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
+                      TID {t.tid}
+                    </span>
+                    {poster && age && (
+                      <span style={{ fontSize: 10, color: 'var(--sub)' }}>
+                        last: <span style={{ color: 'var(--blue)' }}>{poster}</span>
+                        {' '}<span style={{ color: 'var(--dim)' }}>{age}</span>
+                      </span>
+                    )}
+                    <a href={`https://hackforums.net/showthread.php?tid=${t.tid}`}
+                      target="_blank" rel="noreferrer"
+                      style={{ fontSize: 10, color: 'var(--blue)', marginLeft: 'auto' }}
+                      onClick={e => e.stopPropagation()}>view →</a>
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
-
-          {hasMore && !search.trim() && (
-            <button className="btn btn-ghost" style={{ fontSize: 11, alignSelf: 'flex-start' }}
-              disabled={loadingMore} onClick={() => loadPage(pgNum + 1, true)}>
-              {loadingMore ? 'Loading…' : 'Load more'}
-            </button>
-          )}
         </>
       ) : (
         <>
@@ -1713,7 +2086,9 @@ function PostToThread() {
             <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }}
               onClick={() => { setSelected(null); setResult(null) }}>← Back</button>
             <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{selected.subject}</span>
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {selected.title || selected.subject}
+            </span>
             <a href={`https://hackforums.net/showthread.php?tid=${selected.tid}`}
               target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--blue)', flexShrink: 0 }}>
               TID {selected.tid} →</a>
@@ -1734,6 +2109,22 @@ function PostToThread() {
             <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
           )}
 
+          {/* Image count badge for replies — warn only, HF doesn't let you split replies */}
+          {(() => {
+            const ic = countImages(message)
+            if (ic === 0) return null
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <ImgBadge count={ic} />
+                {ic > IMG_LIMIT && (
+                  <span style={{ fontSize: 11, color: 'var(--red)' }}>
+                    HF will reject this reply — remove {ic - IMG_LIMIT} image{ic - IMG_LIMIT !== 1 ? 's' : ''}
+                  </span>
+                )}
+              </div>
+            )
+          })()}
+
           {result && (
             <div style={{
               padding: '8px 12px', borderRadius: 4, fontSize: 12,
@@ -1742,20 +2133,28 @@ function PostToThread() {
               color: result.ok ? 'var(--acc)' : 'var(--red)',
             }}>
               {result.ok
-                ? <>✓ Posted{result.pid && <> — <a href={`https://hackforums.net/showthread.php?pid=${result.pid}#pid${result.pid}`}
+                ? <>&#x2713; Posted{result.pid && <> — <a href={`https://hackforums.net/showthread.php?pid=${result.pid}#pid${result.pid}`}
                     target="_blank" rel="noreferrer" style={{ color: 'var(--blue)' }}>View post →</a></>}</>
                 : `Error: ${result.error}`}
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-p" disabled={!message.trim() || submitting}
-              onClick={submit} style={{ fontSize: 12 }}>
-              {submitting ? 'Posting…' : 'Post'}
-            </button>
-            {message && <button className="btn btn-ghost" style={{ fontSize: 12 }}
-              onClick={() => { setMessage(''); setResult(null) }}>Clear</button>}
-          </div>
+          {selected.closed ? (
+            <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12,
+              background: 'rgba(232,84,84,.06)', border: '1px solid rgba(232,84,84,.2)',
+              color: 'var(--red)' }}>
+              🔒 This thread is closed — replies are disabled.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-p" disabled={!message.trim() || submitting}
+                onClick={submit} style={{ fontSize: 12 }}>
+                {submitting ? 'Posting…' : 'Post'}
+              </button>
+              {message && <button className="btn btn-ghost" style={{ fontSize: 12 }}
+                onClick={() => { setMessage(''); setResult(null) }}>Clear</button>}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1829,6 +2228,11 @@ function DraftsPanel({ onSchedule }) {
   const [editingDraft, setEditingDraft] = useState(null)
   const [editSubject,  setEditSubject]  = useState('')
   const [editMessage,  setEditMessage]  = useState('')
+  const [editReply1,   setEditReply1]   = useState('')
+  const [editReply2,   setEditReply2]   = useState('')
+  const [editMultiPost,setEditMultiPost]= useState(false)
+  const [editReplyCount,setEditReplyCount]= useState(1)
+  const [editSideBySide,setEditSideBySide]= useState(false)
   const [editFid,      setEditFid]      = useState('')
   const [editForumName,setEditForumName]= useState('')
   const [editVersion,  setEditVersion]  = useState(1)
@@ -1904,6 +2308,12 @@ function DraftsPanel({ onSchedule }) {
     setEditingDraft(draft)
     setEditSubject(draft.subject)
     setEditMessage(draft.message)
+    const r1 = draft.reply1 || ''
+    const r2 = draft.reply2 || ''
+    setEditReply1(r1)
+    setEditReply2(r2)
+    setEditMultiPost(!!(r1 || r2))
+    setEditReplyCount(r2 ? 2 : 1)
     setEditFid(draft.fid || '')
     setEditForumName(draft.forum_name || '')
     setEditVersion(draft.version || 1)
@@ -1986,6 +2396,8 @@ function DraftsPanel({ onSchedule }) {
         body: JSON.stringify({
           fid: editFid, forum_name: editForumName,
           subject: editSubject, message: editMessage,
+          reply1: editMultiPost ? editReply1 : '',
+          reply2: editMultiPost && editReplyCount >= 2 ? editReply2 : '',
           base_version: editVersion,
         }),
       })
@@ -2043,6 +2455,8 @@ function DraftsPanel({ onSchedule }) {
     const res = await api.post('/api/posting/thread', {
       fid: draft.fid, forum_name: draft.forum_name,
       subject: draft.subject, message: draft.message, fire_at: 0,
+      overflow_message:   draft.reply1 || '',
+      overflow_message_2: draft.reply2 || '',
     })
     if (res?.ok || res?.id) {
       await api.delete(`/api/posting/drafts/${draft.id}`)
@@ -2061,6 +2475,8 @@ function DraftsPanel({ onSchedule }) {
     const res = await api.post('/api/posting/thread', {
       fid: draft.fid, forum_name: draft.forum_name,
       subject: draft.subject, message: draft.message, fire_at,
+      overflow_message:   draft.reply1 || '',
+      overflow_message_2: draft.reply2 || '',
     })
     if (res?.ok || res?.id) {
       await api.delete(`/api/posting/drafts/${draft.id}`)
@@ -2292,6 +2708,12 @@ function DraftsPanel({ onSchedule }) {
                         if (fresh?.draft) {
                           setEditSubject(fresh.draft.subject)
                           setEditMessage(fresh.draft.message)
+                          const r1 = fresh.draft.reply1 || ''
+                          const r2 = fresh.draft.reply2 || ''
+                          setEditReply1(r1)
+                          setEditReply2(r2)
+                          setEditMultiPost(!!(r1 || r2))
+                          setEditReplyCount(r2 ? 2 : 1)
                           setEditVersion(fresh.draft.version || 1)
                           editVersionRef.current = fresh.draft.version || 1
                         }
@@ -2341,8 +2763,14 @@ function DraftsPanel({ onSchedule }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--b1)', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>v{editVersion}</span>
                   <label style={{ fontSize: 11, color: 'var(--dim)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={editPreview} onChange={e => setEditPreview(e.target.checked)} /> Preview
+                    <input type="checkbox" checked={editPreview} onChange={e => { setEditPreview(e.target.checked); if (!e.target.checked) setEditSideBySide(false) }} /> Preview
                   </label>
+                  {editPreview && (
+                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
+                      onClick={() => setEditSideBySide(s => !s)}>
+                      {editSideBySide ? 'Stack' : 'Side by Side'}
+                    </button>
+                  )}
                   {isOwner && (
                     <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
                       onClick={() => { setShowCollabPanel(p => !p); setShowLog(false) }}>
@@ -2450,13 +2878,62 @@ function DraftsPanel({ onSchedule }) {
                 <div style={{ padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <input className="inp" placeholder="Title" value={editSubject}
                     onChange={e => setEditSubject(e.target.value)} style={{ width: '100%' }} />
-                  {editPreview ? (
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
-                      <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
-                      <BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />
-                    </div>
+
+                  {/* Multi-post toggle for draft */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <button className={`tog${editMultiPost ? '' : ' off'}`} onClick={() => {
+                      setEditMultiPost(!editMultiPost)
+                      if (editMultiPost) { setEditReply1(''); setEditReply2(''); setEditReplyCount(1) }
+                    }} />
+                    <span style={{ fontSize: 11, color: 'var(--sub)' }}>Multi-post mode</span>
+                    <ImgBadge count={countImages(editMessage)} />
+                  </div>
+
+                  {!editMultiPost ? (
+                    editPreview && editSideBySide ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
+                        <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
+                        <BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />
+                      </div>
+                    ) : (
+                      <>
+                        <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
+                        {editPreview && <BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />}
+                      </>
+                    )
                   ) : (
-                    <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                      <SectionEditor label="Post 1 — Thread" index={0}
+                        value={editMessage} onChange={setEditMessage}
+                        userGroups={userGroups} preview={editPreview} sideBySide={editSideBySide} addFooter={false} title={editSubject} />
+                      <div style={{ borderTop: '2px dashed var(--b2)', position: 'relative' }}>
+                        <span style={{ position: 'absolute', top: -9, left: '50%', transform: 'translateX(-50%)',
+                          background: 'var(--s2)', padding: '0 8px', fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
+                          — Reply 1 —
+                        </span>
+                      </div>
+                      <SectionEditor label="Reply 1" index={1}
+                        value={editReply1} onChange={setEditReply1}
+                        userGroups={userGroups} preview={editPreview} sideBySide={editSideBySide} addFooter={false} title={editSubject} />
+                      {editReplyCount >= 2 ? (
+                        <>
+                          <div style={{ borderTop: '2px dashed var(--b2)', position: 'relative' }}>
+                            <span style={{ position: 'absolute', top: -9, left: '50%', transform: 'translateX(-50%)',
+                              background: 'var(--s2)', padding: '0 8px', fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
+                              — Reply 2 —
+                            </span>
+                          </div>
+                          <SectionEditor label="Reply 2" index={2}
+                            value={editReply2} onChange={setEditReply2}
+                            userGroups={userGroups} preview={editPreview} sideBySide={editSideBySide} addFooter={false} title={editSubject} />
+                          <button className="btn btn-ghost" style={{ fontSize: 11, alignSelf: 'flex-start', color: 'var(--red)' }}
+                            onClick={() => { setEditReplyCount(1); setEditReply2('') }}>− Remove Reply 2</button>
+                        </>
+                      ) : (
+                        <button className="btn btn-ghost" style={{ fontSize: 11, alignSelf: 'flex-start' }}
+                          onClick={() => setEditReplyCount(2)}>+ Add Reply 2</button>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
@@ -2885,7 +3362,9 @@ export default function PostingPage() {
   const [tab,        setTab]        = useState('compose')
   const [replyCount, setReplyCount] = useState(0)
   const [queueKey,   setQueueKey]   = useState(0)
-  const fetchMe = useStore(s => s.fetchMe)
+  const fetchMe  = useStore(s => s.fetchMe)
+  const user     = useStore(s => s.user)
+  const upgraded = isUpgraded(user?.groups)
 
   // Refresh user groups from DB on mount — crawl may have updated them since login
   useEffect(() => { fetchMe() }, [])
@@ -2911,10 +3390,11 @@ export default function PostingPage() {
             ['compose',    'New Thread',      null],
             ['postthread', 'New Post',         null],
             ['drafts',     'Drafts',          null],
-            ['scheduled',  'Scheduled',       null],
+            ['scheduled',  upgraded ? 'Scheduled' : '🔒 Scheduled', null],
             ['replies',    'Replies',         replyCount],
           ].map(([key, label, badge]) => (
-            <button key={key} className={`tab${tab === key ? ' on' : ''}`} onClick={() => setTab(key)}>
+            <button key={key} className={`tab${tab === key ? ' on' : ''}`} onClick={() => setTab(key)}
+              style={key === 'scheduled' && !upgraded ? { opacity: 0.55 } : undefined}>
               {label}
               {badge > 0 && (
                 <span style={{
@@ -2934,7 +3414,9 @@ export default function PostingPage() {
             <Composer onPosted={() => setQueueKey(k => k + 1)} />
           )}
           {tab === 'scheduled' && (
-            <ScheduledQueue refresh={queueKey} />
+            upgraded
+              ? <ScheduledQueue refresh={queueKey} />
+              : <AccessDenied feature="scheduled_posting" />
           )}
           {tab === 'postthread' && <PostToThread />}
           {tab === 'drafts' && <DraftsPanel onSchedule={() => { setTab('scheduled'); setQueueKey(k => k+1) }} />}
