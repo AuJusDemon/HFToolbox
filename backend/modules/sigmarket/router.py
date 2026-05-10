@@ -1,10 +1,11 @@
 """
 modules/sigmarket/router.py — API routes for sigmarket manager.
 
-GET  /api/sigmarket/status  — your listing + seller orders + buyer orders
-POST /api/sigmarket/listing — setsale / removesale / changesig
-POST /api/sigmarket/buy     — buy a sig slot
-GET  /api/sigmarket/browse  — browse all active market listings
+GET  /api/sigmarket/status          — your listing + seller orders + buyer orders
+POST /api/sigmarket/listing         — setsale / removesale / changesig
+POST /api/sigmarket/buy             — buy a sig slot
+GET  /api/sigmarket/browse          — browse all active market listings
+GET  /api/sigmarket/analytics/{uid} — post/thread analytics for any user (cached 1hr)
 """
 
 import asyncio
@@ -25,7 +26,7 @@ log = logging.getLogger("sigmarket.router")
 
 init_sigmarket_db()
 
-SIGMARKET_CACHE_TTL = 600  # 10 minutes — frontend polls every 5min so every other poll hits cache
+SIGMARKET_CACHE_TTL = 600  # 10 minutes
 
 
 def _auth(request: Request):
@@ -46,7 +47,6 @@ async def get_status(request: Request):
 
     force = request.query_params.get("force") == "true"
 
-    # Serve from cache unless forced
     if not force:
         cached = await asyncio.to_thread(db.get_dash_cache, uid, "sigmarket_status", SIGMARKET_CACHE_TTL)
         if cached:
@@ -56,7 +56,6 @@ async def get_status(request: Request):
     hf = HFClient(token)
     uid_int = int(uid)
 
-    # Three reads fire in parallel: your listing, orders you sold, orders you bought
     try:
         data1, data2, data3 = await asyncio.gather(
             hf.read({
@@ -142,7 +141,6 @@ async def get_status(request: Request):
     seller_orders = [_parse_order(o, "buyer")  for o in (seller_orders_raw or [])]
     buyer_orders  = [_parse_order(o, "seller") for o in (buyer_orders_raw  or [])]
 
-    # Cache seller/buyer usernames passively
     uid_name_map = {}
     for o in seller_orders:
         b = o.get("buyer") or {}
@@ -173,7 +171,7 @@ async def get_status(request: Request):
 @router.post("/listing")
 async def update_listing(request: Request):
     """
-    setsale   — { action: "setsale",   price: N, duration: N }
+    setsale    — { action: "setsale",   price: N, duration: N }
     removesale — { action: "removesale" }
     changesig  — { action: "changesig", smid: "all"|N, sig: "BBCode" }
     """
@@ -249,6 +247,227 @@ async def buy_sig(request: Request):
     return {"ok": True}
 
 
+# ── Analytics ──────────────────────────────────────────────────────────────────
+#
+# Fetches post FID distribution + thread views for any user.
+# Uses requesting user's token (all data is public via Posts/Users scope).
+# Cached 1hr per target UID under __system__ key — any viewer benefits from the
+# same cached result.
+
+ANALYTICS_CACHE_TTL = 3600  # 1 hour
+
+
+@router.get("/analytics/{target_uid}")
+async def user_analytics(target_uid: str, request: Request):
+    uid, token, err = _auth(request)
+    if err:
+        return err
+
+    # Validate target_uid is a valid integer
+    try:
+        target_int = int(target_uid)
+    except ValueError:
+        return JSONResponse({"error": "invalid uid"}, status_code=400)
+
+    force = request.query_params.get("force") == "true"
+
+    # Check cache first — keyed by target, shared across all requesters
+    cache_key = f"siganalytics_{target_uid}"
+    if not force:
+        cached = await asyncio.to_thread(db.get_dash_cache, "__system__", cache_key, ANALYTICS_CACHE_TTL)
+        if cached:
+            return cached
+
+    import math
+    from HFClient import HFClient
+    hf = HFClient(token)
+
+    PERPAGE = 30
+
+    # ── Call 1: user profile + threads ────────────────────────────────────────
+    # We need postnum/threadnum first to calculate the correct posts page.
+    # posts._uid is OLDEST-FIRST — page 1 = their first ever posts.
+    # Last page = ceil(reply_count / perpage).
+    try:
+        data1 = await asyncio.wait_for(hf.read({
+            "users": {
+                "_uid":       [target_int],
+                "uid":        True,
+                "username":   True,
+                "postnum":    True,
+                "threadnum":  True,
+                "timeonline": True,
+            },
+            "threads": {
+                "_uid":          [target_int],
+                "_page":         1,
+                "_perpage":      PERPAGE,
+                "tid":           True,
+                "fid":           True,
+                "dateline":      True,
+                "views":         True,
+                "subject":       True,
+                "lastpost":      True,
+                "lastposteruid": True,
+            },
+        }), timeout=15)
+    except _AuthExpired:
+        request.session.clear()
+        await asyncio.to_thread(db.clear_token, uid)
+        return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
+
+    if not data1:
+        return JSONResponse({"error": "HF API unavailable"}, status_code=503)
+
+    # ── Parse user ────────────────────────────────────────────────────────────
+    urows = data1.get("users", [])
+    if isinstance(urows, dict): urows = [urows]
+    user = urows[0] if urows else {}
+
+    postnum   = int(user.get("postnum")   or 0)
+    threadnum = int(user.get("threadnum") or 0)
+    # reply_count = posts that are NOT thread OPs
+    reply_count = max(1, postnum - threadnum)
+    last_page   = math.ceil(reply_count / PERPAGE)
+
+    # ── Calls 2-N: parallel window scan to find true last page ──────────────
+    # posts._uid is oldest-first so page 1 = their oldest posts ever.
+    # postnum includes private/inaccessible forums that the API won't return,
+    # inflating our estimate. We fetch a window of 4 pages simultaneously with
+    # asyncio.gather, keep the highest non-empty result, then shift forward if
+    # all 4 were non-empty. Max 2 rounds = 8 calls but only 2 parallel waits
+    # (~4-6s total vs up to 120s sequential).
+
+    async def _fetch_posts_page(page: int):
+        try:
+            return await asyncio.wait_for(hf.read({
+                "posts": {
+                    "_uid":     [target_int],
+                    "_page":    page,
+                    "_perpage": PERPAGE,
+                    "pid":      True,
+                    "fid":      True,
+                    "dateline": True,
+                    "tid":      True,
+                },
+            }), timeout=10)
+        except _AuthExpired:
+            raise
+        except Exception:
+            return None
+
+    posts: list = []
+    # Start one page before estimate — postnum inflation usually makes us overshoot
+    window_start = max(1, last_page - 1)
+
+    for _ in range(5):  # max 5 rounds of 4 parallel pages (~20 pages total)
+        pages = list(range(window_start, window_start + 4))
+        try:
+            results = await asyncio.gather(*[_fetch_posts_page(p) for p in pages])
+        except _AuthExpired:
+            request.session.clear()
+            await asyncio.to_thread(db.clear_token, uid)
+            return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
+
+        hit_empty = False
+        for result in results:
+            if not result:
+                hit_empty = True
+                continue
+            cur_raw = result.get("posts", [])
+            if isinstance(cur_raw, dict): cur_raw = [cur_raw]
+            cur = [p for p in (cur_raw or []) if p.get("fid")]
+            if cur:
+                posts = cur  # overwrite in order — last non-empty = highest valid page
+            else:
+                hit_empty = True
+
+        if hit_empty:
+            break  # boundary found, posts holds the most recent page's results
+        window_start += 4  # all 4 were non-empty, shift window forward
+
+    post_dates = sorted(
+        [int(p["dateline"]) for p in posts if p.get("dateline")],
+        reverse=True
+    )
+
+    # FID distribution {fid_str: count}
+    fid_counts: dict[str, int] = {}
+    for p in posts:
+        fid = str(p["fid"])
+        fid_counts[fid] = fid_counts.get(fid, 0) + 1
+
+    # Thread diversity — unique threads they replied in
+    unique_tids = len({str(p["tid"]) for p in posts if p.get("tid")})
+
+    # ── Parse threads ─────────────────────────────────────────────────────────
+    threads = data1.get("threads", [])
+    if isinstance(threads, dict): threads = [threads]
+    threads = threads or []
+
+    thread_views = [int(t.get("views") or 0) for t in threads if t.get("views") is not None]
+
+    # Thread creation dates
+    thread_dates = sorted(
+        [int(t["dateline"]) for t in threads if t.get("dateline")],
+        reverse=True
+    )
+    last_thread_ts = thread_dates[0] if thread_dates else 0
+
+    # Threads where the target user was the last poster — this catches replies
+    # they made in their own threads, which posts._uid never returns.
+    thread_lastpost_dates = [
+        int(t["lastpost"])
+        for t in threads
+        if t.get("lastpost") and str(t.get("lastposteruid") or "") == str(target_uid)
+    ]
+
+    # ── Combined activity ─────────────────────────────────────────────────────
+    # last_post_ts: max across all sources to catch OPs + own-thread replies
+    all_dates = sorted(post_dates + thread_dates + thread_lastpost_dates, reverse=True)
+    last_post_ts = all_dates[0] if all_dates else 0
+
+    # posts_per_day: use ONLY post_dates (actual reply timestamps from last page).
+    # thread_dates are creation datelines — an old thread Wake replied in last week
+    # could have a dateline from 2019, exploding the span to years and tanking the rate.
+    posts_per_day = 0.0
+    if len(post_dates) >= 2:
+        span_days = (post_dates[0] - post_dates[-1]) / 86400
+        if span_days > 0:
+            posts_per_day = round(len(post_dates) / span_days, 2)
+
+    thread_fid_counts: dict[str, int] = {}
+    for t in threads:
+        fid = str(t.get("fid") or "")
+        if fid:
+            thread_fid_counts[fid] = thread_fid_counts.get(fid, 0) + 1
+
+    result = {
+        "uid":           target_uid,
+        "username":      user.get("username", ""),
+        "threadnum":     user.get("threadnum", "0"),
+        "timeonline":    user.get("timeonline", "0"),
+        # Post analysis
+        "posts_sample":  len(posts),
+        "last_post_ts":  last_post_ts,
+        "posts_per_day": posts_per_day,
+        "unique_tids":   unique_tids,
+        "post_fid_dist": fid_counts,
+        # Thread analysis
+        "threads_sample":    len(threads),
+        "last_thread_ts":    last_thread_ts,
+        "thread_fid_dist":   thread_fid_counts,
+        "thread_views": {
+            "count": len(thread_views),
+            "avg":   round(sum(thread_views) / len(thread_views)) if thread_views else 0,
+            "max":   max(thread_views) if thread_views else 0,
+            "total": sum(thread_views),
+        },
+    }
+
+    await asyncio.to_thread(db.set_dash_cache, "__system__", cache_key, result)
+    return result
+
 
 # ── Browse market listings ─────────────────────────────────────────────────────────────
 #
@@ -267,7 +486,7 @@ def _load_browse_cache_from_db() -> bool:
         cached = db.get_dash_cache("__system__", "sigmarket_browse", BROWSE_CACHE_TTL)
         if cached and cached.get("listings"):
             _browse_cache["data"] = cached
-            _browse_cache["ts"]   = _time.time()  # treat as fresh since DB TTL already checked
+            _browse_cache["ts"]   = _time.time()
             return True
     except Exception:
         pass
@@ -351,8 +570,10 @@ async def _do_browse_fetch(token: str) -> dict | None:
         if isinstance(urows, dict): urows = [urows]
         for u in (urows or []):
             user_map[str(u.get("uid"))] = u
-        # Passively cache uid→username into shared lookup table
-        uid_name_map = {str(u.get("uid")): u.get("username", "") for u in (urows or []) if u.get("uid") and u.get("username")}
+        uid_name_map = {
+            str(u.get("uid")): u.get("username", "")
+            for u in (urows or []) if u.get("uid") and u.get("username")
+        }
         if uid_name_map:
             try:
                 await asyncio.to_thread(db.upsert_uid_usernames, uid_name_map)
@@ -388,7 +609,6 @@ async def browse_listings(request: Request):
         if _browse_cache["data"] is not None and (_time.time() - _browse_cache["ts"]) < BROWSE_CACHE_TTL:
             return _browse_cache["data"]
 
-    # Cache miss or forced — fetch now (should rarely happen if pre-warmer is running)
     try:
         result = await _do_browse_fetch(token)
     except _AuthExpired:
@@ -397,16 +617,13 @@ async def browse_listings(request: Request):
         return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
 
     if result is None:
-        # Fetch failed — if we have stale cache, serve it rather than empty
         if _browse_cache["data"] is not None:
             return _browse_cache["data"]
         return JSONResponse({"error": "HF API timed out"}, status_code=504)
 
-    # Only cache non-empty results
     if result.get("listings"):
         _browse_cache["data"] = result
         _browse_cache["ts"]   = _time.time()
-        # Persist to DB so cache survives server restarts — zero API calls on next boot
         try:
             await asyncio.to_thread(db.set_dash_cache, "__system__", "sigmarket_browse", result)
         except Exception:
@@ -471,7 +688,6 @@ async def warm_sigmarket_status(uid: str, token: str) -> None:
         seller_orders = [_parse(o, "buyer")  for o in (seller_orders_raw or [])]
         buyer_orders  = [_parse(o, "seller") for o in (buyer_orders_raw  or [])]
 
-        # Cache usernames passively
         uid_name_map = {}
         for o in seller_orders:
             b = o.get("buyer") or {}
