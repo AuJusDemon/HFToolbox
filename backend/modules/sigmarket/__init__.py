@@ -40,31 +40,27 @@ async def poll_sigmarket_rotations(uid: str, token: str) -> None:
         if elapsed < rot["interval_h"] * 3600:
             return
 
-        # Use cached status data to check for active orders — avoids a redundant HF API call.
-        # Fall back to a live API call only if cache is cold (shouldn't happen in normal use).
-        import db as _db
-        cached = await asyncio.to_thread(_db.get_dash_cache, uid, "sigmarket_status", 600)
-        if cached is not None:
-            active_count = cached.get("active_order_count", 0)
+        # Use hf_cache to check for active orders — avoids a redundant HF API call.
+        # The sigmarket status warmer keeps this fresh every 15 min.
+        # Stale data is fine here — we just need to know if there are active orders.
+        import hf_cache as _hfc
+        cache_key = f"sigmarket:status:{uid}"
+        cached_data = _hfc.get_fresh(cache_key)
+        if cached_data is None:
+            cached_data, _ = _hfc.get_usable(cache_key)  # accept stale
+        if cached_data is not None:
+            active_count = cached_data.get("active_order_count", 0)
         else:
-            # Cache cold — fetch live
-            hf_fallback = HFClient(token)
-            uid_int = int(uid)
-            data = await hf_fallback.read({
-                "sigmarket": {
-                    "_type":   "order",
-                    "_seller": [uid_int],
-                    "_page":   1,
-                    "_perpage": 5,
-                    "smid":    True,
-                    "active":  True,
-                    "enddate": True,
-                }
-            })
-            orders = data.get("sigmarket", []) if data else []
-            if isinstance(orders, dict):
-                orders = [orders]
-            active_count = sum(1 for o in orders if int(o.get("active", "0")))
+            # Cache cold — fetch via hf_service (handles in-flight dedup)
+            from .router import _do_status_fetch
+            import hf_service
+            data, _ = await hf_service.get_or_fetch(
+                cache_key     = cache_key,
+                resource_type = "sigmarket_status",
+                fetch_fn      = lambda: _do_status_fetch(uid, token),
+                uid           = uid,
+            )
+            active_count = (data or {}).get("active_order_count", 0)
 
         if active_count == 0:
             log.info("Sigmarket rotate uid=%s: no active orders, skipping", uid)

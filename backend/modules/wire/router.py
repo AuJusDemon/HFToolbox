@@ -268,13 +268,21 @@ async def refresh_thread(request: Request, tid: str):
     try:
         from HFClient import HFClient
         hf = HFClient(token)
+        # Bundle threads + posts in one call — was 2 separate calls, now 1.
         data = await hf.read({
             "threads": {
                 "_tid":       [int(tid)],
                 "tid":        True, "fid": True, "subject": True,
                 "numreplies": True, "lastpost": True, "closed": True,
                 "firstpost":  True,
-            }
+            },
+            "posts": {
+                "_tid":     [int(tid)],
+                "_page":    1,
+                "_perpage": 2,   # OP + maybe one reply; we match by PID
+                "pid":      True,
+                "message":  True,
+            },
         })
     except Exception as e:
         raise HTTPException(503, f"HF API unavailable: {e}")
@@ -288,7 +296,6 @@ async def refresh_thread(request: Request, tid: str):
     if isinstance(t, list):
         t = t[0]
 
-    # firstpost from /threads only gives PID — need a second /posts call for content
     fp = t.get("firstpost") or {}
     if isinstance(fp, list): fp = fp[0] if fp else {}
     if isinstance(fp, str):
@@ -300,29 +307,23 @@ async def refresh_thread(request: Request, tid: str):
     lastpost   = int(t.get("lastpost")   or 0)
     closed     = int(t.get("closed")     or 0)
 
-    # Second API call: fetch fresh firstpost body via /posts
+    # Extract firstpost body from the bundled posts response — no second API call needed
     firstpost_body = ""
-    if firstpost_pid:
-        try:
-            post_data = await hf.read({
-                "posts": {
-                    "_pid":    [int(firstpost_pid)],
-                    "message": True,
-                }
-            })
-            if post_data:
-                p = post_data.get("posts") or {}
-                if isinstance(p, list): p = p[0] if p else {}
-                firstpost_body = p.get("message") or ""
-        except Exception as e:
-            log.warning("Wire refresh: posts fetch failed tid=%s pid=%s: %s", tid, firstpost_pid, e)
+    posts_raw = data.get("posts", [])
+    if isinstance(posts_raw, dict): posts_raw = [posts_raw]
+    for _p in (posts_raw or []):
+        if str(_p.get("pid", "")) == str(firstpost_pid):
+            firstpost_body = _p.get("message", "")
+            break
+    if not firstpost_body and posts_raw:
+        firstpost_body = posts_raw[0].get("message", "")  # fallback: first post returned
+    if not firstpost_body:
+        log.warning("Wire refresh: no firstpost content in bundled response tid=%s pid=%s", tid, firstpost_pid)
 
     await asyncio.to_thread(update_thread_stats, tid, numreplies, lastpost, closed)
 
     if firstpost_body:
         await asyncio.to_thread(update_firstpost_content, tid, firstpost_body)
-    else:
-        log.warning("Wire refresh: no firstpost content retrieved tid=%s pid=%s", tid, firstpost_pid)
 
     await asyncio.to_thread(log_thread_refresh, tid, uid)
 
@@ -495,6 +496,10 @@ async def submit_thread(request: Request, body: SubmitBody):
     if not token:
         raise HTTPException(401, "No HF token — cannot fetch thread data")
 
+    # ── Call 1 (2 endpoints): thread metadata + first N posts ──────────────────
+    # Fetching posts._tid page 1 here covers both the firstpost body AND any
+    # secondpost needed for multi-post submissions. Eliminates call 3 entirely
+    # and bundles what was previously call 1 alone (threads only).
     try:
         from HFClient import HFClient
         hf = HFClient(token)
@@ -504,7 +509,14 @@ async def submit_thread(request: Request, body: SubmitBody):
                 "tid":       True, "uid": True, "fid": True, "subject": True,
                 "dateline":  True, "firstpost": True, "numreplies": True,
                 "lastpost":  True, "closed": True,
-            }
+            },
+            "posts": {
+                "_tid":     [int(tid)],
+                "_page":    1,
+                "_perpage": 5,   # enough for multi-post (up to 5 posts in body)
+                "pid":      True,
+                "message":  True,
+            },
         })
     except Exception as e:
         raise HTTPException(503, f"HF API unavailable: {e}")
@@ -524,10 +536,8 @@ async def submit_thread(request: Request, body: SubmitBody):
         fp = fp[0] if fp else {}
     if isinstance(fp, str):
         firstpost_pid  = fp
-        firstpost_body = ""
     else:
         firstpost_pid  = str(fp.get("pid") or "")
-        firstpost_body = fp.get("message") or ""
 
     author_uid  = str(t.get("uid") or "")
     fid         = str(t.get("fid") or "")
@@ -537,42 +547,67 @@ async def submit_thread(request: Request, body: SubmitBody):
     lastpost    = int(t.get("lastpost") or 0)
     closed      = int(t.get("closed") or 0)
 
+    # Extract firstpost + secondpost from the bundled posts response
+    posts_bundled = t_data.get("posts", [])
+    if isinstance(posts_bundled, dict): posts_bundled = [posts_bundled]
+    posts_bundled = list(posts_bundled or [])
+
+    firstpost_body = ""
+    for _bp in posts_bundled:
+        if str(_bp.get("pid", "")) == str(firstpost_pid):
+            firstpost_body = _bp.get("message", "")
+            break
+    if not firstpost_body and posts_bundled:
+        firstpost_body = posts_bundled[0].get("message", "")
+
+    # Build secondpost + extra_posts from the same bundled list (no extra API call)
+    secondpost_content = ""
+    secondpost_pid_val = ""
+    extra_posts_val    = ""
+    if body.post_count > 1:
+        import json as _json
+        extra_list = []
+        for _bp in posts_bundled:
+            if str(_bp.get("pid", "")) == str(firstpost_pid):
+                continue
+            if not secondpost_pid_val:
+                secondpost_pid_val = str(_bp.get("pid", ""))
+                secondpost_content = _bp.get("message", "")
+            else:
+                extra_list.append({"pid": str(_bp.get("pid", "")), "message": _bp.get("message", "")})
+            if 1 + len(extra_list) >= body.post_count - 1:
+                break
+        extra_posts_val = _json.dumps(extra_list) if extra_list else ""
+
     author_name = author_avatar = author_usertitle = ""
     author_reputation = "0"
     author_groups = ""
 
-    try:
-        from HFClient import HFClient
-        hf = HFClient(token)
-        asks: dict = {}
-        if not firstpost_body and firstpost_pid:
-            asks["posts"] = {"_pid": [int(firstpost_pid)], "message": True}
-        if author_uid:
-            asks["users"] = {
-                "_uid": [int(author_uid)],
-                "uid": True, "username": True, "avatar": True,
-                "usertitle": True, "reputation": True,
-                "usergroup": True, "additionalgroups": True,
-            }
-        if asks:
-            extra = await hf.read(asks)
+    # ── Call 2 (1 endpoint): author profile ─────────────────────────────────────
+    # Was previously bundled with posts._pid in call 2. Now it stands alone since
+    # posts are already handled above. Net: 3 calls → 2 calls for basic submit.
+    if author_uid:
+        try:
+            extra = await hf.read({
+                "users": {
+                    "_uid": [int(author_uid)],
+                    "uid": True, "username": True, "avatar": True,
+                    "usertitle": True, "reputation": True,
+                    "usergroup": True, "additionalgroups": True,
+                }
+            })
             if extra:
-                if "posts" in extra and not firstpost_body:
-                    p = extra["posts"]
-                    if isinstance(p, list): p = p[0] if p else {}
-                    firstpost_body = p.get("message", "")
-                if "users" in extra:
-                    u = extra["users"]
-                    if isinstance(u, list): u = u[0] if u else {}
-                    author_name      = u.get("username", "")
-                    author_avatar    = _normalize_avatar(u.get("avatar", ""))
-                    author_usertitle = u.get("usertitle", "")
-                    author_reputation= str(u.get("reputation") or "0")
-                    ug  = str(u.get("usergroup") or "")
-                    ags = str(u.get("additionalgroups") or "")
-                    author_groups = ",".join(filter(None, [ug] + [g.strip() for g in ags.split(",") if g.strip()]))
-    except Exception as e:
-        log.warning("Wire submit: secondary fetch failed tid=%s: %s", tid, e)
+                u = extra.get("users") or {}
+                if isinstance(u, list): u = u[0] if u else {}
+                author_name      = u.get("username", "")
+                author_avatar    = _normalize_avatar(u.get("avatar", ""))
+                author_usertitle = u.get("usertitle", "")
+                author_reputation= str(u.get("reputation") or "0")
+                ug  = str(u.get("usergroup") or "")
+                ags = str(u.get("additionalgroups") or "")
+                author_groups = ",".join(filter(None, [ug] + [g.strip() for g in ags.split(",") if g.strip()]))
+        except Exception as e:
+            log.warning("Wire submit: author fetch failed tid=%s: %s", tid, e)
 
     curator_name = ""
     try:
@@ -581,45 +616,6 @@ async def submit_thread(request: Request, body: SubmitBody):
             curator_name = urow.get("username", "")
     except Exception:
         pass
-
-    # Fetch second post if this is a multi-post thread (e.g. HF News style)
-    secondpost_content = ""
-    secondpost_pid_val = ""
-    extra_posts_val    = ""
-    if body.post_count > 1:
-        try:
-            from HFClient import HFClient as _HFC
-            _hf2 = _HFC(token)
-            reply_data = await _hf2.read({
-                "posts": {
-                    "_tid":     [int(tid)],
-                    "_page":    1,
-                    "_perpage": 5,
-                    "pid":      True,
-                    "message":  True,
-                }
-            })
-            if reply_data:
-                rrows = reply_data.get("posts", [])
-                if isinstance(rrows, dict): rrows = [rrows]
-                import json as _json
-                extra_list = []
-                for r in rrows:
-                    if str(r.get("pid", "")) == str(firstpost_pid):
-                        continue
-                    if not secondpost_pid_val:
-                        secondpost_pid_val = str(r.get("pid", ""))
-                        secondpost_content = r.get("message", "")
-                    else:
-                        extra_list.append({
-                            "pid": str(r.get("pid", "")),
-                            "message": r.get("message", ""),
-                        })
-                    if 1 + len(extra_list) >= body.post_count - 1:
-                        break
-                extra_posts_val = _json.dumps(extra_list) if extra_list else ""
-        except Exception as e:
-            log.warning("Wire submit: secondpost fetch failed tid=%s: %s", tid, e)
 
     await asyncio.to_thread(
         add_thread,

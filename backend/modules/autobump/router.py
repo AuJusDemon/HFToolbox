@@ -10,9 +10,8 @@ import db
 from .autobump_db import (
     add_job, remove_job, get_jobs_for_user, set_job_enabled,
     get_log, init, expire_jobs, get_settings, set_settings,
-    get_job_stats, get_weekly_bump_count, _db,
+    get_job_stats, _db
 )
-
 try:
     from HFClient import AuthExpired as _AuthExpired
 except ImportError:
@@ -65,9 +64,10 @@ class SettingsRequest(BaseModel):
 @router.get("/settings")
 async def get_bumper_settings(request: Request):
     uid = _uid(request)
-    s = await asyncio.to_thread(get_settings, uid)
+    s = await asyncio.get_event_loop().run_in_executor(None, get_settings, uid)
     weekly_budget = int(s.get("weekly_budget") or 0)
-    bump_count = await asyncio.to_thread(get_weekly_bump_count, uid)
+    from .autobump_db import get_weekly_bump_count
+    bump_count = await asyncio.get_event_loop().run_in_executor(None, get_weekly_bump_count, uid)
     return {
         "weekly_budget":   weekly_budget,
         "bytes_this_week": bump_count * STANLEY_FEE,
@@ -80,7 +80,7 @@ async def put_bumper_settings(request: Request, body: SettingsRequest):
     uid = _uid(request)
     if body.weekly_budget < 0:
         raise HTTPException(400, "weekly_budget must be >= 0")
-    await asyncio.to_thread(set_settings, uid, body.weekly_budget)
+    await asyncio.get_event_loop().run_in_executor(None, set_settings, uid, body.weekly_budget)
     return {"ok": True}
 
 
@@ -89,8 +89,8 @@ async def put_bumper_settings(request: Request, body: SettingsRequest):
 @router.get("/jobs")
 async def list_jobs(request: Request):
     uid = _uid(request)
-    await asyncio.to_thread(expire_jobs)
-    jobs = await asyncio.to_thread(get_jobs_for_user, uid)
+    await asyncio.get_event_loop().run_in_executor(None, expire_jobs)
+    jobs = await asyncio.get_event_loop().run_in_executor(None, get_jobs_for_user, uid)
     now  = int(time.time())
     result = []
     for j in jobs:
@@ -101,8 +101,8 @@ async def list_jobs(request: Request):
             "tid":                j["tid"],
             "fid":                j.get("fid"),
             "thread_title":       j.get("thread_title") or f"Thread {j['tid']}",
-            "interval_h":         j["interval_h"],
             "mode":               j.get("mode") or "timer",
+            "interval_h":         j["interval_h"],
             "enabled":            bool(j["enabled"]),
             "bump_count":         j["bump_count"],
             "last_bumped":        j.get("last_bumped"),
@@ -120,27 +120,19 @@ async def list_jobs(request: Request):
 @router.post("/jobs")
 async def create_job(request: Request, body: AddJobRequest):
     uid   = _uid(request)
-    token = await asyncio.to_thread(db.get_token, uid)
-
-    title           = None
-    fid             = None
-    lastpost        = None
-    lastposter_name = None
+    token = db.get_token(uid)
+    title = fid = lastpost = lastposter_name = None
 
     if token:
         try:
             from HFClient import HFClient
             client = HFClient(token)
-            data = await client.read({
+            data = await asyncio.wait_for(client.read({
                 "threads": {
-                    "_tid":       [body.tid],
-                    "tid":        True,
-                    "fid":        True,
-                    "subject":    True,
-                    "lastpost":   True,
-                    "lastposter": True,
+                    "_tid": [body.tid], "tid": True, "fid": True,
+                    "subject": True, "lastpost": True, "lastposter": True,
                 }
-            })
+            }), timeout=12)
             t = data.get("threads") if data else None
             if t:
                 if isinstance(t, dict): t = [t]
@@ -148,13 +140,19 @@ async def create_job(request: Request, body: AddJobRequest):
                 fid             = str(t[0].get("fid")        or "")
                 lastpost        = int(t[0].get("lastpost")   or 0)
                 lastposter_name = str(t[0].get("lastposter") or "")
+        except _AuthExpired:
+            request.session.clear()
+            await asyncio.to_thread(db.clear_token, uid)
+            return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
         except Exception:
             pass
 
     now           = int(time.time())
     interval_secs = body.interval_h * 3600
 
-    if lastpost and (now - lastpost) >= interval_secs:
+    if body.mode == "page1":
+        smart_next = now
+    elif lastpost and (now - lastpost) >= interval_secs:
         smart_next = now
     elif lastpost:
         smart_next = lastpost + interval_secs
@@ -168,68 +166,89 @@ async def create_job(request: Request, body: AddJobRequest):
                       bump_until=body.bump_until)
         with _db() as conn:
             conn.execute(
-                """UPDATE bump_jobs SET thread_title=?, fid=?, lastpost_ts=?, lastposter=?
-                   WHERE uid=? AND tid=?""",
+                """UPDATE bump_jobs SET thread_title=%s, fid=%s, lastpost_ts=%s, lastposter=%s
+                   WHERE uid=%s AND tid=%s""",
                 (title, fid, lastpost or None, lastposter_name or None, uid, str(body.tid))
             )
         return job
 
-    job = await asyncio.to_thread(_create)
+    job = await asyncio.get_event_loop().run_in_executor(None, _create)
     return {"ok": True, "job": job}
 
 
 @router.delete("/jobs/{tid}")
 async def delete_job(request: Request, tid: str):
     uid = _uid(request)
-    await asyncio.to_thread(remove_job, uid, tid)
+    await asyncio.get_event_loop().run_in_executor(None, remove_job, uid, tid)
     return {"ok": True}
 
 
 @router.patch("/jobs/{tid}")
 async def toggle_job(request: Request, tid: str, body: ToggleRequest):
     uid = _uid(request)
-    await asyncio.to_thread(set_job_enabled, uid, tid, body.enabled)
+    await asyncio.get_event_loop().run_in_executor(None, set_job_enabled, uid, tid, body.enabled)
     return {"ok": True}
 
+
+# ── Stats ─────────────────────────────────────────────────────────────────────
 
 @router.get("/jobs/{tid}/stats")
 async def job_stats(request: Request, tid: str):
     uid  = _uid(request)
     now  = int(time.time())
 
-    stats = await asyncio.to_thread(get_job_stats, uid, tid)
+    stats = await asyncio.get_event_loop().run_in_executor(None, get_job_stats, uid, tid)
 
-    # Slot contracts from contracts_history into bump periods if available
+    # All contracts for this TID, oldest first — so we can slot them into bump periods
     contracts = []
     try:
-        contracts = await asyncio.to_thread(_get_contracts_for_thread, uid, tid)
+        def _get_contracts():
+            from db_connection import _db as _cdb
+            with _cdb() as conn:
+                rows = conn.execute(
+                    """SELECT cid, status_n, type_n, iproduct, oproduct,
+                              iprice, icurrency, oprice, ocurrency, dateline
+                       FROM contracts_history
+                       WHERE uid=%s AND tid=%s
+                       ORDER BY dateline ASC""",
+                    (uid, str(tid))
+                ).fetchall()
+                return [dict(r) for r in rows]
+        contracts = await asyncio.get_event_loop().run_in_executor(None, _get_contracts)
     except Exception:
         contracts = []
 
-    bumps       = stats["bump_history"]
-    reply_gains = stats["reply_gains"]
+    # Build bump periods — each period = from this bump until the next bump
+    # bump_history from get_job_stats is ASC (oldest first), last 20
+    bumps      = stats["bump_history"]   # oldest → newest
+    reply_gains = stats["reply_gains"]   # reply_gains[i] = bumps[i+1].nr - bumps[i].nr
 
     bump_periods = []
     for i, bump in enumerate(bumps):
         next_ts = bumps[i + 1]["ts"] if i + 1 < len(bumps) else None
-        end_ts  = next_ts if next_ts else now
+        end_ts  = next_ts if next_ts else now  # open period ends "now"
 
+        # Contracts created between this bump and the next
         period_contracts = [
             c for c in contracts
             if c["dateline"] >= bump["ts"] and c["dateline"] < end_ts
         ]
+
+        # Reply gain: replies added between this bump and the next
+        # reply_gains[i] exists only when both bumps[i] and bumps[i+1] have numreplies
         reply_gain = reply_gains[i] if i < len(reply_gains) else None
 
         bump_periods.append({
-            "bump_num":   i + 1,
-            "ts":         bump["ts"],
-            "next_ts":    next_ts,
-            "duration_s": end_ts - bump["ts"],
-            "is_current": next_ts is None,
-            "reply_gain": reply_gain,
-            "contracts":  period_contracts,
+            "bump_num":    i + 1,           # 1-indexed, oldest = 1
+            "ts":          bump["ts"],
+            "next_ts":     next_ts,         # None = still active / most recent
+            "duration_s":  end_ts - bump["ts"],
+            "is_current":  next_ts is None,
+            "reply_gain":  reply_gain,
+            "contracts":   period_contracts,
         })
 
+    # Reverse so newest is first in the response
     bump_periods = list(reversed(bump_periods))
 
     return {
@@ -240,31 +259,8 @@ async def job_stats(request: Request, tid: str):
         "avg_reply_gain":  stats["avg_reply_gain"],
         "has_reply_data":  any(b["numreplies"] is not None for b in bumps),
         "job_info":        stats["job_info"],
-        "bump_periods":    bump_periods,
+        "bump_periods":    bump_periods,   # newest first, max 20
     }
-
-
-def _get_contracts_for_thread(uid: str, tid: str) -> list[dict]:
-    """Pull contracts linked to this thread from local DB. Zero API calls."""
-    import sqlite3
-    from pathlib import Path
-    db_path = Path("data/hf_dash.db")
-    conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=5)
-    conn.row_factory = sqlite3.Row
-    try:
-        rows = conn.execute(
-            """SELECT cid, status_n, type_n, iproduct, oproduct,
-                      iprice, icurrency, oprice, ocurrency, dateline
-               FROM contracts_history
-               WHERE uid=? AND tid=?
-               ORDER BY dateline ASC""",
-            (uid, str(tid))
-        ).fetchall()
-        return [dict(r) for r in rows]
-    except Exception:
-        return []
-    finally:
-        conn.close()
 
 
 # ── Log ───────────────────────────────────────────────────────────────────────
@@ -272,5 +268,5 @@ def _get_contracts_for_thread(uid: str, tid: str) -> list[dict]:
 @router.get("/log")
 async def bump_log(request: Request):
     uid = _uid(request)
-    log = await asyncio.to_thread(get_log, uid, 30)
+    log = await asyncio.get_event_loop().run_in_executor(None, get_log, uid, 30)
     return {"log": log}

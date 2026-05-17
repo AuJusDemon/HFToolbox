@@ -26,7 +26,11 @@ log = logging.getLogger("sigmarket.router")
 
 init_sigmarket_db()
 
-SIGMARKET_CACHE_TTL = 600  # 10 minutes
+# Status cache is now managed by hf_cache (hf_resource_cache table).
+# TTL = 900s (15 min) so the 15-min warmer always refills before expiry.
+# Stale window = 3600s (1 hr) so stale data is served immediately while refresh runs.
+# The old 10-min TTL vs 15-min warmer created a 5-min cold gap — now gone.
+_SIG_STATUS_CACHE_KEY = "sigmarket:status:{uid}"
 
 
 def _auth(request: Request):
@@ -39,133 +43,129 @@ def _auth(request: Request):
     return uid, token, None
 
 
-@router.get("/status")
-async def get_status(request: Request):
-    uid, token, err = _auth(request)
-    if err:
-        return err
+# ── Single source of truth for sigmarket status ────────────────────────────────
+# Previously duplicated between get_status() and warm_sigmarket_status().
+# Now one function, called by both the route and the scheduler warmer.
 
-    force = request.query_params.get("force") == "true"
-
-    if not force:
-        cached = await asyncio.to_thread(db.get_dash_cache, uid, "sigmarket_status", SIGMARKET_CACHE_TTL)
-        if cached:
-            return cached
-
-    from HFClient import HFClient
-    hf = HFClient(token)
+async def _do_status_fetch(uid: str, token: str) -> dict | None:
+    """
+    Fetch sigmarket status: 3 parallel reads (market listing + seller orders + buyer orders).
+    Returns parsed result dict, or None on API failure.
+    Called via hf_service.get_or_fetch — never call directly from routes.
+    """
+    from HFClient import HFClient, AuthExpired
+    hf      = HFClient(token)
     uid_int = int(uid)
-
     try:
         data1, data2, data3 = await asyncio.gather(
-            hf.read({
-                "sigmarket": {
-                    "_type":    "market",
-                    "_uid":     [uid_int],
-                    "_page":    1,
-                    "_perpage": 1,
-                    "uid":      True,
-                    "price":    True,
-                    "duration": True,
-                    "active":   True,
-                    "sig":      True,
-                    "ppd":      True,
-                    "dateadded": True,
-                }
-            }),
-            hf.read({
-                "sigmarket": {
-                    "_type":    "order",
-                    "_seller":  [uid_int],
-                    "_page":    1,
-                    "_perpage": 30,
-                    "smid":     True,
-                    "active":   True,
-                    "startdate": True,
-                    "enddate":  True,
-                    "price":    True,
-                    "duration": True,
-                    "buyer":    {"uid": True, "username": True},
-                }
-            }),
-            hf.read({
-                "sigmarket": {
-                    "_type":    "order",
-                    "_buyer":   [uid_int],
-                    "_page":    1,
-                    "_perpage": 30,
-                    "smid":     True,
-                    "active":   True,
-                    "startdate": True,
-                    "enddate":  True,
-                    "price":    True,
-                    "duration": True,
-                    "seller":   {"uid": True, "username": True},
-                }
-            }),
+            hf.read({"sigmarket": {
+                "_type": "market", "_uid": [uid_int], "_page": 1, "_perpage": 1,
+                "uid": True, "price": True, "duration": True, "active": True,
+                "sig": True, "ppd": True, "dateadded": True,
+            }}),
+            hf.read({"sigmarket": {
+                "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
+                "smid": True, "active": True, "startdate": True, "enddate": True,
+                "price": True, "duration": True,
+                "buyer": {"uid": True, "username": True},
+            }}),
+            hf.read({"sigmarket": {
+                "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
+                "smid": True, "active": True, "startdate": True, "enddate": True,
+                "price": True, "duration": True,
+                "seller": {"uid": True, "username": True},
+            }}),
         )
-    except _AuthExpired:
-        request.session.clear()
-        await asyncio.to_thread(db.clear_token, uid)
-        return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
+    except AuthExpired:
+        raise _AuthExpired()
 
     listing_raw       = (data1 or {}).get("sigmarket")
     seller_orders_raw = (data2 or {}).get("sigmarket", [])
     buyer_orders_raw  = (data3 or {}).get("sigmarket", [])
 
-    if isinstance(listing_raw, list):
-        listing = listing_raw[0] if listing_raw else None
-    else:
-        listing = listing_raw
+    if data1 is None and data2 is None and data3 is None:
+        return None  # complete API failure
 
-    if isinstance(seller_orders_raw, dict):
-        seller_orders_raw = [seller_orders_raw]
-    if isinstance(buyer_orders_raw, dict):
-        buyer_orders_raw = [buyer_orders_raw]
+    if isinstance(listing_raw, list):    listing = listing_raw[0] if listing_raw else None
+    else:                                listing = listing_raw
+    if isinstance(seller_orders_raw, dict): seller_orders_raw = [seller_orders_raw]
+    if isinstance(buyer_orders_raw,  dict): buyer_orders_raw  = [buyer_orders_raw]
 
     now_ts = int(_time.time())
 
-    def _parse_order(o, party_key):
+    def _parse(o, party_key):
         end = int(o.get("enddate") or 0)
         return {
-            "smid":       o.get("smid"),
-            "active":     int(o.get("active") or 0),
-            "startdate":  int(o.get("startdate") or 0),
-            "enddate":    end,
+            "smid": o.get("smid"), "active": int(o.get("active") or 0),
+            "startdate": int(o.get("startdate") or 0), "enddate": end,
             "expires_in": max(0, end - now_ts),
-            "price":      o.get("price"),
-            "duration":   o.get("duration"),
-            party_key:    o.get(party_key) or {},
+            "price": o.get("price"), "duration": o.get("duration"),
+            party_key: o.get(party_key) or {},
         }
 
-    seller_orders = [_parse_order(o, "buyer")  for o in (seller_orders_raw or [])]
-    buyer_orders  = [_parse_order(o, "seller") for o in (buyer_orders_raw  or [])]
+    seller_orders = [_parse(o, "buyer")  for o in (seller_orders_raw or [])]
+    buyer_orders  = [_parse(o, "seller") for o in (buyer_orders_raw  or [])]
 
     uid_name_map = {}
     for o in seller_orders:
         b = o.get("buyer") or {}
-        if b.get("uid") and b.get("username"):
-            uid_name_map[str(b["uid"])] = b["username"]
+        if b.get("uid") and b.get("username"): uid_name_map[str(b["uid"])] = b["username"]
     for o in buyer_orders:
         s = o.get("seller") or {}
-        if s.get("uid") and s.get("username"):
-            uid_name_map[str(s["uid"])] = s["username"]
+        if s.get("uid") and s.get("username"): uid_name_map[str(s["uid"])] = s["username"]
     if uid_name_map:
         try:
             await asyncio.to_thread(db.upsert_uid_usernames, uid_name_map)
         except Exception:
             pass
 
-    result = {
+    return {
         "listing":            listing,
         "seller_orders":      seller_orders,
         "active_order_count": sum(1 for o in seller_orders if o["active"]),
         "buyer_orders":       buyer_orders,
-        "active_buys":        sum(1 for o in buyer_orders  if o["active"]),
+        "active_buys":        sum(1 for o in buyer_orders if o["active"]),
     }
 
-    await asyncio.to_thread(db.set_dash_cache, uid, "sigmarket_status", result)
-    return result
+
+@router.get("/status")
+async def get_status(request: Request):
+    uid, token, err = _auth(request)
+    if err:
+        return err
+
+    force     = request.query_params.get("force") == "true"
+    cache_key = _SIG_STATUS_CACHE_KEY.format(uid=uid)
+
+    import hf_service
+    import hf_cache as hfc
+
+    try:
+        data, is_stale = await hf_service.get_or_fetch(
+            cache_key     = cache_key,
+            resource_type = "sigmarket_status",
+            fetch_fn      = lambda: _do_status_fetch(uid, token),
+            uid           = uid,
+            force         = force,
+        )
+    except _AuthExpired:
+        request.session.clear()
+        await asyncio.to_thread(db.clear_token, uid)
+        return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
+
+    if data is None:
+        return JSONResponse({"error": "HF API unavailable"}, status_code=503)
+
+    # Include freshness metadata so the frontend can show "updated X ago"
+    # and indicate when a background refresh is in progress
+    return {
+        **data,
+        "_cache": {
+            "stale":      is_stale,
+            "age":        hfc.get_age(cache_key),
+            "refreshing": is_stale,
+        },
+    }
 
 
 @router.post("/listing")
@@ -259,6 +259,12 @@ ANALYTICS_CACHE_TTL = 3600  # 1 hour
 
 @router.get("/analytics/{target_uid}")
 async def user_analytics(target_uid: str, request: Request):
+    try:
+        return await asyncio.wait_for(_user_analytics(target_uid, request), timeout=30)
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "Analytics timed out — HF API was slow. Try again."}, status_code=504)
+
+async def _user_analytics(target_uid: str, request: Request):
     uid, token, err = _auth(request)
     if err:
         return err
@@ -279,10 +285,18 @@ async def user_analytics(target_uid: str, request: Request):
             return cached
 
     import math
-    from HFClient import HFClient
+    from HFClient import HFClient, get_rate_limit_remaining
     hf = HFClient(token)
 
     PERPAGE = 30
+
+    # Bail early if rate limit is too low to safely run the scan
+    remaining = get_rate_limit_remaining(token)
+    if remaining < 30:
+        return JSONResponse(
+            {"error": f"Rate limit too low ({remaining} remaining) — try again shortly."},
+            status_code=429
+        )
 
     # ── Call 1: user profile + threads ────────────────────────────────────────
     # We need postnum/threadnum first to calculate the correct posts page.
@@ -330,20 +344,21 @@ async def user_analytics(target_uid: str, request: Request):
     reply_count = max(1, postnum - threadnum)
     last_page   = math.ceil(reply_count / PERPAGE)
 
-    # ── Calls 2-N: parallel window scan to find true last page ──────────────
-    # posts._uid is oldest-first so page 1 = their oldest posts ever.
-    # postnum includes private/inaccessible forums that the API won't return,
-    # inflating our estimate. We fetch a window of 4 pages simultaneously with
-    # asyncio.gather, keep the highest non-empty result, then shift forward if
-    # all 4 were non-empty. Max 2 rounds = 8 calls but only 2 parallel waits
-    # (~4-6s total vs up to 120s sequential).
+    # ── Calls 2-4: conservative forward scan ─────────────────────────────────
+    # posts._uid is oldest-first. Max 3 pages forward — rapid sequential calls
+    # to the same endpoint pattern trip CF and cascade into proxy rotations.
+    # 1s sleep between pages keeps it clean. Most users land within 1-2 pages.
+    posts: list = []
+    true_last_page = last_page
 
-    async def _fetch_posts_page(page: int):
+    for try_page in range(last_page, last_page + 3):
+        if try_page > last_page:
+            await asyncio.sleep(1)
         try:
-            return await asyncio.wait_for(hf.read({
+            pd = await asyncio.wait_for(hf.read({
                 "posts": {
                     "_uid":     [target_int],
-                    "_page":    page,
+                    "_page":    try_page,
                     "_perpage": PERPAGE,
                     "pid":      True,
                     "fid":      True,
@@ -352,39 +367,18 @@ async def user_analytics(target_uid: str, request: Request):
                 },
             }), timeout=10)
         except _AuthExpired:
-            raise
-        except Exception:
-            return None
-
-    posts: list = []
-    # Start one page before estimate — postnum inflation usually makes us overshoot
-    window_start = max(1, last_page - 1)
-
-    for _ in range(5):  # max 5 rounds of 4 parallel pages (~20 pages total)
-        pages = list(range(window_start, window_start + 4))
-        try:
-            results = await asyncio.gather(*[_fetch_posts_page(p) for p in pages])
-        except _AuthExpired:
             request.session.clear()
             await asyncio.to_thread(db.clear_token, uid)
             return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
-
-        hit_empty = False
-        for result in results:
-            if not result:
-                hit_empty = True
-                continue
-            cur_raw = result.get("posts", [])
-            if isinstance(cur_raw, dict): cur_raw = [cur_raw]
-            cur = [p for p in (cur_raw or []) if p.get("fid")]
-            if cur:
-                posts = cur  # overwrite in order — last non-empty = highest valid page
-            else:
-                hit_empty = True
-
-        if hit_empty:
-            break  # boundary found, posts holds the most recent page's results
-        window_start += 4  # all 4 were non-empty, shift window forward
+        except Exception:
+            break
+        cur_raw = (pd or {}).get("posts", [])
+        if isinstance(cur_raw, dict): cur_raw = [cur_raw]
+        cur = [p for p in (cur_raw or []) if p.get("fid")]
+        if not cur:
+            break
+        posts = cur
+        true_last_page = try_page
 
     post_dates = sorted(
         [int(p["dateline"]) for p in posts if p.get("dateline")],
@@ -634,82 +628,38 @@ async def browse_listings(request: Request):
 # ── Exported helpers for main.py scheduler ─────────────────────────────────────
 
 async def warm_sigmarket_status(uid: str, token: str) -> None:
-    """Pre-warm sigmarket_status cache for a user. Called by the unified scheduler."""
+    """
+    Pre-warm sigmarket_status cache for a user. Called by the unified scheduler every 15 min.
+
+    Uses hf_service.get_or_fetch with the same _do_status_fetch as the route.
+    No duplicate parse logic. In-flight dedup prevents double-fetch if route
+    and warmer both fire at the same time.
+
+    Only fetches if cache is not already fresh — if the route already refreshed
+    within the TTL window, this is a no-op (zero HF calls).
+    """
+    import hf_cache as hfc
+    cache_key = _SIG_STATUS_CACHE_KEY.format(uid=uid)
+
+    # Skip if still fresh — saves 3 calls when warmer and route overlap
+    if hfc.get_fresh(cache_key) is not None:
+        log.debug("Sigmarket status warm skipped uid=%s (still fresh)", uid)
+        return
+
+    import hf_service
     try:
-        from HFClient import HFClient, AuthExpired
-        hf = HFClient(token)
-        uid_int = int(uid)
-        data1, data2, data3 = await asyncio.gather(
-            hf.read({
-                "sigmarket": {
-                    "_type": "market", "_uid": [uid_int], "_page": 1, "_perpage": 1,
-                    "uid": True, "price": True, "duration": True, "active": True,
-                    "sig": True, "ppd": True, "dateadded": True,
-                }
-            }),
-            hf.read({
-                "sigmarket": {
-                    "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
-                    "smid": True, "active": True, "startdate": True, "enddate": True,
-                    "price": True, "duration": True,
-                    "buyer": {"uid": True, "username": True},
-                }
-            }),
-            hf.read({
-                "sigmarket": {
-                    "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
-                    "smid": True, "active": True, "startdate": True, "enddate": True,
-                    "price": True, "duration": True,
-                    "seller": {"uid": True, "username": True},
-                }
-            }),
+        data, _ = await hf_service.get_or_fetch(
+            cache_key     = cache_key,
+            resource_type = "sigmarket_status",
+            fetch_fn      = lambda: _do_status_fetch(uid, token),
+            uid           = uid,
+            force         = True,
         )
-        listing_raw       = (data1 or {}).get("sigmarket")
-        seller_orders_raw = (data2 or {}).get("sigmarket", [])
-        buyer_orders_raw  = (data3 or {}).get("sigmarket", [])
-        if isinstance(listing_raw, list):
-            listing = listing_raw[0] if listing_raw else None
-        else:
-            listing = listing_raw
-        if isinstance(seller_orders_raw, dict): seller_orders_raw = [seller_orders_raw]
-        if isinstance(buyer_orders_raw,  dict): buyer_orders_raw  = [buyer_orders_raw]
-        now_ts = int(_time.time())
-
-        def _parse(o, party_key):
-            end = int(o.get("enddate") or 0)
-            return {
-                "smid": o.get("smid"), "active": int(o.get("active") or 0),
-                "startdate": int(o.get("startdate") or 0), "enddate": end,
-                "expires_in": max(0, end - now_ts),
-                "price": o.get("price"), "duration": o.get("duration"),
-                party_key: o.get(party_key) or {},
-            }
-
-        seller_orders = [_parse(o, "buyer")  for o in (seller_orders_raw or [])]
-        buyer_orders  = [_parse(o, "seller") for o in (buyer_orders_raw  or [])]
-
-        uid_name_map = {}
-        for o in seller_orders:
-            b = o.get("buyer") or {}
-            if b.get("uid") and b.get("username"): uid_name_map[str(b["uid"])] = b["username"]
-        for o in buyer_orders:
-            s = o.get("seller") or {}
-            if s.get("uid") and s.get("username"): uid_name_map[str(s["uid"])] = s["username"]
-        if uid_name_map:
-            try:
-                await asyncio.to_thread(db.upsert_uid_usernames, uid_name_map)
-            except Exception:
-                pass
-
-        result = {
-            "listing":            listing,
-            "seller_orders":      seller_orders,
-            "active_order_count": sum(1 for o in seller_orders if o["active"]),
-            "buyer_orders":       buyer_orders,
-            "active_buys":        sum(1 for o in buyer_orders  if o["active"]),
-        }
-        await asyncio.to_thread(db.set_dash_cache, uid, "sigmarket_status", result)
-        log.debug("Sigmarket status pre-warmed uid=%s (%d sold, %d bought)", uid, len(seller_orders), len(buyer_orders))
+        if data:
+            so = data.get("seller_orders", [])
+            bo = data.get("buyer_orders",  [])
+            log.debug("Sigmarket status warmed uid=%s (%d sold, %d bought)",
+                      uid, len(so), len(bo))
     except Exception as e:
         log.debug("Sigmarket status warm failed uid=%s: %s", uid, e)
 

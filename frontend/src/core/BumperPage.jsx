@@ -106,6 +106,57 @@ function HowItWorks() {
   )
 }
 
+// ── Fee Disclosure ────────────────────────────────────────────────────────────
+function FeeDisclosure() {
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem('bump_fee_ok') !== '1' } catch { return true }
+  })
+  const dismiss = () => {
+    try { localStorage.setItem('bump_fee_ok','1') } catch {}
+    setOpen(false)
+  }
+  return (
+    <div style={{marginBottom:10}}>
+      {/* Always-visible compact pill — click to toggle details */}
+      <button onClick={() => setOpen(o=>!o)} style={{
+        display:'flex',alignItems:'center',gap:6,
+        background:'rgba(232,168,40,.08)',border:'1px solid rgba(232,168,40,.22)',
+        borderRadius:'var(--r)',padding:'4px 10px',cursor:'pointer',width:'100%',textAlign:'left',
+      }}>
+        <span style={{fontSize:11,color:'var(--yellow)'}}>⚠</span>
+        <span style={{fontSize:11,color:'var(--yellow)',fontWeight:600,flex:1}}>
+          10 byte service fee per bump · Contract requirement coming soon
+        </span>
+        <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)'}}>{open?'▾':'▸'}</span>
+      </button>
+
+      {open && (
+        <div style={{
+          padding:'10px 12px',marginTop:4,
+          background:'var(--bg)',border:'1px solid var(--b1)',
+          borderRadius:'var(--r)',fontSize:11,color:'var(--sub)',lineHeight:1.7,
+        }}>
+          Each bump charges <strong style={{color:'var(--text)'}}>10 bytes</strong> service fee
+          + <strong style={{color:'var(--text)'}}>~50 byte Stanley fee</strong> (deducted by HF).
+          Shows in your bytes history as{' '}
+          <span style={{fontFamily:'var(--mono)',fontSize:10,background:'var(--s3)',
+            padding:'1px 5px',borderRadius:3,color:'var(--text)'}}>
+            HFToolbox | Bump Fee | TID: ...
+          </span>
+          <div style={{marginTop:7,color:'var(--red)',fontSize:10.5}}>
+            ⚠ A service contract with HFToolbox will be required soon. Jobs added now keep working.
+          </div>
+          <button onClick={dismiss} style={{
+            marginTop:8,fontSize:10,fontFamily:'var(--mono)',
+            background:'none',border:'1px solid var(--b2)',color:'var(--dim)',
+            borderRadius:'var(--r)',padding:'2px 8px',cursor:'pointer',
+          }}>dismiss</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Budget Bar + Settings ─────────────────────────────────────────────────────
 function BudgetSettings({ budgetData, onSave }) {
   const [open,   setOpen]   = useState(false)
@@ -455,6 +506,12 @@ export default function BumperPage() {
 
   const add = async () => {
     if (!tid) return
+    // Quick inline fee confirmation — non-blocking, one-time per session
+    const confirmed = window._bumpFeeConfirmed || window.confirm(
+      `Add Auto Bump job for TID ${tid}?\n\nThis will charge 10 bytes per bump as a service fee, on top of the ~50 byte Stanley fee.\n\nContinue?`
+    )
+    if (!confirmed) return
+    window._bumpFeeConfirmed = true  // don't ask again this session
     setBusy(true); setMsg(null)
     try {
       const bump_until = expiryDays > 0 ? Math.floor(Date.now()/1000) + (expiryDays * 86400) : null
@@ -481,11 +538,14 @@ export default function BumperPage() {
           <span className="card-title">Auto Bumper</span>
           {jobs.length > 0 && <span className="badge badge-yel">{jobs.length} JOB{jobs.length>1?'S':''}</span>}
           {budgetOver && <span className="badge badge-red">BUDGET PAUSED</span>}
-          <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',marginLeft:'auto'}}>~50 byte Stanley fee</span>
+          <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',marginLeft:'auto'}}>
+            ~50 byte Stanley fee + 10 byte service fee per bump
+          </span>
         </div>
         <div className="card-body">
           {upgraded ? (
             <>
+              <FeeDisclosure/>
               <HowItWorks/>
               <BudgetSettings budgetData={budgetData} onSave={loadBudget}/>
 

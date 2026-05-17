@@ -1,32 +1,28 @@
 """
-modules/contracts/templates_db.py — Contract template persistence.
+modules/contracts/templates_db.py — contract template persistence.
 
 Table: contract_templates
-  id            INTEGER PRIMARY KEY
-  uid           TEXT — owner
-  name          TEXT — display name
-  position      TEXT — selling/buying/exchanging/trading/vouchcopy
-  terms         TEXT — full terms BBCode
-  yourproduct   TEXT
-  yourcurrency  TEXT
-  youramount    TEXT
-  theirproduct  TEXT
-  theircurrency TEXT
-  theiramount   TEXT
-  address       TEXT
-  middleman_uid TEXT
-  timeout_days  INTEGER — default 14
-  is_public     INTEGER — 0=private, 1=public
-  created_at    INTEGER
-  updated_at    INTEGER
+  id            INT PRIMARY KEY AUTO_INCREMENT
+  uid           VARCHAR — owner
+  name          VARCHAR — display name
+  position      VARCHAR — selling/buying/exchanging/trading/vouchcopy
+  terms         TEXT    — full terms BBCode
+  yourproduct   VARCHAR
+  yourcurrency  VARCHAR
+  youramount    VARCHAR
+  theirproduct  VARCHAR
+  theircurrency VARCHAR
+  theiramount   VARCHAR
+  address       VARCHAR
+  middleman_uid VARCHAR
+  timeout_days  INT     — default 14
+  is_public     TINYINT — 0=private, 1=public
+  created_at    BIGINT
+  updated_at    BIGINT
 """
 
-import sqlite3
 import time
-from pathlib import Path
-from contextlib import contextmanager
-
-DB_PATH = Path("data/hf_dash.db")
+from db_connection import _db
 
 TEMPLATE_FIELDS = [
     "id", "uid", "name", "position", "terms",
@@ -37,149 +33,133 @@ TEMPLATE_FIELDS = [
 ]
 
 
-def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=10000")
-    return conn
-
-
-@contextmanager
-def _db():
-    conn = _connect()
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def init_templates_db() -> None:
     with _db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS contract_templates (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                uid           TEXT    NOT NULL,
-                name          TEXT    NOT NULL DEFAULT 'Untitled',
-                position      TEXT    NOT NULL DEFAULT 'selling',
-                terms         TEXT    NOT NULL,
-                yourproduct   TEXT    NOT NULL DEFAULT '',
-                yourcurrency  TEXT    NOT NULL DEFAULT 'other',
-                youramount    TEXT    NOT NULL DEFAULT '0',
-                theirproduct  TEXT    NOT NULL DEFAULT '',
-                theircurrency TEXT    NOT NULL DEFAULT 'other',
-                theiramount   TEXT    NOT NULL DEFAULT '0',
-                address       TEXT    NOT NULL DEFAULT '',
-                middleman_uid TEXT    NOT NULL DEFAULT '',
-                timeout_days  INTEGER NOT NULL DEFAULT 14,
-                is_public     INTEGER NOT NULL DEFAULT 0,
-                created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-                updated_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
-            )
+                id            INT          NOT NULL AUTO_INCREMENT,
+                uid           VARCHAR(64)  NOT NULL,
+                name          VARCHAR(255) NOT NULL DEFAULT 'Untitled',
+                position      VARCHAR(64)  NOT NULL DEFAULT 'selling',
+                terms         TEXT         NOT NULL,
+                yourproduct   VARCHAR(512) NOT NULL DEFAULT '',
+                yourcurrency  VARCHAR(64)  NOT NULL DEFAULT 'other',
+                youramount    VARCHAR(64)  NOT NULL DEFAULT '0',
+                theirproduct  VARCHAR(512) NOT NULL DEFAULT '',
+                theircurrency VARCHAR(64)  NOT NULL DEFAULT 'other',
+                theiramount   VARCHAR(64)  NOT NULL DEFAULT '0',
+                address       VARCHAR(512) NOT NULL DEFAULT '',
+                middleman_uid VARCHAR(64)  NOT NULL DEFAULT '',
+                timeout_days  INT          NOT NULL DEFAULT 14,
+                is_public     TINYINT      NOT NULL DEFAULT 0,
+                created_at    BIGINT       NOT NULL DEFAULT 0,
+                updated_at    BIGINT       NOT NULL DEFAULT 0,
+                PRIMARY KEY (id),
+                INDEX idx_ct_uid (uid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # Migration-safe column additions
+        for col, defn in [
+            ("address",       "VARCHAR(512) NOT NULL DEFAULT ''"),
+            ("middleman_uid", "VARCHAR(64)  NOT NULL DEFAULT ''"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE contract_templates ADD COLUMN {col} {defn}")
+            except Exception:
+                pass
+
+
+def _row_to_dict(row) -> dict:
+    d = dict(row)
+    d["is_public"] = bool(d["is_public"])
+    return d
 
 
 def list_templates(uid: str) -> list[dict]:
-    """Return all templates visible to this user (own + public)."""
+    """Return own templates + all public templates from others."""
     with _db() as conn:
-        rows = conn.execute(
-            """SELECT * FROM contract_templates
-               WHERE uid=? OR is_public=1
-               ORDER BY updated_at DESC""",
-            (uid,)
-        ).fetchall()
-        return [dict(r) for r in rows]
+        rows = conn.execute("""
+            SELECT * FROM contract_templates
+            WHERE uid = %s OR is_public = 1
+            ORDER BY (uid = %s) DESC, updated_at DESC
+        """, (uid, uid)).fetchall()
+    return [_row_to_dict(r) for r in rows]
 
 
-def get_template(template_id: int, uid: str) -> dict | None:
-    """Get a single template if user is owner or it's public."""
+def get_template(tid: int, uid: str) -> dict | None:
+    """Get a single template — must be owned or public."""
     with _db() as conn:
-        row = conn.execute(
-            "SELECT * FROM contract_templates WHERE id=? AND (uid=? OR is_public=1)",
-            (template_id, uid)
-        ).fetchone()
-        return dict(row) if row else None
+        row = conn.execute("""
+            SELECT * FROM contract_templates
+            WHERE id = %s AND (uid = %s OR is_public = 1)
+        """, (tid, uid)).fetchone()
+    return _row_to_dict(row) if row else None
 
 
-def create_template(uid: str, data: dict) -> dict:
+def create_template(uid: str, data: dict) -> int:
     now = int(time.time())
     with _db() as conn:
         cur = conn.execute("""
             INSERT INTO contract_templates
-                (uid, name, position, terms, yourproduct, yourcurrency, youramount,
-                 theirproduct, theircurrency, theiramount, address, middleman_uid,
-                 timeout_days, is_public, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+              (uid, name, position, terms, yourproduct, yourcurrency, youramount,
+               theirproduct, theircurrency, theiramount,
+               address, middleman_uid, timeout_days, is_public,
+               created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """, (
             uid,
-            data.get("name", "Untitled"),
+            data.get("name", "Untitled")[:100],
             data.get("position", "selling"),
             data.get("terms", ""),
             data.get("yourproduct", ""),
             data.get("yourcurrency", "other"),
-            data.get("youramount", "0"),
+            str(data.get("youramount", "0")),
             data.get("theirproduct", ""),
             data.get("theircurrency", "other"),
-            data.get("theiramount", "0"),
+            str(data.get("theiramount", "0")),
             data.get("address", ""),
             data.get("middleman_uid", ""),
             int(data.get("timeout_days", 14)),
             int(bool(data.get("is_public", False))),
             now, now,
         ))
-        new_id = cur.lastrowid
-        row = conn.execute("SELECT * FROM contract_templates WHERE id=?", (new_id,)).fetchone()
-        return dict(row)
+    return cur.lastrowid
 
 
-def update_template(template_id: int, uid: str, data: dict) -> dict | None:
-    """Update a template. Owner only. Returns updated template or None if not found/not owner."""
+def update_template(tid: int, uid: str, data: dict) -> bool:
     now = int(time.time())
     with _db() as conn:
-        row = conn.execute(
-            "SELECT id FROM contract_templates WHERE id=? AND uid=?", (template_id, uid)
-        ).fetchone()
-        if not row:
-            return None
-        conn.execute("""
+        cur = conn.execute("""
             UPDATE contract_templates SET
-                name=?, position=?, terms=?,
-                yourproduct=?, yourcurrency=?, youramount=?,
-                theirproduct=?, theircurrency=?, theiramount=?,
-                address=?, middleman_uid=?, timeout_days=?, is_public=?, updated_at=?
-            WHERE id=? AND uid=?
+              name=%s, position=%s, terms=%s,
+              yourproduct=%s, yourcurrency=%s, youramount=%s,
+              theirproduct=%s, theircurrency=%s, theiramount=%s,
+              address=%s, middleman_uid=%s,
+              timeout_days=%s, is_public=%s, updated_at=%s
+            WHERE id = %s AND uid = %s
         """, (
-            data.get("name", "Untitled"),
+            data.get("name", "Untitled")[:100],
             data.get("position", "selling"),
             data.get("terms", ""),
             data.get("yourproduct", ""),
             data.get("yourcurrency", "other"),
-            data.get("youramount", "0"),
+            str(data.get("youramount", "0")),
             data.get("theirproduct", ""),
             data.get("theircurrency", "other"),
-            data.get("theiramount", "0"),
+            str(data.get("theiramount", "0")),
             data.get("address", ""),
             data.get("middleman_uid", ""),
             int(data.get("timeout_days", 14)),
             int(bool(data.get("is_public", False))),
-            now,
-            template_id, uid,
+            now, tid, uid,
         ))
-        updated = conn.execute("SELECT * FROM contract_templates WHERE id=?", (template_id,)).fetchone()
-        return dict(updated)
+    return cur.rowcount > 0
 
 
-def delete_template(template_id: int, uid: str) -> bool:
-    """Delete a template. Owner only."""
+def delete_template(tid: int, uid: str) -> bool:
     with _db() as conn:
         cur = conn.execute(
-            "DELETE FROM contract_templates WHERE id=? AND uid=?", (template_id, uid)
+            "DELETE FROM contract_templates WHERE id = %s AND uid = %s",
+            (tid, uid)
         )
-        return cur.rowcount > 0
-
-
-def delete_user_templates(uid: str) -> None:
-    with _db() as conn:
-        conn.execute("DELETE FROM contract_templates WHERE uid=?", (uid,))
+    return cur.rowcount > 0

@@ -8,32 +8,33 @@ __pycache__/
 venv/
 env/
 
-## Backend secrets
+## Secrets — never commit these
 backend/.env
-backend/data/
+
+## Generated at runtime
+backend/deploy_info.json
+
+## Database
 *.db
 *.db-shm
 *.db-wal
 
-## Frontend
+## Frontend build
 frontend/node_modules/
 frontend/dist/
+
+## Windows binaries / SQLite tools
+*.exe
+backend/sqlite3
+backend/sqlite3_analyzer
+backend/sqlite3_rsync
+backend/sqldiff
 
 ## OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 ## Logs
 *.log
 logs/
-
-## Windows binaries / dev tools
-*.exe
-*.bat
-run_*.bat
-
-## Debug/migration scripts
-backend/check_*.py
-backend/migrate_*.py
-backend/lookup_uid.py
-backend/reset_*.py

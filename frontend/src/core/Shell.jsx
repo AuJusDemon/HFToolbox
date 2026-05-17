@@ -5,7 +5,6 @@ import { api } from './api.js'
 import extraNavLinks from '../navlinks.jsx'
 
 // Set to null to make The Wire public for all users.
-const WIRE_BETA_GROUP = null
 
 // ── Theme system ────────────────────────────────────────────────────────────
 export const THEMES = [
@@ -303,18 +302,16 @@ export default function Shell() {
   const [notifOpen,   setNotifOpen]   = useState(false)
   const notifRef = useRef(null)
 
+  // Single shell-data poll replaces 3 separate 60s polls (profile, replies, notifications).
+  // All DB reads — zero HF API calls. Saves 2 HTTP requests per minute.
   useEffect(() => {
-    const load = () => api.get('/api/profile').then(d => setProfile(d)).catch(()=>{})
-    load(); const id = setInterval(load, 60000); return () => clearInterval(id)
-  }, [])
-
-  useEffect(() => {
-    const poll = () => api.get('/api/posting/replies/count').then(d => setReplyCount(d.count||0)).catch(()=>{})
-    poll(); const id = setInterval(poll, 60000); return () => clearInterval(id)
-  }, [])
-
-  useEffect(() => {
-    const poll = () => api.get('/api/notifications').then(d => { if(d){setNotifs(d.notifications||[]); setUnseenCount(d.unseen||0)} }).catch(()=>{})
+    const poll = () => api.get('/api/shell-data').then(d => {
+      if (!d) return
+      if (d.profile)        setProfile(d.profile)
+      if (d.reply_count != null) setReplyCount(d.reply_count)
+      if (d.notifications)  setNotifs(d.notifications)
+      if (d.unseen != null) setUnseenCount(d.unseen)
+    }).catch(()=>{})
     poll(); const id = setInterval(poll, 60000); return () => clearInterval(id)
   }, [])
 
@@ -416,9 +413,7 @@ export default function Shell() {
             <NavLink to="/dashboard/bumper"    label="Auto Bumper" />
             <NavLink to="/dashboard/posting"   label="Posting" badge={replyCount} />
             <NavLink to="/dashboard/sigmarket"  label="Sig Market" />
-            {(!WIRE_BETA_GROUP || (user?.groups || []).includes(WIRE_BETA_GROUP)) && (
-              <NavLink to="/dashboard/wire" label="The Wire" />
-            )}
+            <NavLink to="/dashboard/wire" label="The Wire" />
 
             <div className="sb-nav-lbl" style={{marginTop:4}}>system</div>
             <NavLink to="/dashboard/settings"  label="Settings" />
@@ -517,8 +512,7 @@ function MobileNav() {
     { to:'/dashboard/bumper',    label:'BUMPER'   },
     { to:'/dashboard/posting',   label:'POST'     },
     { to:'/dashboard/sigmarket', label:'SIG MKT'  },
-    ...(!WIRE_BETA_GROUP || (user?.groups||[]).includes(WIRE_BETA_GROUP)
-      ? [{ to:'/dashboard/wire', label:'WIRE' }] : []),
+    { to:'/dashboard/wire', label:'WIRE' },
     { to:'/dashboard/settings',  label:'SETTINGS' },
   ]
   return (

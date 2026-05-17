@@ -66,6 +66,8 @@ from .posting_db import (
     get_edit_log, rollback_to_log_entry,
     # presence
     touch_presence, clear_presence,
+    # invite tokens
+    get_or_create_invite_token, resolve_invite_token, check_draft_access,
 )
 
 router = APIRouter(prefix="/api/posting", tags=["posting"])
@@ -95,7 +97,8 @@ async def _lookup_collab_username(collab_uid: str, owner_uid: str) -> str:
     Priority: uid_usernames cache → users table → HF API call → raw UID string.
     """
     # 1. Local username cache
-    name_map = await asyncio.to_thread(db.get_uid_usernames, [collab_uid])
+    name_map_raw = await asyncio.to_thread(db.get_uid_usernames, [collab_uid])
+    name_map = {uid: info["username"] for uid, info in name_map_raw.items()}
     if collab_uid in name_map:
         return name_map[collab_uid]
     # 2. Users table
@@ -110,7 +113,7 @@ async def _lookup_collab_username(collab_uid: str, owner_uid: str) -> str:
             client = HFClient(token)
             data = await asyncio.wait_for(
                 client.read({"users": {"_uid": [int(collab_uid)], "uid": True, "username": True}}),
-                timeout=10,
+                timeout=35,
             )
             rows = data.get("users", [])
             if isinstance(rows, dict):
@@ -276,7 +279,7 @@ async def get_hf_threads(request: Request, page: int = 1):
                 "tid": True, "subject": True, "fid": True,
                 "dateline": True, "lastpost": True, "numreplies": True,
             }
-        }), timeout=20)
+        }), timeout=35)
         if not data:
             return JSONResponse({"error": "no response"}, status_code=503)
         rows = data.get("threads", [])
@@ -412,9 +415,26 @@ async def imagehost_upload(request: Request):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Collaborative Drafts
-# NOTE: Specific literal routes (/drafts/shared) MUST appear before parameterised
-#       ones (/drafts/{id}) so FastAPI doesn't swallow "shared" as a draft_id.
+# NOTE: Specific literal routes (/drafts/join/{token}, /drafts/shared) MUST
+#       appear before parameterised ones (/drafts/{id}) so FastAPI doesn't
+#       swallow these path segments as a draft_id integer.
 # ══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/drafts/join/{token}")
+async def join_draft_via_link(request: Request, token: str):
+    """Resolve an invite token. Returns {authorized, draft_id}.
+    Owner always authorized. Collaborators authorized if on the list.
+    Everyone else gets authorized=False with no info about the draft."""
+    uid, err = _auth(request)
+    if err: return err
+    draft_id = await asyncio.to_thread(resolve_invite_token, token)
+    if draft_id is None:
+        return {"authorized": False, "draft_id": None}
+    # Direct owner-or-collaborator check — does not go through get_draft
+    # so it can't be tripped up by missing fields or other logic in that path
+    authorized = await asyncio.to_thread(check_draft_access, draft_id, uid)
+    return {"authorized": authorized, "draft_id": draft_id if authorized else None}
+
 
 @router.get("/drafts/shared")
 async def list_shared_drafts(request: Request):
@@ -463,6 +483,20 @@ async def get_single_draft(request: Request, draft_id: int):
     collabs = await asyncio.to_thread(get_collaborators, draft_id)
     draft["collaborators"] = collabs
     return {"draft": draft}
+
+
+@router.get("/drafts/{draft_id}/invite-link")
+async def get_draft_invite_link(request: Request, draft_id: int):
+    """Owner only. Returns a stable shareable URL for this draft.
+    Re-calling always returns the same token — no rotation unless manually deleted."""
+    uid, err = _auth(request)
+    if err: return err
+    import os
+    token = await asyncio.to_thread(get_or_create_invite_token, draft_id, uid)
+    if not token:
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    base = os.environ.get("FRONTEND_URL", "https://hftoolbox.com")
+    return {"url": f"{base}/dashboard/posting/join/{token}"}
 
 
 @router.put("/drafts/{draft_id}")

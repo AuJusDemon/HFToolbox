@@ -24,7 +24,6 @@ You host it yourself. Your data stays on your server. Anyone with an HF account 
 - **Sigmarket** — browse and manage signature marketplace listings
 - **User Lookup** — look up any HF user's profile, recent posts, threads, b-ratings, and trade stats
 - **Groups** — browse member-owned groups and their members
-- **The Wire** — curated thread reader; community-surfaced posts worth reading, with inline reply fetching and a BBCode preview
 - **Bytes Crawler** — background task that builds a complete local history of your byte transactions
 
 ---
@@ -33,7 +32,7 @@ You host it yourself. Your data stays on your server. Anyone with an HF account 
 
 | Layer | Technology |
 |---|---|
-| Backend | Python 3.11+, FastAPI, SQLite (WAL mode) |
+| Backend | Python 3.11+, FastAPI, SQLite (default) or MySQL |
 | Frontend | React 18, Vite, Zustand |
 | Auth | HF OAuth2 |
 | Reverse proxy | Caddy (recommended) or nginx |
@@ -47,7 +46,7 @@ You host it yourself. Your data stays on your server. Anyone with an HF account 
 3. Python 3.11+
 4. Node.js 18+
 
-> **Cloudflare / Datacenter IPs:** HackForums is behind Cloudflare, which blocks most cloud/VPS IP ranges. If you're hosting on a server (DigitalOcean, AWS, etc.) you'll need to route API calls through a residential proxy. Set `HF_PROXY_URL` in your `.env` — see [Proxy Setup](#proxy-setup) below.
+> **Cloudflare / Datacenter IPs:** HackForums is behind Cloudflare, which blocks most cloud/VPS IP ranges. If you're hosting on a server (DigitalOcean, AWS, etc.) you'll need to route API calls through a residential proxy. Set `HF_PROXY1_URL` in your `.env` — see [Proxy Setup](#proxy-setup) below.
 
 ---
 
@@ -90,7 +89,7 @@ cp .env.example .env
 
 Run manually:
 ```bash
-python -m uvicorn main:app --host 127.0.0.1 --port 8000
+python -m uvicorn server:app --host 127.0.0.1 --port 8000
 ```
 
 Or install as a systemd service (auto-start on boot):
@@ -120,7 +119,7 @@ yourdomain.com {
     handle /auth/*    { reverse_proxy localhost:8000 }
     handle /api/*     { reverse_proxy localhost:8000 }
     handle /modules/* { reverse_proxy localhost:8000 }
-    handle /health    { reverse_proxy localhost:8000 }
+    handle /health*   { reverse_proxy localhost:8000 }
     handle {
         root * /path/to/hftoolbox/frontend/dist
         try_files {path} /index.html
@@ -141,7 +140,7 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env
 :: Edit .env then:
-python -m uvicorn main:app --port 8000
+python -m uvicorn server:app --port 8000
 ```
 
 **Frontend:** same as Linux — `npm install && npm run build`
@@ -162,6 +161,8 @@ HF_PROXY_URL=http://user:password@proxy.example.com:8080
 HF_PROXY_URL=socks5://user:password@proxy.example.com:1080
 ```
 
+Any aiohttp-compatible proxy URL works. Residential proxy providers like [Brightdata](https://brightdata.com), [Oxylabs](https://oxylabs.io), or [IPRoyal](https://iproyal.com) all work.
+
 ---
 
 ## Configuration
@@ -175,7 +176,9 @@ Copy `.env.example` to `.env` and fill in your credentials:
 | `HF_REDIRECT_URI` | Must exactly match what you set in your HF app (e.g. `https://yourdomain.com/auth/callback`) |
 | `SESSION_SECRET` | Random secret for session signing — use `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `FRONTEND_URL` | Your frontend URL (used for CORS) |
-| `HF_PROXY_URL` | Optional residential proxy URL — needed on datacenter IPs |
+| `HF_PROXY1_URL` | Primary residential proxy URL — needed on datacenter IPs |
+| `HF_PROXY1_SESSION_LIFETIME` | Sticky session lifetime in seconds (optional) |
+| `HF_PROXY2_URL` | Fallback proxy URL — used if primary fails (optional) |
 | `ENV` | `production` or `development` |
 
 ---
@@ -209,6 +212,38 @@ The HF API allows ~240 calls/hour per token. HFToolbox tracks remaining calls pe
 ## License
 
 MIT — do whatever you want with it. A shoutout is appreciated but not required.
+
+---
+
+## Transparency & Verification
+
+HFToolbox is designed to be verifiable — anyone can confirm that hftoolbox.com is running exactly the code in this repo.
+
+**`/health`** — returns the git commit hash recorded at startup:
+```json
+{"ok": true, "commit": "abc1234f...", "commit_short": "abc1234", "deployed_at": "..."}
+```
+
+**`/health/integrity`** — returns SHA-256 checksums of every `.py` file in the backend:
+```json
+{"commit": "abc1234f...", "checksums": {"main.py": "sha256...", ...}}
+```
+
+**To verify:**
+1. Note the commit hash from `/health`
+2. Go to `https://github.com/AuJusDemon/HFToolbox/commit/<hash>` — confirm it exists
+3. Clone the repo at that commit and run:
+```bash
+python -c "
+import hashlib, os
+for root, _, files in os.walk('backend'):
+    for f in sorted(files):
+        if f.endswith('.py') and '__pycache__' not in root:
+            p = os.path.join(root, f)
+            print(p, hashlib.sha256(open(p,'rb').read()).hexdigest())
+"
+```
+4. Compare against `/health/integrity` — every hash should match
 
 ---
 

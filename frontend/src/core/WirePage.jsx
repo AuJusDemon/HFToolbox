@@ -8,7 +8,6 @@ const _mentionPending = new Set()  // UIDs currently in-flight
 
 // ── Wire beta gate ─────────────────────────────────────────────────────────
 // Set to null to make The Wire public for all users.
-const WIRE_BETA_GROUP = null
 
 const ago = ts => {
   if (!ts) return '--'
@@ -1154,21 +1153,6 @@ function ManageView({ me }) {
 // Wrapper handles the group gate — inner component owns all hooks (Rules of Hooks)
 export default function WirePage() {
   const user = useStore(s => s.user)
-  if (WIRE_BETA_GROUP && !(user?.groups||[]).includes(WIRE_BETA_GROUP)) {
-    return (
-      <div style={{display:'flex',flexDirection:'column',alignItems:'center',
-        justifyContent:'center',padding:'80px 20px',gap:16,textAlign:'center'}}>
-        <div style={{fontFamily:'var(--disp)',fontSize:40,color:'var(--acc)',
-          letterSpacing:'.06em',textShadow:'var(--glow-md)'}}>THE WIRE</div>
-        <div style={{fontFamily:'var(--mono)',fontSize:10,color:'var(--dim)',
-          letterSpacing:'.12em',marginBottom:8}}>// RESTRICTED ACCESS</div>
-        <div style={{fontFamily:'var(--mono)',fontSize:11,color:'var(--sub)',
-          maxWidth:340,lineHeight:1.7}}>
-          The Wire is currently in beta for Brotherhood members only.
-        </div>
-      </div>
-    )
-  }
   return <WirePageInner />
 }
 

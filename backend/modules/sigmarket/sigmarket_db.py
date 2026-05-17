@@ -2,61 +2,39 @@
 modules/sigmarket/sigmarket_db.py — persistence for sigmarket auto-rotate.
 
 Table: sigmarket_rotations
-  uid          TEXT
-  sigs         TEXT  — JSON array of BBCode strings (ordered)
-  interval_h   INTEGER — minimum hours between rotations
-  enabled      INTEGER — 0/1
-  last_rotated INTEGER — unix timestamp of last changesig call
-  current_idx  INTEGER — index of currently active sig
+  uid          VARCHAR — primary key
+  sigs         TEXT    — JSON array of BBCode strings (ordered)
+  interval_h   INT     — minimum hours between rotations
+  enabled      TINYINT — 0/1
+  last_rotated BIGINT  — unix timestamp of last changesig call
+  current_idx  INT     — index of currently active sig
 """
 
-import sqlite3
 import json
-import os
-from pathlib import Path
-from contextlib import contextmanager
-
-DB_PATH = Path(os.getenv("DB_PATH", "data/hf_dash.db"))
-
-
-def _connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=10000")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
-
-
-@contextmanager
-def _db():
-    conn = _connect()
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+from _db_compat import _db
 
 
 def init_sigmarket_db() -> None:
     with _db() as conn:
-        conn.executescript("""
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS sigmarket_rotations (
-                uid          TEXT PRIMARY KEY,
-                sigs         TEXT    NOT NULL DEFAULT '[]',
-                interval_h   INTEGER NOT NULL DEFAULT 6,
-                enabled      INTEGER NOT NULL DEFAULT 0,
-                last_rotated INTEGER NOT NULL DEFAULT 0,
-                current_idx  INTEGER NOT NULL DEFAULT 0
-            );
+                uid          VARCHAR(64)  NOT NULL,
+                sigs         TEXT         NOT NULL DEFAULT '[]',
+                interval_h   INT          NOT NULL DEFAULT 6,
+                enabled      TINYINT      NOT NULL DEFAULT 0,
+                last_rotated BIGINT       NOT NULL DEFAULT 0,
+                current_idx  INT          NOT NULL DEFAULT 0,
+                PRIMARY KEY (uid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
 
+
+# ── Rotation config ────────────────────────────────────────────────────────────
 
 def get_rotation(uid: str) -> dict | None:
     with _db() as conn:
         row = conn.execute(
-            "SELECT * FROM sigmarket_rotations WHERE uid = ?", (uid,)
+            "SELECT * FROM sigmarket_rotations WHERE uid = %s", (uid,)
         ).fetchone()
     if not row:
         return None
@@ -69,34 +47,37 @@ def upsert_rotation(uid: str, sigs: list, interval_h: int, enabled: bool) -> Non
     with _db() as conn:
         conn.execute("""
             INSERT INTO sigmarket_rotations (uid, sigs, interval_h, enabled, last_rotated, current_idx)
-            VALUES (?, ?, ?, ?, 0, 0)
-            ON CONFLICT(uid) DO UPDATE SET
-                sigs       = excluded.sigs,
-                interval_h = excluded.interval_h,
-                enabled    = excluded.enabled
+            VALUES (%s, %s, %s, %s, 0, 0)
+            ON DUPLICATE KEY UPDATE
+                sigs       = VALUES(sigs),
+                interval_h = VALUES(interval_h),
+                enabled    = VALUES(enabled)
         """, (uid, json.dumps(sigs), int(interval_h), int(enabled)))
 
 
 def set_rotation_enabled(uid: str, enabled: bool) -> None:
     with _db() as conn:
         conn.execute(
-            "UPDATE sigmarket_rotations SET enabled = ? WHERE uid = ?",
+            "UPDATE sigmarket_rotations SET enabled = %s WHERE uid = %s",
             (int(enabled), uid)
         )
 
 
 def advance_rotation(uid: str, new_idx: int, now: int) -> None:
+    """Called after a successful changesig — record the new index and timestamp."""
     with _db() as conn:
         conn.execute("""
             UPDATE sigmarket_rotations
-            SET current_idx = ?, last_rotated = ?
-            WHERE uid = ?
+            SET current_idx = %s, last_rotated = %s
+            WHERE uid = %s
         """, (new_idx, now, uid))
 
 
 def get_all_rotation_uids() -> list[str]:
+    """All UIDs with rotation enabled."""
     with _db() as conn:
-        rows = conn.execute(
-            "SELECT uid FROM sigmarket_rotations WHERE enabled = 1"
-        ).fetchall()
+        rows = conn.execute("""
+            SELECT uid FROM sigmarket_rotations
+            WHERE enabled = 1
+        """).fetchall()
     return [r["uid"] for r in rows]

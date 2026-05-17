@@ -33,7 +33,7 @@ function inferCategory(reason) {
   if (r.includes('coin flip') || r.includes('flip')) return 'cfl'
   if (r.includes('convo rain')) return 'cvr'
   if (r.includes('quick love')) return 'qlp'
-  if (r.includes('thread bump') || r.startsWith('bump')) return 'bum'
+  if (r.includes('thread bump') || r.startsWith('bump') || r.startsWith('autobump fee') || r.includes('hftoolbox | bump fee')) return 'bum'
   if (r.includes('contract')) return 'don'
   if (r.includes('scratch')) return 'scp'
   if (r.includes('lotto') || r.includes('lottery')) return 'ltb'
@@ -172,13 +172,23 @@ function BytesHistory({ data }) {
           const isOpen = expanded===(t.id||i)
           const isBump = type==='bum'
           const isQL   = type==='qlp'||type==='qlc'
-          const bumpMatch = isBump ? ((t.reason||'').match(/tid=(\d+)/)||[]) : []
-          const bumpTid   = bumpMatch[1] || ''
+
+          // Parse "HFToolbox | Bump Fee | TID: 6309426" format
+          // Also handles old formats gracefully
+          const bumpTidMatch = isBump
+            ? ((t.reason||'').match(/TID[:\s]+(\d+)/i) || (t.reason||'').match(/\[tid:(\d+)\]/i) || [])
+            : []
+          const bumpTid   = bumpTidMatch[1] || ''
+          const isHFTBump = (t.reason||'').toLowerCase().includes('hftoolbox')
           const threadLink = (isQL && t.post_tid)
             ? 'https://hackforums.net/showthread.php?tid=' + t.post_tid
             : (isBump && bumpTid)
               ? 'https://hackforums.net/showthread.php?tid=' + bumpTid
               : ''
+          // Clean display label for the reason column
+          const bumpDisplay = isHFTBump && bumpTid
+            ? `Bump Fee — TID: ${bumpTid}`
+            : (t.reason || '---')
 
           return (
             <div key={t.id||i}>
@@ -197,7 +207,9 @@ function BytesHistory({ data }) {
                 <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',
                   overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{label}</span>
                 <span style={{fontSize:11.5,color:'var(--text)',
-                  overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.reason||'---'}</span>
+                  overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                  {isBump ? bumpDisplay : (t.reason||'---')}
+                </span>
                 <span style={{fontSize:10,color:'var(--sub)',textAlign:'right',
                   fontFamily:'var(--mono)'}}>{ago(t.dateline)}</span>
               </div>
@@ -238,11 +250,26 @@ function BytesHistory({ data }) {
                       <div style={{fontSize:11.5,color:'var(--text)',wordBreak:'break-all'}}>{t.reason}</div>
                     </div>
                   )}
-                  {threadLink && (
+                  {isBump && bumpTid && (
                     <div>
-                      <div className="col-lbl" style={{marginBottom:3}}>
-                        {isQL?'Thread Quick-Loved':'Bumped Thread'}
+                      <div className="col-lbl" style={{marginBottom:3}}>Bumped Thread</div>
+                      <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                        <span style={{fontSize:11,fontFamily:'var(--mono)',color:'var(--text)',fontWeight:600}}>
+                          TID: {bumpTid}
+                        </span>
+                        {threadLink && (
+                          <a href={threadLink} target="_blank" rel="noreferrer"
+                            onClick={e=>e.stopPropagation()}
+                            style={{fontSize:11,color:'var(--acc)'}}>
+                            View on HF →
+                          </a>
+                        )}
                       </div>
+                    </div>
+                  )}
+                  {isQL && threadLink && (
+                    <div>
+                      <div className="col-lbl" style={{marginBottom:3}}>Thread Quick-Loved</div>
                       <a href={threadLink} target="_blank" rel="noreferrer"
                         onClick={e=>e.stopPropagation()}
                         style={{fontSize:11.5,color:'var(--acc)'}}>

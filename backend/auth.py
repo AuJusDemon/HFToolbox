@@ -122,8 +122,11 @@ async def callback(
         "displaygroup": me.get("displaygroup") or me.get("usergroup") or "",
     })
 
-    request.session["uid"] = uid
+    # Regenerate the session to prevent session fixation.
+    # Pull next_path before clearing so it isn't lost.
     next_path = request.session.pop("oauth_next", "") or ""
+    request.session.clear()
+    request.session["uid"] = uid
     redirect_to = f"{FRONTEND_URL}{next_path}" if next_path else f"{FRONTEND_URL}/dashboard"
     return RedirectResponse(redirect_to)
 
@@ -133,6 +136,11 @@ async def callback(
 _DEV_GROUPS_OVERRIDE: list[str] = [
     g.strip() for g in os.environ.get("DEV_GROUPS_OVERRIDE", "").split(",") if g.strip()
 ]
+if _DEV_GROUPS_OVERRIDE and os.environ.get("ENV") == "production":
+    raise RuntimeError(
+        "DEV_GROUPS_OVERRIDE must not be set in production — "
+        "remove it from .env before starting the server"
+    )
 
 
 @router.get("/me")

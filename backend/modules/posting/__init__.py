@@ -222,27 +222,35 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             if not last_pid:
                 last_pid = "0"
 
-            thread_title  = titles.get(tid_str, tracked.get("title", ""))
-            nr            = numreplies.get(tid_str, 0)
-
-            # Calculate which page(s) new replies are likely on.
-            # Posts are returned oldest-first, so new replies are at the END.
-            # Bug fix: always fetching page 1 was missing replies on threads with >30 posts.
-            # Use numreplies (from crawl) to jump to the correct last page.
-            # Fetch last page + one before it as a buffer for stale numreplies counts.
+            thread_title = titles.get(tid_str, tracked.get("title", ""))
             last_pid_int = int(last_pid)
-            if nr > 30:
-                import math as _math
-                last_page = _math.ceil(nr / 30)
-                pages_to_fetch = list(dict.fromkeys([
-                    max(1, last_page - 1),
-                    last_page,
-                    last_page + 1,   # one ahead in case numreplies was stale
-                ]))
-            elif last_pid_int == 0:
+
+            # ── Calculate which page(s) to fetch ────────────────────────────
+            # numreplies is not returned by the HF API (confirmed absent from
+            # both _uid and _tid thread endpoints), so we use firstpost PID
+            # instead.  Since thread posts have sequential global PIDs:
+            #   thread_position ≈ last_pid - firstpost
+            #   page_of_last_pid = thread_position // 30 + 1
+            # We fetch that page plus the next two as a forward buffer.
+            # If firstpost is unknown (0 or missing), fall back to pages 1-3
+            # which covers threads up to 90 posts.
+            import math as _math
+            firstpost_pid = int(tracked.get("firstpost") or 0)
+            if last_pid_int == 0:
                 pages_to_fetch = [1, 2]   # first time: grab first two pages
+            elif firstpost_pid > 0:
+                # Estimated 0-indexed position of last_pid within the thread.
+                # Subtract 1 so we land one page before in case of PID gaps from deletions.
+                pos = max(0, last_pid_int - firstpost_pid - 1)
+                start_page = pos // 30 + 1
+                pages_to_fetch = list(dict.fromkeys([
+                    max(1, start_page),
+                    start_page + 1,
+                    start_page + 2,
+                ]))
             else:
-                pages_to_fetch = [1]
+                # firstpost not yet stored — conservative fallback covering ≤90 posts
+                pages_to_fetch = [1, 2, 3]
 
             try:
                 collected_posts: list = []
@@ -286,7 +294,14 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                         continue  # our own post or Stanley bump
                     new_posts.append(p)
 
-                tid_max_pid[tid_str] = max_pid
+                # Only advance the cursor if we actually found content newer than
+                # last_pid, OR we had a known firstpost and can confirm we fetched
+                # the correct pages. Without this guard, fetching the wrong page and
+                # finding nothing would advance last_checked past the real reply
+                # timestamp, causing the crawl to permanently skip the thread.
+                if int(max_pid) > last_pid_int or firstpost_pid > 0:
+                    tid_max_pid[tid_str] = max_pid
+
                 for p in new_posts:
                     pending.append({"tid_str": tid_str, "thread_title": thread_title, "post": p})
 
