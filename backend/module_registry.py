@@ -1,25 +1,4 @@
-"""
-module_registry.py
-
-The entire plugin contract lives here.
-
-To register a module:
-    from module_registry import ModuleMeta, register
-    from fastapi import APIRouter
-
-    router = APIRouter(prefix="/modules/example")
-
-    register(ModuleMeta(
-        id          = "example",
-        name        = "Example",
-        description = "Does something.",
-        icon        = "🔧",
-        category    = "tools",
-        api_cost    = "low",
-    ), router)
-
-That's it. The sidebar, settings toggle, and routing all happen automatically.
-"""
+"""Module metadata and optional router registry."""
 
 from __future__ import annotations
 from dataclasses import dataclass, field

@@ -72,7 +72,6 @@ export default function ContractDetailPage() {
     setActionResult(null)
     try {
       const res = await api.post(`/api/contracts/${cid}/action`, { action, address })
-      console.log('[contract action]', action, 'response:', res)
       if (!res) {
         setActionResult({ ok: false, message: 'No response from server — action may not have gone through.' })
       } else {
@@ -82,7 +81,6 @@ export default function ContractDetailPage() {
         }, 1500)
       }
     } catch (e) {
-      console.error('[contract action] error:', e)
       setActionResult({ ok: false, message: e.message || 'Unknown error — check HF directly.' })
     }
     setActing(null)
