@@ -10,6 +10,7 @@ env/
 
 ## Secrets — never commit these
 backend/.env
+agent.md
 
 ## Generated at runtime
 backend/deploy_info.json
