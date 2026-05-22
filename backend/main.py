@@ -1604,6 +1604,7 @@ async def contracts_export(
 ):
     """Download full contract history as CSV or JSON. Requires crawl to be complete."""
     import csv, io, json as _json
+    from datetime import datetime, timezone
     from fastapi.responses import Response as FResponse
 
     uid = request.session.get("uid")
@@ -1621,38 +1622,73 @@ async def contracts_export(
 
     STATUS_MAP = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
                   "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
-    TYPE_MAP   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
 
-    def _val(r):
-        ip, ic = r.get("iprice","0") or "0", r.get("icurrency","other") or "other"
-        op, oc = r.get("oprice","0") or "0", r.get("ocurrency","other") or "other"
-        ipr, opr = r.get("iproduct","") or "", r.get("oproduct","") or ""
-        if ip != "0" and ic.lower() != "other":  return f"{ip} {ic}"
-        if op != "0" and oc.lower() != "other":  return f"{op} {oc}"
-        if ipr not in ("","other","n/a"):         return ipr
-        if opr not in ("","other","n/a"):         return opr
-        return ""
+    party_uids = list({str(r.get("inituid") or "") for r in rows if r.get("inituid")} |
+                      {str(r.get("otheruid") or "") for r in rows if r.get("otheruid")})
+    username_map = {
+        u: info["username"]
+        for u, info in (await asyncio.to_thread(db.get_uid_usernames, party_uids)).items()
+        if info.get("username")
+    } if party_uids else {}
+
+    def _created_at(ts) -> str:
+        try:
+            return datetime.fromtimestamp(int(ts), timezone.utc).isoformat().replace("+00:00", "Z")
+        except Exception:
+            return ""
+
+    def _offer(r, side: str) -> str:
+        price    = str(r.get(f"{side}price") or "0").strip()
+        currency = str(r.get(f"{side}currency") or "").strip()
+        product  = str(r.get(f"{side}product") or "").strip()
+        parts = []
+        if price and price != "0" and currency and currency.lower() != "other":
+            parts.append(f"{price} {currency}")
+        if product and product.lower() not in ("other", "n/a", "none", "null"):
+            parts.append(product)
+        return " - ".join(parts)
 
     records = []
     for r in rows:
-        tid = r.get("tid") or ""
+        tid       = str(r.get("tid") or "")
+        cid       = str(r.get("cid") or "")
+        init_uid  = str(r.get("inituid") or "")
+        other_uid = str(r.get("otheruid") or "")
+        user_is_init = init_uid == str(uid)
+        cp_uid    = other_uid if user_is_init else init_uid
+        init_name = username_map.get(init_uid, "")
+        other_name = username_map.get(other_uid, "")
+        cp_name   = username_map.get(cp_uid, "")
+        user_side = "i" if user_is_init else "o"
+        cp_side   = "o" if user_is_init else "i"
         records.append({
-            "cid":         r["cid"],
-            "status":      STATUS_MAP.get(str(r.get("status_n") or ""), "Unknown"),
-            "type":        TYPE_MAP.get(str(r.get("type_n") or ""), "--"),
-            "inituid":     r.get("inituid") or "",
-            "otheruid":    r.get("otheruid") or "",
-            "value":       _val(r),
-            "iprice":      r.get("iprice") or "",
-            "icurrency":   r.get("icurrency") or "",
-            "iproduct":    r.get("iproduct") or "",
-            "oprice":      r.get("oprice") or "",
-            "ocurrency":   r.get("ocurrency") or "",
-            "oproduct":    r.get("oproduct") or "",
-            "tid":         tid,
+            "cid": cid,
+            "status": STATUS_MAP.get(str(r.get("status_n") or ""), "Unknown"),
+            "type": _perspective_type_row(r, uid),
+            "role": "Initiator" if user_is_init else "Counterparty",
+            "counterparty": cp_name or cp_uid,
+            "counterparty_uid": cp_uid,
+            "counterparty_username": cp_name,
+            "value": _contract_value(r),
+            "your_offer": _offer(r, user_side),
+            "their_offer": _offer(r, cp_side),
+            "created_at": _created_at(r.get("dateline")),
+            "dateline": r.get("dateline") or "",
+            "tid": tid,
             "thread_url":  f"https://hackforums.net/showthread.php?tid={tid}" if tid else "",
-            "dateline":    r.get("dateline") or "",
-            "contract_url": f"https://hackforums.net/contracts.php?action=view&cid={r['cid']}",
+            "contract_url": f"https://hackforums.net/contracts.php?action=view&cid={cid}",
+            "initiator_uid": init_uid,
+            "initiator_username": init_name,
+            "other_uid": other_uid,
+            "other_username": other_name,
+            "raw_type": r.get("type_n") or "",
+            "raw_status": r.get("status_n") or "",
+            "iprice": r.get("iprice") or "",
+            "icurrency": r.get("icurrency") or "",
+            "iproduct": r.get("iproduct") or "",
+            "oprice": r.get("oprice") or "",
+            "ocurrency": r.get("ocurrency") or "",
+            "oproduct": r.get("oproduct") or "",
         })
 
     fmt = format.lower()
@@ -1665,9 +1701,16 @@ async def contracts_export(
         )
     else:
         buf = io.StringIO()
-        fields = ["cid","status","type","inituid","otheruid","value",
-                  "iprice","icurrency","iproduct","oprice","ocurrency","oproduct",
-                  "tid","thread_url","dateline","contract_url"]
+        fields = [
+            "cid", "status", "type", "role",
+            "counterparty", "counterparty_uid", "counterparty_username",
+            "value", "your_offer", "their_offer",
+            "created_at", "dateline",
+            "tid", "thread_url", "contract_url",
+            "initiator_uid", "initiator_username", "other_uid", "other_username",
+            "raw_type", "raw_status",
+            "iprice", "icurrency", "iproduct", "oprice", "ocurrency", "oproduct",
+        ]
         w = csv.DictWriter(buf, fieldnames=fields)
         w.writeheader()
         w.writerows(records)
