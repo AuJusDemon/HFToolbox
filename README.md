@@ -161,8 +161,6 @@ HF_PROXY_URL=http://user:password@proxy.example.com:8080
 HF_PROXY_URL=socks5://user:password@proxy.example.com:1080
 ```
 
-Any aiohttp-compatible proxy URL works. Residential proxy providers like [Brightdata](https://brightdata.com), [Oxylabs](https://oxylabs.io), or [IPRoyal](https://iproyal.com) all work.
-
 ---
 
 ## Configuration
