@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title HFToolbox - Manager
+title HFToolbox Dev - Manager
 
 :: ══════════════════════════════════════════════════════════════════════════════
 ::  HFToolbox Manager
@@ -17,6 +17,7 @@ title HFToolbox - Manager
 set ROOT=%~dp0
 set BACKEND_DIR=%ROOT%backend
 set LOG_DIR=%ROOT%logs
+set BACKEND_PORT=8001
 
 :: Python: tries 'py' (Windows Python Launcher) first, falls back to 'python'
 set PYTHON=py
@@ -36,11 +37,12 @@ if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 echo.
 echo  ================================================================
-echo   HFToolbox
+echo   HFToolbox Dev
 echo   Backend   : %BACKEND_DIR%
 echo   Python    : %PYTHON%
 echo   Caddy     : %CADDY_DIR%
 echo   Logs      : %LOG_DIR%
+echo   Port      : %BACKEND_PORT%
 echo  ================================================================
 echo.
 
@@ -144,7 +146,7 @@ echo [%DATE% %TIME%] Starting backend...
 echo [%DATE% %TIME%] Starting backend >> "%LOG_DIR%\manager.log"
 
 cd /d "%BACKEND_DIR%"
-%PYTHON% -m uvicorn server:app --port 8000 --log-level info
+%PYTHON% -m uvicorn server:app --port %BACKEND_PORT% --log-level info
 
 set EXIT_CODE=%errorlevel%
 echo [%DATE% %TIME%] Backend exited ^(code %EXIT_CODE%^) — restarting in 3s...
