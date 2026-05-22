@@ -217,33 +217,32 @@ MIT — do whatever you want with it. A shoutout is appreciated but not required
 
 ## Transparency & Verification
 
-HFToolbox is designed to be verifiable — anyone can confirm that hftoolbox.com is running exactly the code in this repo.
+HFToolbox is designed to be verifiable. Anyone can confirm that hftoolbox.com is running the same public source files as this repo.
 
-**`/health`** — returns the git commit hash recorded at startup:
+**`/health`** - returns the git commit hash recorded at startup, plus live git status when the deployed directory is still a git checkout:
 ```json
-{"ok": true, "commit": "abc1234f...", "commit_short": "abc1234", "deployed_at": "..."}
+{"ok": true, "commit": "abc1234f...", "commit_short": "abc1234", "deployed_at": "...", "git": {"dirty": false}}
 ```
 
-**`/health/integrity`** — returns SHA-256 checksums of every `.py` file in the backend:
+**`/health/integrity`** - returns SHA-256 checksums for public source files in the live directory:
 ```json
-{"commit": "abc1234f...", "checksums": {"main.py": "sha256...", ...}}
+{"commit": "abc1234f...", "manifest_hash": "sha256...", "checksums": {"backend/main.py": "sha256...", "frontend/src/App.jsx": "sha256..."}}
 ```
 
-**To verify:**
+**`/health/manifest`** - returns the same source manifest with file sizes and exclusion rules.
+
+**`/health/frontend`** - returns checksums for the built frontend bundle when `frontend/dist` exists, otherwise `frontend/src`.
+
+Secrets and runtime files are excluded from public manifests, including `backend/.env`, `backend/deploy_info.json`, databases, logs, build folders, and ignored local agent notes.
+
+**To verify the deployed source:**
 1. Note the commit hash from `/health`
-2. Go to `https://github.com/AuJusDemon/HFToolbox/commit/<hash>` — confirm it exists
-3. Clone the repo at that commit and run:
+2. Go to `https://github.com/AuJusDemon/HFToolbox/commit/<hash>` and confirm it exists
+3. Clone the repo at that commit and compare file hashes from `/health/manifest`
 ```bash
-python -c "
-import hashlib, os
-for root, _, files in os.walk('backend'):
-    for f in sorted(files):
-        if f.endswith('.py') and '__pycache__' not in root:
-            p = os.path.join(root, f)
-            print(p, hashlib.sha256(open(p,'rb').read()).hexdigest())
-"
+curl https://hftoolbox.com/health/manifest
 ```
-4. Compare against `/health/integrity` — every hash should match
+4. Every matching source file should have the same SHA-256 hash.
 
 ---
 

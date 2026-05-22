@@ -90,7 +90,7 @@ def _throttle_level() -> str:
         return "normal"
 
 
-async def _crawl_user_bytes(uid: str, token: str) -> None:
+async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
     """Crawl one page of recv + one page of sent per hour until history complete.
     Bundles me + contracts(page N) into call 1 (3/4 slots).
     Bundles contracts(page N+1) into call 2's free slots (bytes_from uses only 1/4).
@@ -350,13 +350,14 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
             # Fire the reply poll immediately — don't wait for the separate 5-min timer.
             # Without this, there can be up to 10 min latency (crawl timer + poll timer).
             # Firing inline here reduces it to one crawl cycle (~5 min) worst case.
-            try:
-                from modules.posting import poll_reply_queues
-                await asyncio.wait_for(poll_reply_queues(active_uids={uid}), timeout=30)
-            except asyncio.TimeoutError:
-                log.warning("Crawl: inline reply poll timed out uid=%s", uid)
-            except Exception as _rpe:
-                log.warning("Crawl: inline reply poll failed uid=%s: %s", uid, _rpe)
+            if active:
+                try:
+                    from modules.posting import poll_reply_queues
+                    await asyncio.wait_for(poll_reply_queues(active_uids={uid}), timeout=30)
+                except asyncio.TimeoutError:
+                    log.warning("Crawl: inline reply poll timed out uid=%s", uid)
+                except Exception as _rpe:
+                    log.warning("Crawl: inline reply poll failed uid=%s: %s", uid, _rpe)
 
     except Exception as _te:
         log.warning("Crawl: thread reply detection failed uid=%s: %s", uid, _te)
@@ -443,13 +444,13 @@ async def _crawl_user_bytes(uid: str, token: str) -> None:
             log.warning("Crawl: contracts cache update failed uid=%s: %s", uid, e)
 
 
-IDLE_THRESHOLD = 900  # 15 minutes — if no activity, skip scheduled crawl cycles
+IDLE_THRESHOLD = 900
+IDLE_CRAWL_INTERVAL = 1800
 
 
 async def _crawl_if_active(uid: str, token: str) -> bool:
     """
-    Crawl a user only if they've been active in the last IDLE_THRESHOLD seconds
-    AND their API budget is above their configured floor.
+    Active users get the full crawl. Idle users get a slower maintenance crawl.
     Returns True if crawl ran, False if skipped.
     """
     import time as _t
@@ -469,9 +470,14 @@ async def _crawl_if_active(uid: str, token: str) -> bool:
         return False  # user never seen
     idle_secs = _t.time() - last_active
     if idle_secs > IDLE_THRESHOLD:
-        # Mark needs_refresh so next endpoint hit triggers an immediate crawl
         await asyncio.to_thread(db.set_needs_refresh, uid, 1)
-        log.debug("Crawl: uid=%s idle %.0fs — skipping, flagged needs_refresh", uid, idle_secs)
+        state = await asyncio.to_thread(db.get_crawl_state, uid)
+        last_crawl = int(state.get("last_crawl") or 0)
+        if _t.time() - last_crawl >= IDLE_CRAWL_INTERVAL:
+            log.info("Crawl: uid=%s idle %.0fs - running maintenance crawl", uid, idle_secs)
+            await _crawl_user_bytes(uid, token, active=False)
+            return True
+        log.debug("Crawl: uid=%s idle %.0fs - skipping until maintenance interval", uid, idle_secs)
         return False
     await _crawl_user_bytes(uid, token)
     return True
@@ -515,9 +521,8 @@ async def _trigger_listener() -> None:
 
 async def _bytes_crawl_loop() -> None:
     """
-    Runs every 5 minutes. Only crawls users who have been active recently.
-    Idle users (no endpoint hit in 15min) are skipped and flagged needs_refresh=1.
-    When they return and hit any endpoint, _trigger_listener fires an immediate crawl.
+    Runs every 5 minutes. Active users get full crawls; idle users get slower
+    maintenance crawls and are flagged for a full refresh on return.
     """
     import time as _t
     # Smart startup delay — don't blindly sleep, check actual last_crawl
@@ -543,10 +548,10 @@ async def _bytes_crawl_loop() -> None:
         try:
             uids = await asyncio.to_thread(db.get_all_uids)
             ran = 0
-            # Skip bytes crawl entirely when API budget is low
+            # Critical throttle is the only global stop; user API floors still apply per token.
             _tl = _throttle_level()
-            if _tl in ("low", "critical"):
-                log.info("Bytes crawl: skipping — throttle=%s", _tl)
+            if _tl == "critical":
+                log.info("Bytes crawl: skipping - throttle=%s", _tl)
             else:
                 for uid in uids:
                     token = await asyncio.to_thread(db.get_token, uid)
@@ -1102,29 +1107,26 @@ async def activity_middleware(request, call_next):
     1. Touch last_seen so idle detection stays accurate
     2. If needs_refresh=1 (user returning from idle), queue an immediate crawl
     """
-    import time as _t
-    response = await call_next(request)
-
-    # Only track activity on API paths, not static assets
     path = request.url.path
     if not path.startswith("/api/") and not path.startswith("/auth/"):
-        return response
+        return await call_next(request)
 
     uid = request.session.get("uid") if hasattr(request, "session") else None
-    if not uid:
-        return response
+    if uid:
+        asyncio.create_task(_activity_task(uid))
 
-    # True fire-and-forget — never block the HTTP response waiting for DB threads
-    asyncio.create_task(_activity_task(uid))
-    return response
+    return await call_next(request)
 
 
 async def _activity_task(uid: str) -> None:
     """Background task: update last_seen and trigger crawl if needed. Never blocks middleware."""
     try:
+        import time as _t
         needs = await asyncio.to_thread(db.get_needs_refresh, uid)
+        last_active = await asyncio.to_thread(db.get_last_active, uid)
+        was_idle = bool(last_active and (_t.time() - last_active) > IDLE_THRESHOLD)
         await asyncio.to_thread(db.touch_last_active, uid)
-        if needs:
+        if needs or was_idle:
             try:
                 _crawl_trigger.put_nowait(uid)
             except asyncio.QueueFull:
@@ -2400,49 +2402,219 @@ async def proxy_uimg(request: Request, image_id: str, key: str = ""):
         return JSONResponse({"error": "proxy error"}, status_code=502)
 
 
+
+_MANIFEST_EXCLUDE_DIRS = {
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "node_modules",
+    "dist",
+    "build",
+    "data",
+    "logs",
+}
+_MANIFEST_EXCLUDE_FILES = {
+    "agent.md",
+    "backend/.env",
+    "backend/deploy_info.json",
+}
+_MANIFEST_EXCLUDE_SUFFIXES = (
+    ".db",
+    ".db-shm",
+    ".db-wal",
+    ".log",
+    ".pyc",
+    ".pyo",
+    ".pyd",
+    ".exe",
+)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _load_deploy_info() -> dict:
+    import json as _json
+
+    try:
+        return _json.loads((Path(__file__).parent / "deploy_info.json").read_text())
+    except Exception:
+        return {}
+
+
+def _git_runtime_info() -> dict:
+    import subprocess as _subprocess
+
+    root = _repo_root()
+    try:
+        commit = _subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        branch = _subprocess.run(
+            ["git", "-C", str(root), "branch", "--show-current"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        status = _subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if commit.returncode != 0:
+            return {"available": False}
+        dirty_lines = [line for line in status.stdout.splitlines() if line.strip()]
+        full_commit = commit.stdout.strip()
+        return {
+            "available": True,
+            "commit": full_commit,
+            "commit_short": full_commit[:7],
+            "branch": branch.stdout.strip() or "unknown",
+            "dirty": bool(dirty_lines),
+            "dirty_count": len(dirty_lines),
+        }
+    except Exception:
+        return {"available": False}
+
+
+def _is_manifest_file(path: Path, root: Path) -> bool:
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return False
+
+    rel_s = rel.as_posix()
+    if rel_s in _MANIFEST_EXCLUDE_FILES:
+        return False
+    if path.name == ".env" or (path.name.startswith(".env.") and path.name != ".env.example"):
+        return False
+    if any(part in _MANIFEST_EXCLUDE_DIRS for part in rel.parts):
+        return False
+    if path.name in {".DS_Store", "Thumbs.db", "desktop.ini"}:
+        return False
+    if path.suffix.lower() in _MANIFEST_EXCLUDE_SUFFIXES:
+        return False
+    return path.is_file()
+
+
+def _file_sha256(path: Path) -> str:
+    import hashlib as _hl
+
+    digest = _hl.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _manifest_for(paths: list[Path], root: Path) -> dict:
+    import hashlib as _hl
+
+    files = {}
+    for path in sorted(paths, key=lambda p: p.relative_to(root).as_posix()):
+        rel = path.relative_to(root).as_posix()
+        files[rel] = {
+            "sha256": _file_sha256(path),
+            "size": path.stat().st_size,
+        }
+
+    manifest_digest = _hl.sha256()
+    for rel, meta in files.items():
+        manifest_digest.update(rel.encode("utf-8"))
+        manifest_digest.update(b"\0")
+        manifest_digest.update(str(meta["size"]).encode("ascii"))
+        manifest_digest.update(b"\0")
+        manifest_digest.update(meta["sha256"].encode("ascii"))
+        manifest_digest.update(b"\n")
+
+    return {
+        "algorithm": "sha256",
+        "file_count": len(files),
+        "manifest_hash": manifest_digest.hexdigest(),
+        "files": files,
+    }
+
+
+def _public_repo_manifest() -> dict:
+    root = _repo_root()
+    paths = [p for p in root.rglob("*") if _is_manifest_file(p, root)]
+    return _manifest_for(paths, root)
+
+
+def _frontend_manifest() -> dict:
+    root = _repo_root()
+    dist_root = root / "frontend" / "dist"
+    if dist_root.exists():
+        paths = [p for p in dist_root.rglob("*") if p.is_file()]
+        manifest = _manifest_for(paths, root)
+        manifest["source"] = "frontend/dist"
+        return manifest
+
+    src_root = root / "frontend" / "src"
+    paths = [p for p in src_root.rglob("*") if p.is_file()]
+    manifest = _manifest_for(paths, root)
+    manifest["source"] = "frontend/src"
+    return manifest
+
+
+def _manifest_exclusions() -> dict:
+    return {
+        "dirs": sorted(_MANIFEST_EXCLUDE_DIRS),
+        "files": sorted(_MANIFEST_EXCLUDE_FILES),
+        "env_files": [".env", ".env.* except .env.example"],
+        "suffixes": list(_MANIFEST_EXCLUDE_SUFFIXES),
+    }
+
+
 @app.get("/health")
 async def health():
-    import json as _json
-    info: dict = {}
-    try:
-        p = Path(__file__).parent / "deploy_info.json"
-        info = _json.loads(p.read_text())
-    except Exception:
-        pass
-    return {"ok": True, **info}
+    deploy_info = _load_deploy_info()
+    git_info = await asyncio.to_thread(_git_runtime_info)
+    return {"ok": True, **deploy_info, "git": git_info}
 
 
 @app.get("/health/integrity")
 async def health_integrity():
-    """
-    SHA-256 checksums of every .py file in the backend.
-    Clone the public repo, run the same hash, compare to verify production
-    is running unmodified code. HFClient.py is excluded — proxy credentials
-    are in .env, not the source file, so this endpoint still proves everything else.
-    """
-    import hashlib as _hl
-    import json as _json
-
-    def _checksums() -> dict:
-        root = Path(__file__).parent
-        out: dict = {}
-        for f in sorted(root.rglob("*.py")):
-            if "__pycache__" in f.parts:
-                continue
-            rel = str(f.relative_to(root)).replace("\\", "/")
-            out[rel] = _hl.sha256(f.read_bytes()).hexdigest()
-        return out
-
-    deploy_info: dict = {}
-    try:
-        p = Path(__file__).parent / "deploy_info.json"
-        deploy_info = _json.loads(p.read_text())
-    except Exception:
-        pass
-
-    checksums = await asyncio.to_thread(_checksums)
+    deploy_info = _load_deploy_info()
+    manifest = await asyncio.to_thread(_public_repo_manifest)
     return {
-        "commit":      deploy_info.get("commit", "unknown"),
+        "commit": deploy_info.get("commit", "unknown"),
         "deployed_at": deploy_info.get("deployed_at", "unknown"),
-        "checksums":   checksums,
+        "algorithm": manifest["algorithm"],
+        "file_count": manifest["file_count"],
+        "manifest_hash": manifest["manifest_hash"],
+        "checksums": {rel: meta["sha256"] for rel, meta in manifest["files"].items()},
+        "excluded": _manifest_exclusions(),
+    }
+
+
+@app.get("/health/manifest")
+async def health_manifest():
+    deploy_info = _load_deploy_info()
+    git_info = await asyncio.to_thread(_git_runtime_info)
+    manifest = await asyncio.to_thread(_public_repo_manifest)
+    return {
+        "commit": deploy_info.get("commit", "unknown"),
+        "deployed_at": deploy_info.get("deployed_at", "unknown"),
+        "git": git_info,
+        **manifest,
+        "excluded": _manifest_exclusions(),
+    }
+
+
+@app.get("/health/frontend")
+async def health_frontend():
+    deploy_info = _load_deploy_info()
+    manifest = await asyncio.to_thread(_frontend_manifest)
+    return {
+        "commit": deploy_info.get("commit", "unknown"),
+        "deployed_at": deploy_info.get("deployed_at", "unknown"),
+        **manifest,
     }
