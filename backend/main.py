@@ -1111,11 +1111,14 @@ async def activity_middleware(request, call_next):
     if not path.startswith("/api/") and not path.startswith("/auth/"):
         return await call_next(request)
 
-    uid = request.session.get("uid") if hasattr(request, "session") else None
+    response = await call_next(request)
+
+    session = request.scope.get("session") or {}
+    uid = session.get("uid")
     if uid:
         asyncio.create_task(_activity_task(uid))
 
-    return await call_next(request)
+    return response
 
 
 async def _activity_task(uid: str) -> None:
