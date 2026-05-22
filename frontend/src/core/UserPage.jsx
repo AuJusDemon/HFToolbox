@@ -186,7 +186,7 @@ export default function UserPage() {
       {user && (
         <div className="card">
           <div style={{display:'flex',padding:'0 13px',borderBottom:'1px solid var(--b1)'}}>
-            {[['posts','Recent Posts'],['threads','Recent Threads'],['ratings','B-Ratings'],['contracts','Trade Stats']].map(([key,label]) => (
+            {[['posts','Recent Posts'],['threads','Recent Threads'],['ratings','Credibility'],['contracts','Trade Stats']].map(([key,label]) => (
               <button key={key} className={`tab${tab===key?' on':''}`} onClick={() => switchTab(key)}>{label}</button>
             ))}
           </div>
@@ -252,12 +252,12 @@ export default function UserPage() {
                   </>
             )}
 
-            {/* ── B-Ratings ── */}
+            {/* ── Credibility ── */}
             {tab === 'ratings' && (
               trustLoading || !trustLoaded ? <Spinner />
               : trustErr ? <div style={{fontSize:12,color:'var(--red)'}}>{trustErr}</div>
               : ratings.length === 0
-              ? <div style={{fontSize:12,color:'var(--sub)',fontStyle:'italic'}}>No b-ratings found</div>
+              ? <div style={{fontSize:12,color:'var(--sub)',fontStyle:'italic'}}>No credibility ratings found</div>
               : <>
                   {/* Summary bar */}
                   <div style={{display:'flex',gap:20,flexWrap:'wrap',padding:'8px 12px',marginBottom:14,background:'var(--s2)',borderRadius:6,border:'1px solid var(--b1)'}}>

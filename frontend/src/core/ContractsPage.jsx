@@ -566,8 +566,16 @@ export default function ContractsPage() {
     const sp  = (f && f !== 'all') ? `&status=${f}` : ''
     const srt = sc ? `&sort_col=${sc}&sort_dir=${sd||'desc'}` : ''
     api.get(`/api/contracts/history?page=${pg}&perpage=${PERPAGE}${sp}${srt}`)
-      .then(d => { if(d) setHist(d) }).catch(() => {})
-  }, [])
+      .then(d => {
+        if (d) {
+          setHist(d)
+          if (d.username_map) {
+            mergeUserCache(d.username_map)
+            setUsernames(prev => ({ ...prev, ...d.username_map }))
+          }
+        }
+      }).catch(() => {})
+  }, [mergeUserCache])
   const loadStats = useCallback(() =>
     api.get('/api/contracts/stats').then(d => { if(d) setStats(d) }).catch(() => {})
   , [])
@@ -623,6 +631,7 @@ export default function ContractsPage() {
         (c.value  || '').toLowerCase().includes(search.toLowerCase()) ||
         (resolveStatus(c) || '').toLowerCase().includes(search.toLowerCase()) ||
         (c.type   || '').toLowerCase().includes(search.toLowerCase()) ||
+        (c.counterparty_username || '').toLowerCase().includes(search.toLowerCase()) ||
         String(c.otheruid || '').includes(search) ||
         String(c.inituid  || '').includes(search)
       )
@@ -754,6 +763,7 @@ export default function ContractsPage() {
                     const bgTint      = STATUS_BG[status]    || 'transparent'
                     const isInit      = myUid && String(c.inituid) === String(myUid)
                     const cpUid       = isInit ? c.otheruid : c.inituid
+                    const cpName      = c.counterparty_username || usernames[String(cpUid)] || ''
                     const dVal        = displayValue(c)
 
                     return (
@@ -817,7 +827,7 @@ export default function ContractsPage() {
                               onClick={e => e.stopPropagation()}
                               style={{ fontSize:10, color:'var(--blue)', fontFamily:'var(--mono)' }}
                             >
-                              {usernames[String(cpUid)] || cpUid}
+                              {cpName || cpUid}
                             </a>
                           ) : <span style={{ fontSize:10, color:'var(--dim)' }}>--</span>}
                         </div>

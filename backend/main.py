@@ -244,7 +244,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             fetched_cids = {str(c.get("cid","")) for c in all_contracts}
             stale_cids   = [int(cid) for cid in open_cids if cid not in fetched_cids]
             if stale_cids:
-                batch = stale_cids[:30]  # 1 batch max (was 3)
+                batch = stale_cids[:30]
                 try:
                     r = await asyncio.wait_for(client.read({"contracts": {
                         "_cid": batch,
@@ -664,7 +664,7 @@ async def _username_resolve_loop() -> None:
                     unknown = await asyncio.to_thread(db.get_unknown_uids_from_contracts, uid, 30)
                     chunk    = [int(u) for u in (unknown or []) if str(u).isdigit()]
 
-                    # ── Bundle UIDs + TIDs into one read call (was 2 separate calls) ──
+                    # ── Bundle UID and TID lookups into one read call ────────────────
                     unknown_tids = await asyncio.to_thread(db.get_unknown_tids_from_contracts, uid, 30)
                     tid_ints     = [int(t) for t in (unknown_tids or []) if str(t).isdigit()]
 
@@ -710,14 +710,18 @@ async def _username_resolve_loop() -> None:
 
 async def _tid_backfill_loop() -> None:
     """One-time backfill: fetch all contract tids from HF API for any user
-    that has contracts with missing tid. Runs at startup, becomes no-op once done.
+    that has contracts with missing tid. Delayed so startup stays cheap.
     Cost: ~3 HF API calls per user, only ever runs if needed.
     Capped at MAX_BACKFILL_PAGES per user to bound API spend on cold starts."""
-    await asyncio.sleep(30)  # let server fully start first
+    await asyncio.sleep(1800)
     from HFClient import HFClient
     import time as _t
 
     MAX_BACKFILL_PAGES = 20  # hard cap: 600 contracts max — prevents runaway API spend
+
+    if _throttle_level() != "normal":
+        log.info("TID backfill: skipped because API throttle is not normal")
+        return
 
     all_uids = await asyncio.to_thread(db.get_all_uids)
     for uid in all_uids:
@@ -854,7 +858,6 @@ async def lifespan(app: FastAPI):
     app.include_router(wire_router)
 
     # ── Unified 5-minute scheduler ──────────────────────────────────────────
-    # Replaces the old autobump-only 30-min loop.
     # Handles: scheduled thread posting (every tick), autobump (every 30 min),
     # and reply queue polling (every 15 min). All in one loop, batched per user.
     from modules.autobump import poll_autobump
@@ -1031,32 +1034,16 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_unified_loop(), name="unified_scheduler")
 
-    # Pre-warm sigmarket browse cache on startup
-    # Loads from DB first (free, instant) — only hits HF API if DB cache is stale/empty
+    # Pre-warm sigmarket browse cache on startup from local DB only.
     async def _startup_browse_warm():
         await asyncio.sleep(3)
         try:
-            from modules.sigmarket.router import _load_browse_cache_from_db, _do_browse_fetch, _browse_cache
+            from modules.sigmarket.router import _load_browse_cache_from_db
 
-            # Try DB cache first — zero API calls if it's fresh
             if _load_browse_cache_from_db():
                 log.info("Startup: sigmarket browse loaded from DB cache (0 API calls)")
-                return
-
-            # DB cache stale/empty — fetch from HF
-            uids = await asyncio.to_thread(db.get_all_uids)
-            token = None
-            for _uid in uids:
-                token = await asyncio.to_thread(db.get_token, _uid)
-                if token:
-                    break
-            if token:
-                result = await asyncio.wait_for(_do_browse_fetch(token), timeout=30)
-                if result is not None and result.get("listings"):
-                    _browse_cache["data"] = result
-                    _browse_cache["ts"]   = __import__('time').time()
-                    await asyncio.to_thread(db.set_dash_cache, "__system__", "sigmarket_browse", result)
-                    log.info("Startup: sigmarket browse fetched + persisted (%d listings)", len(result.get("listings", [])))
+            else:
+                log.info("Startup: sigmarket browse DB cache empty/stale; skipping HF fetch")
         except Exception as e:
             log.warning("Startup browse warm failed: %s", e)
     asyncio.create_task(_startup_browse_warm(), name="startup_browse_warm")
@@ -1066,11 +1053,6 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(_username_resolve_loop(), name="username_resolver")
     asyncio.create_task(_tid_backfill_loop(),       name="tid_backfill")
     asyncio.create_task(_trigger_listener(),   name="crawl_trigger_listener")
-
-    # On startup: refresh profile cache for all users with a single cheap me call.
-    # The bytes crawl sleeps first (to avoid cold-start burn), so without this
-    # the sidebar would show a stale "cached X hours ago" until the first crawl fires.
-    # Startup profile refresh removed — crawl handles this on first active cycle
 
     yield
 
@@ -1563,6 +1545,8 @@ async def contracts_history_db(request: Request, page: int = 1, perpage: int = 1
 
     contracts = []
     for c in rows:
+        is_init = str(c["inituid"] or "") == str(uid)
+        cp_uid = str(c["otheruid"] if is_init else c["inituid"] or "")
         contracts.append({
             "cid":       c["cid"],
             "status_n":  c["status_n"] or "",
@@ -1579,13 +1563,20 @@ async def contracts_history_db(request: Request, page: int = 1, perpage: int = 1
             "oproduct":  c["oproduct"] or "",
             "dateline":  c["dateline"] or 0,
             "value":     _contract_value(c),
+            "counterparty_uid": cp_uid,
         })
+
+    cp_uids = list({str(c.get("counterparty_uid") or "") for c in contracts if c.get("counterparty_uid")})
+    username_map = {u: info["username"] for u, info in (await asyncio.to_thread(db.get_uid_usernames, cp_uids)).items() if info.get("username")} if cp_uids else {}
+    for c in contracts:
+        c["counterparty_username"] = username_map.get(str(c.get("counterparty_uid") or ""), "")
 
     return {
         "contracts": contracts,
         "total":     total,
         "page":      page,
         "perpage":   perpage,
+        "username_map": username_map,
         "crawl": {
             "done": bool(cstate.get("done")),
             "page": cstate.get("page", 1),
@@ -2137,7 +2128,7 @@ async def user_activity(request: Request, lookup_uid: str):
 
 @app.get("/api/user/{lookup_uid}/trust")
 async def user_trust(request: Request, lookup_uid: str, ratings_page: int = 1):
-    """B-ratings received + contract stats for trust lookup. 1 API call."""
+    """Credibility ratings received + contract stats for trust lookup. 1 API call."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -2149,7 +2140,7 @@ async def user_trust(request: Request, lookup_uid: str, ratings_page: int = 1):
     target = int(lookup_uid)
     PERPAGE = 15
 
-    # 1 call: b-ratings received + contracts (2 endpoints, well under limit)
+    # 1 call: credibility ratings received + contracts (2 endpoints, well under limit)
     try:
         data = await client.read({
             "bratings": {
@@ -2169,7 +2160,7 @@ async def user_trust(request: Request, lookup_uid: str, ratings_page: int = 1):
     if not data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
 
-    # ── Parse b-ratings ──────────────────────────────────────────────────────
+    # ── Parse credibility ratings ────────────────────────────────────────────
     br_raw = data.get("bratings", [])
     if isinstance(br_raw, dict): br_raw = [br_raw]
     ratings = []
@@ -2315,9 +2306,9 @@ async def get_contract_detail(request: Request, cid: int):
         cp_uid    = other_uid if init_uid == uid_int else init_uid
         username  = None
         if cp_uid:
-            cached_user = await asyncio.to_thread(db.get_user, str(cp_uid))
-            if cached_user:
-                username = cached_user.get("username")
+            cached_names = await asyncio.to_thread(db.get_uid_usernames, [str(cp_uid)])
+            cached_user = cached_names.get(str(cp_uid), {})
+            username = cached_user.get("username") or None
         if cp_uid and not username:
             try:
                 async with _hf_sem:
@@ -2326,7 +2317,10 @@ async def get_contract_detail(request: Request, cid: int):
                     }), timeout=30)
                 u_rows = u_data.get("users", []) if u_data else []
                 if isinstance(u_rows, dict): u_rows = [u_rows]
-                if u_rows: username = u_rows[0].get("username")
+                if u_rows:
+                    username = u_rows[0].get("username")
+                    if username:
+                        await asyncio.to_thread(db.upsert_uid_usernames, {str(cp_uid): username})
             except Exception:
                 pass
 
