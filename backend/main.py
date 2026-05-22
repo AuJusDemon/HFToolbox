@@ -1656,8 +1656,6 @@ async def contracts_export(
         other_uid = str(r.get("otheruid") or "")
         user_is_init = init_uid == str(uid)
         cp_uid    = other_uid if user_is_init else init_uid
-        init_name = username_map.get(init_uid, "")
-        other_name = username_map.get(other_uid, "")
         cp_name   = username_map.get(cp_uid, "")
         user_side = "i" if user_is_init else "o"
         cp_side   = "o" if user_is_init else "i"
@@ -1666,9 +1664,8 @@ async def contracts_export(
             "status": STATUS_MAP.get(str(r.get("status_n") or ""), "Unknown"),
             "type": _perspective_type_row(r, uid),
             "role": "Initiator" if user_is_init else "Counterparty",
-            "counterparty": cp_name or cp_uid,
-            "counterparty_uid": cp_uid,
             "counterparty_username": cp_name,
+            "counterparty_uid": cp_uid,
             "value": _contract_value(r),
             "your_offer": _offer(r, user_side),
             "their_offer": _offer(r, cp_side),
@@ -1678,9 +1675,7 @@ async def contracts_export(
             "thread_url":  f"https://hackforums.net/showthread.php?tid={tid}" if tid else "",
             "contract_url": f"https://hackforums.net/contracts.php?action=view&cid={cid}",
             "initiator_uid": init_uid,
-            "initiator_username": init_name,
             "other_uid": other_uid,
-            "other_username": other_name,
             "raw_type": r.get("type_n") or "",
             "raw_status": r.get("status_n") or "",
             "iprice": r.get("iprice") or "",
@@ -1703,11 +1698,11 @@ async def contracts_export(
         buf = io.StringIO()
         fields = [
             "cid", "status", "type", "role",
-            "counterparty", "counterparty_uid", "counterparty_username",
+            "counterparty_username", "counterparty_uid",
             "value", "your_offer", "their_offer",
             "created_at", "dateline",
             "tid", "thread_url", "contract_url",
-            "initiator_uid", "initiator_username", "other_uid", "other_username",
+            "initiator_uid", "other_uid",
             "raw_type", "raw_status",
             "iprice", "icurrency", "iproduct", "oprice", "ocurrency", "oproduct",
         ]
