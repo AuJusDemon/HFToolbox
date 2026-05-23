@@ -839,9 +839,14 @@ async def lifespan(app: FastAPI):
         app.include_router(router)
         log.info("Mounted: %s", meta.id)
 
+    _disable_crawl = os.environ.get("DEV_DISABLE_CRAWL") == "1"
+    if _disable_crawl:
+        log.warning("DEV_DISABLE_CRAWL=1 — all background crawl/scheduler tasks disabled")
+
     # Start background polling
     from scheduler import start_scheduler
-    await start_scheduler()
+    if not _disable_crawl:
+        await start_scheduler()
 
     # Start hf_service background refresh worker
     import hf_service as _hfs
@@ -1032,7 +1037,8 @@ async def lifespan(app: FastAPI):
             _tick = TICK * (2 if _tl in ("low", "critical") else 1)
             await asyncio.sleep(_tick)
 
-    asyncio.create_task(_unified_loop(), name="unified_scheduler")
+    if not _disable_crawl:
+        asyncio.create_task(_unified_loop(), name="unified_scheduler")
 
     # Pre-warm sigmarket browse cache on startup from local DB only.
     async def _startup_browse_warm():
@@ -1048,11 +1054,12 @@ async def lifespan(app: FastAPI):
             log.warning("Startup browse warm failed: %s", e)
     asyncio.create_task(_startup_browse_warm(), name="startup_browse_warm")
 
-    # Start bytes history crawler (core, not a module)
-    asyncio.create_task(_bytes_crawl_loop(), name="bytes_crawler")
-    asyncio.create_task(_username_resolve_loop(), name="username_resolver")
-    asyncio.create_task(_tid_backfill_loop(),       name="tid_backfill")
-    asyncio.create_task(_trigger_listener(),   name="crawl_trigger_listener")
+    if not _disable_crawl:
+        # Start bytes history crawler (core, not a module)
+        asyncio.create_task(_bytes_crawl_loop(), name="bytes_crawler")
+        asyncio.create_task(_username_resolve_loop(), name="username_resolver")
+        asyncio.create_task(_tid_backfill_loop(),       name="tid_backfill")
+        asyncio.create_task(_trigger_listener(),   name="crawl_trigger_listener")
 
     yield
 

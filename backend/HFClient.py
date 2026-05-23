@@ -272,6 +272,9 @@ class HFClient:
         return await _request(self.token, "read", asks)
 
     async def write(self, asks: dict) -> dict | None:
+        if os.environ.get("DEV_DISABLE_HF_WRITES") == "1":
+            log.warning("DEV_DISABLE_HF_WRITES=1 — write blocked: %s", list(asks.keys()))
+            return None
         return await _request(self.token, "write", asks, max_retries=0)
 
     async def ping(self) -> bool:
