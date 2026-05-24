@@ -2639,7 +2639,7 @@ async def telegram_status(request: Request):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     link = await asyncio.to_thread(integration_db.get_telegram_link, uid)
     mode = await asyncio.to_thread(integration_db.get_integration_mode, uid)
-    bot_username = os.environ.get("RADAR_BOT_USERNAME", "HFRadarBot")
+    bot_username = os.environ.get("RADAR_BOT_USERNAME", "")
     return {
         "linked":       link is not None,
         "chat_id":      link["chat_id"] if link else None,
@@ -2655,7 +2655,7 @@ async def telegram_link_code(request: Request):
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     code = await asyncio.to_thread(integration_db.generate_link_code, uid)
-    bot_username = os.environ.get("RADAR_BOT_USERNAME", "HFRadarBot")
+    bot_username = os.environ.get("RADAR_BOT_USERNAME", "")
     return {
         "code":     code,
         "link":     f"https://t.me/{bot_username}?start=tb_{code}",
