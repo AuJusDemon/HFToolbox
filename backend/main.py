@@ -791,8 +791,6 @@ async def lifespan(app: FastAPI):
     loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=32))
     log.info("Thread pool: set to 32 workers")
 
-    _start_watchdog(loop)
-
     db.init_db()
     db.init_user_settings()
     db.init_notifications_table()
@@ -842,6 +840,8 @@ async def lifespan(app: FastAPI):
     _disable_crawl = os.environ.get("DEV_DISABLE_CRAWL") == "1"
     if _disable_crawl:
         log.warning("DEV_DISABLE_CRAWL=1 — all background crawl/scheduler tasks disabled")
+    else:
+        _start_watchdog(loop)
 
     # Start background polling
     from scheduler import start_scheduler
