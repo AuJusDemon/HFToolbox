@@ -13,6 +13,11 @@ const ago = ts => {
   return `${Math.floor(d/86400)}d ago`
 }
 
+const MODULE_ICONS = {
+  bytes: '💰', contracts: '📜', autobump: '⬆',
+  sigmarket: '✍', posting: '✏', wire: '📡',
+}
+
 function SectionLabel({ children }) {
   return (
     <div style={{
@@ -43,7 +48,6 @@ function Row({ label, hint, children, last }) {
   )
 }
 
-// Uses the existing .tog / .tog.off CSS classes from index.css
 function Toggle({ value, onChange }) {
   return (
     <button
@@ -64,7 +68,7 @@ function ApiProtectionSection({ settings, save }) {
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="card-head">
-        <span className="card-icon">🛡</span>
+        <span className="card-icon">API</span>
         <span className="card-title">API Protection</span>
         {apiPaused && (
           <span style={{ fontSize: 10, color: 'var(--red)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>
@@ -99,37 +103,34 @@ function ApiProtectionSection({ settings, save }) {
   )
 }
 
-// ── Section: Dashboard Sections ────────────────────────────────────────────────
+// ── Section: Module Visibility ─────────────────────────────────────────────────
 
 function VisibilitySection() {
-  const { isEnabled, setEnabled } = useStore()
-  const modules = [
-    { id: 'bytes',     icon: '💰', label: 'Bytes',       hint: 'Balance, history, stats, send & vault' },
-    { id: 'contracts', icon: '📜', label: 'Contracts',   hint: 'Contract list and analytics' },
-    { id: 'autobump',  icon: '⬆',  label: 'Auto Bumper', hint: 'Thread bump scheduler' },
-    { id: 'sigmarket', icon: '✍',  label: 'Sig Market',  hint: 'Your listing and active orders' },
-  ]
+  const { modules, isEnabled, setEnabled } = useStore()
+  const visible = modules.filter(m => m.id !== 'wire') // wire has no dashboard card
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="card-head">
-        <span className="card-icon">👁</span>
-        <span className="card-title">Dashboard Sections</span>
+        <span className="card-icon">VIS</span>
+        <span className="card-title">Module Visibility</span>
       </div>
       <div className="card-body">
         <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 12, lineHeight: 1.6 }}>
-          Toggle which sections appear on the dashboard. Disabled sections stop polling
-          entirely — useful if you don't use a feature.
+          Toggle which modules are active. Disabled modules stop polling entirely.
         </div>
-        {modules.map((m, i) => (
+        {visible.map((m, i) => (
           <Row
             key={m.id}
-            label={<><span style={{ marginRight: 6 }}>{m.icon}</span>{m.label}</>}
-            hint={m.hint}
-            last={i === modules.length - 1}
+            label={<><span style={{ marginRight: 6 }}>{MODULE_ICONS[m.id] || m.icon}</span>{m.name}</>}
+            hint={m.description}
+            last={i === visible.length - 1}
           >
             <Toggle value={isEnabled(m.id)} onChange={v => setEnabled(m.id, v)} />
           </Row>
         ))}
+        {!modules.length && (
+          <div style={{ fontSize: 12, color: 'var(--sub)', fontStyle: 'italic' }}>Loading modules…</div>
+        )}
       </div>
     </div>
   )
@@ -160,17 +161,22 @@ function CrawlerSection() {
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="card-head">
-        <span className="card-icon">🔄</span>
+        <span className="card-icon">SYN</span>
         <span className="card-title">Crawler Status</span>
         <span style={{ fontSize: 10, color: 'var(--sub)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>read-only</span>
       </div>
       <div className="card-body">
-        <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 12, lineHeight: 1.6 }}>
-          Background crawlers build your local transaction and contract history over time.
-          Full history is fetched once; after that only new entries are checked each cycle.
-        </div>
 
         {loading && <div className="spin" style={{ width: 16, height: 16, margin: '8px 0' }} />}
+
+        {!loading && status?.crawl_disabled && (
+          <div style={{
+            fontSize: 12, color: 'var(--yellow)', fontFamily: 'var(--mono)',
+            padding: '8px 10px', background: 'var(--b1)', borderRadius: 4, marginBottom: 12,
+          }}>
+            ⚠ Background crawl disabled (DEV_DISABLE_CRAWL=1) — data reflects last prod sync
+          </div>
+        )}
 
         {!loading && status && (() => {
           const b = status.bytes
@@ -178,6 +184,11 @@ function CrawlerSection() {
           const bDone = b.recv_done && b.sent_done
           return (
             <>
+              <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 12, lineHeight: 1.6 }}>
+                Background crawlers build your local transaction and contract history over time.
+                Full history is fetched once; after that only new entries are checked each cycle.
+              </div>
+
               <SectionLabel>Bytes history</SectionLabel>
               <StatRow label="Transactions stored" value={b.total_stored.toLocaleString()} />
               <StatRow label="Received" value={b.recv_done ? 'complete ✓' : `fetching page ${b.recv_page}`} color={b.recv_done ? 'var(--acc)' : undefined} />
@@ -205,8 +216,16 @@ function CrawlerSection() {
 // ── Section: Account ───────────────────────────────────────────────────────────
 
 function AccountSection() {
+  const user   = useStore(s => s.user)
   const logout = useStore(s => s.logout)
-  const [phase, setPhase] = useState('idle')
+  const [phase, setPhase]     = useState('idle')
+  const [tokenInfo, setTokenInfo] = useState(null)
+
+  useEffect(() => {
+    api.get('/api/crawl/status')
+      .then(d => setTokenInfo({ hasRefresh: d.has_refresh_token, lastActive: d.last_active }))
+      .catch(() => {})
+  }, [])
 
   const handleDelete = async () => {
     setPhase('deleting')
@@ -222,10 +241,25 @@ function AccountSection() {
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="card-head">
-        <span className="card-icon">👤</span>
+        <span className="card-icon">USR</span>
         <span className="card-title">Account</span>
       </div>
       <div className="card-body">
+        {user && (
+          <Row label="Logged in as" hint={`UID ${user.uid}`}>
+            <span style={{ fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{user.username}</span>
+          </Row>
+        )}
+        {tokenInfo && (
+          <Row
+            label="Auth token"
+            hint={tokenInfo.lastActive ? `Last active ${ago(tokenInfo.lastActive)}` : undefined}
+          >
+            <span style={{ fontSize: 12, fontFamily: 'var(--mono)', color: tokenInfo.hasRefresh ? 'var(--acc)' : 'var(--yellow)' }}>
+              {tokenInfo.hasRefresh ? 'active + refresh stored' : 'active — no refresh token'}
+            </span>
+          </Row>
+        )}
         <Row label="Log out" hint="End your current session">
           <button className="btn btn-ghost" onClick={logout}>Log out</button>
         </Row>
@@ -269,7 +303,7 @@ export default function Settings() {
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 4 }}>Settings</div>
         <div style={{ fontSize: 12, color: 'var(--sub)' }}>
-          API protection, section visibility, crawler status, and account management.
+          API protection, module visibility, crawler status, and account management.
         </div>
       </div>
 

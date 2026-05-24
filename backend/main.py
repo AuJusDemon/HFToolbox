@@ -2003,23 +2003,27 @@ async def crawl_status(request: Request):
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    import time as _t
     bytes_state     = await asyncio.to_thread(db.get_crawl_state, uid)
     contracts_state = await asyncio.to_thread(db.get_contracts_crawl_state, uid)
     bytes_count     = await asyncio.to_thread(db.get_bytes_history_count, uid)
     contracts_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
+    refresh_tok     = await asyncio.to_thread(db.get_refresh_token, uid)
+    last_active     = await asyncio.to_thread(db.get_last_active, uid)
 
     def fmt_ts(ts):
         if not ts: return None
         return int(ts)
 
     return {
+        "crawl_disabled":    os.environ.get("DEV_DISABLE_CRAWL") == "1",
+        "has_refresh_token": bool(refresh_tok),
+        "last_active":       fmt_ts(last_active),
         "bytes": {
-            "recv_page":  bytes_state.get("recv_page", 1),
-            "sent_page":  bytes_state.get("sent_page", 1),
-            "recv_done":  bool(bytes_state.get("recv_done")),
-            "sent_done":  bool(bytes_state.get("sent_done")),
-            "last_crawl": fmt_ts(bytes_state.get("last_crawl")),
+            "recv_page":    bytes_state.get("recv_page", 1),
+            "sent_page":    bytes_state.get("sent_page", 1),
+            "recv_done":    bool(bytes_state.get("recv_done")),
+            "sent_done":    bool(bytes_state.get("sent_done")),
+            "last_crawl":   fmt_ts(bytes_state.get("last_crawl")),
             "total_stored": bytes_count,
         },
         "contracts": {

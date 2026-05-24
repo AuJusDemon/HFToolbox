@@ -1430,3 +1430,19 @@ def delete_user_data(uid: str) -> None:
         delete_user_jobs(uid)
     except Exception:
         pass
+    # hf_resource_cache and hf_api_call_log (different column names — handled separately)
+    try:
+        with _db() as conn:
+            conn.execute("DELETE FROM hf_resource_cache WHERE owner_uid=?", (uid,))
+            for pattern in [
+                f"me:{uid}", f"bytes:{uid}:", f"contracts:{uid}:",
+                f"user:{uid}:", f"sigmarket:status:{uid}",
+                f"sigmarket:analytics:{uid}", f"threads:uid:{uid}:",
+            ]:
+                conn.execute(
+                    "DELETE FROM hf_resource_cache WHERE cache_key LIKE ?",
+                    (pattern + "%",),
+                )
+            conn.execute("DELETE FROM hf_api_call_log WHERE uid=?", (uid,))
+    except Exception:
+        pass
