@@ -290,14 +290,17 @@ class HFClient:
 # ── OAuth token exchange ───────────────────────────────────────────────────────
 
 def _sync_token_exchange(code: str, cfg: dict, proxies: dict):
+    payload = {
+        "grant_type":    "authorization_code",
+        "code":          code,
+        "client_id":     cfg["hf_client_id"],
+        "client_secret": cfg.get("hf_client_secret") or cfg.get("hf_secret"),
+    }
+    if cfg.get("redirect_uri"):
+        payload["redirect_uri"] = cfg["redirect_uri"]
     return requests.post(
         HF_AUTH,
-        data={
-            "grant_type":    "authorization_code",
-            "code":          code,
-            "client_id":     cfg["hf_client_id"],
-            "client_secret": cfg.get("hf_client_secret") or cfg.get("hf_secret"),
-        },
+        data=payload,
         headers=HEADERS,
         proxies=proxies,
         timeout=(5, 15),
@@ -316,7 +319,7 @@ async def exchange_code_for_token(code: str, cfg: dict):
                 data.get("expires_in"),
                 data.get("refresh_token"),
             )
-        log.error("Token exchange failed: HTTP %d", resp.status_code)
+        log.error("Token exchange failed: HTTP %d — %s", resp.status_code, resp.text[:300])
         return None, None, None
     except Exception as e:
         log.error("Token exchange error: %s", e)

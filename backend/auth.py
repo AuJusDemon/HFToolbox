@@ -39,7 +39,8 @@ async def login(request: Request, next: str = ""):
     request.session["oauth_next"]  = safe_next
     url = (
         f"https://hackforums.net/api/v2/authorize"
-        f"?response_type=code&client_id={CLIENT_ID}&state={full_state}"
+        f"?response_type=code&client_id={CLIENT_ID}"
+        f"&redirect_uri={REDIRECT_URI}&state={full_state}"
     )
     return RedirectResponse(url)
 
@@ -67,6 +68,7 @@ async def callback(
     cfg = {
         "hf_client_id":     CLIENT_ID,
         "hf_client_secret": CLIENT_SECRET,
+        "redirect_uri":     REDIRECT_URI,
     }
     access_token, token_expiry, refresh_token = await exchange_code_for_token(code, cfg)
 
