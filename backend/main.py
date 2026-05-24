@@ -1240,11 +1240,14 @@ async def shell_data(request: Request):
     notifs       = await asyncio.to_thread(db.get_notifications, uid, 30)
     unseen       = await asyncio.to_thread(db.get_unseen_count, uid)
     reply_count  = await asyncio.to_thread(_get_unread_count, uid)
+    user_row     = await asyncio.to_thread(db.get_user, uid)
+    token_expiry = int((user_row or {}).get("token_expiry") or 0)
     return {
-        "profile":      profile,
+        "profile":       profile,
         "notifications": notifs,
-        "unseen":       unseen,
-        "reply_count":  reply_count,
+        "unseen":        unseen,
+        "reply_count":   reply_count,
+        "token_expiry":  token_expiry,
     }
 
 
@@ -2007,8 +2010,10 @@ async def crawl_status(request: Request):
     contracts_state = await asyncio.to_thread(db.get_contracts_crawl_state, uid)
     bytes_count     = await asyncio.to_thread(db.get_bytes_history_count, uid)
     contracts_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
-    refresh_tok     = await asyncio.to_thread(db.get_refresh_token, uid)
-    last_active     = await asyncio.to_thread(db.get_last_active, uid)
+    user_row    = await asyncio.to_thread(db.get_user, uid)
+    refresh_tok = (user_row or {}).get("refresh_token") or None
+    last_active = await asyncio.to_thread(db.get_last_active, uid)
+    token_expiry = int((user_row or {}).get("token_expiry") or 0)
 
     def fmt_ts(ts):
         if not ts: return None
@@ -2017,6 +2022,7 @@ async def crawl_status(request: Request):
     return {
         "crawl_disabled":    os.environ.get("DEV_DISABLE_CRAWL") == "1",
         "has_refresh_token": bool(refresh_tok),
+        "token_expiry":      token_expiry,
         "last_active":       fmt_ts(last_active),
         "bytes": {
             "recv_page":    bytes_state.get("recv_page", 1),

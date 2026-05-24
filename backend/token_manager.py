@@ -60,6 +60,14 @@ async def try_refresh_token(uid: str) -> str | None:
     if not refresh_token:
         log.warning("token_manager: uid=%s has no stored refresh_token — marking dead", uid)
         await asyncio.to_thread(db.mark_token_dead, uid)
+        try:
+            await asyncio.to_thread(db.add_notification, uid, "token_dead",
+                "Token expired — re-authentication required",
+                "Autobump and background sync are paused. Log in again to resume.",
+                "/dashboard/settings", "token_dead",
+            )
+        except Exception:
+            pass
         return None
 
     log.info("token_manager: attempting token refresh for uid=%s", uid)
@@ -93,6 +101,14 @@ async def try_refresh_token(uid: str) -> str | None:
             uid, {k: v for k, v in body.items() if k != "refresh_token"},
         )
         await asyncio.to_thread(db.mark_token_dead, uid)
+        try:
+            await asyncio.to_thread(db.add_notification, uid, "token_dead",
+                "Token refresh failed — re-authentication required",
+                "Autobump and background sync are paused. Log in again to resume.",
+                "/dashboard/settings", "token_dead",
+            )
+        except Exception:
+            pass
         return None
 
     new_refresh = body.get("refresh_token") or refresh_token

@@ -104,6 +104,10 @@ const useStore = create((set, get) => ({
     } catch {}
   },
 
+  // ── Token expiry (unix timestamp — 0 means unknown) ───────────────────────
+  tokenExpiry: 0,
+  setTokenExpiry: (ts) => set({ tokenExpiry: ts }),
+
   // ── API rate-limit protection ───────────────────────────────────────────────
   apiPaused: false,
   setApiPaused: (paused) => set({ apiPaused: paused }),

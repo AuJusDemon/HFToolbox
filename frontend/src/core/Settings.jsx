@@ -218,12 +218,16 @@ function CrawlerSection() {
 function AccountSection() {
   const user   = useStore(s => s.user)
   const logout = useStore(s => s.logout)
-  const [phase, setPhase]     = useState('idle')
+  const [phase, setPhase]         = useState('idle')
   const [tokenInfo, setTokenInfo] = useState(null)
 
   useEffect(() => {
     api.get('/api/crawl/status')
-      .then(d => setTokenInfo({ hasRefresh: d.has_refresh_token, lastActive: d.last_active }))
+      .then(d => setTokenInfo({
+        hasRefresh:  d.has_refresh_token,
+        lastActive:  d.last_active,
+        tokenExpiry: d.token_expiry || 0,
+      }))
       .catch(() => {})
   }, [])
 
@@ -250,16 +254,47 @@ function AccountSection() {
             <span style={{ fontSize: 13, fontFamily: 'var(--mono)', color: 'var(--text)' }}>{user.username}</span>
           </Row>
         )}
-        {tokenInfo && (
-          <Row
-            label="Auth token"
-            hint={tokenInfo.lastActive ? `Last active ${ago(tokenInfo.lastActive)}` : undefined}
-          >
-            <span style={{ fontSize: 12, fontFamily: 'var(--mono)', color: tokenInfo.hasRefresh ? 'var(--acc)' : 'var(--yellow)' }}>
-              {tokenInfo.hasRefresh ? 'active + refresh stored' : 'active — no refresh token'}
-            </span>
-          </Row>
-        )}
+        {tokenInfo && (() => {
+          const exp   = tokenInfo.tokenExpiry
+          const now   = Math.floor(Date.now() / 1000)
+          const secs  = exp ? exp - now : null
+          const expired  = secs !== null && secs <= 0
+          const expLabel = !exp ? 'unknown'
+            : expired    ? 'expired'
+            : secs < 3600  ? `${Math.floor(secs / 60)}m`
+            : secs < 86400 ? `${Math.floor(secs / 3600)}h`
+            : `${Math.floor(secs / 86400)}d`
+          const expColor = !exp ? 'var(--sub)'
+            : expired       ? 'var(--red)'
+            : secs < 86400  ? 'var(--red)'
+            : secs < 604800 ? 'var(--yellow)'
+            : 'var(--acc)'
+          return (
+            <>
+              <Row
+                label="Auth token"
+                hint={tokenInfo.hasRefresh ? 'Refresh token stored — auto-renews on expiry' : 'No refresh token — manual re-auth required when expired'}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 12, fontFamily: 'var(--mono)', color: expColor }}>
+                    {expired ? 'expired' : `expires ${expLabel}`}
+                  </span>
+                  <a
+                    href="/auth/login"
+                    style={{
+                      fontSize: 11, padding: '3px 8px',
+                      border: '1px solid var(--b3)', color: 'var(--sub)',
+                      textDecoration: 'none', fontFamily: 'var(--mono)',
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    re-auth
+                  </a>
+                </div>
+              </Row>
+            </>
+          )
+        })()}
         <Row label="Log out" hint="End your current session">
           <button className="btn btn-ghost" onClick={logout}>Log out</button>
         </Row>

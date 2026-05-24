@@ -11,6 +11,7 @@ Routes:
 
 import os
 import secrets
+import time as _time
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 from HFClient import exchange_code_for_token, HFClient
@@ -107,9 +108,12 @@ async def callback(
         uid, str(me.get("username") or ""), access_token,
         clean_av, groups,
     )
+    # expires_in is relative seconds — convert to absolute timestamp
+    expiry_ts = int(_time.time()) + int(token_expiry) if token_expiry else 0
     if refresh_token:
-        expiry_ts = int(token_expiry) if token_expiry else 0
         await asyncio.to_thread(db.store_refresh_token, uid, str(refresh_token), expiry_ts)
+    elif expiry_ts:
+        await asyncio.to_thread(db.update_token_expiry, uid, expiry_ts)
     await asyncio.to_thread(db.mark_token_dead, uid, False)
     await asyncio.to_thread(db.update_profile_cache, uid, {
         "postnum":      me.get("postnum"),

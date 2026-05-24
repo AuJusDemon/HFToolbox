@@ -150,6 +150,38 @@ function NavLink({ to, icon, label, badge, badgeRed, onClick }) {
   )
 }
 
+function TokenExpiryBanner() {
+  const tokenExpiry = useStore(s => s.tokenExpiry)
+  if (!tokenExpiry) return null
+  const secsLeft = tokenExpiry - Math.floor(Date.now() / 1000)
+  const WARN_WINDOW = 48 * 3600
+  if (secsLeft > WARN_WINDOW) return null
+  const expired = secsLeft <= 0
+  const hoursLeft = Math.max(0, Math.floor(secsLeft / 3600))
+  const label = expired
+    ? '! Token expired — autobump and background sync are paused'
+    : `! Token expires in ${hoursLeft}h — autobump will pause when it does`
+  return (
+    <div style={{
+      background: expired ? 'rgba(255,51,51,.06)' : 'rgba(255,200,0,.05)',
+      borderBottom: `1px solid ${expired ? 'rgba(255,51,51,.2)' : 'rgba(255,200,0,.2)'}`,
+      padding: '7px 16px', display: 'flex', alignItems: 'center', gap: 10,
+      fontSize: 11, color: expired ? 'var(--red)' : 'var(--yellow)', fontFamily: 'var(--mono)',
+    }}>
+      <span>{label}</span>
+      <a
+        href="/auth/login"
+        style={{
+          fontSize: 10, color: 'inherit', opacity: .7, marginLeft: 'auto',
+          textDecoration: 'underline', fontFamily: 'var(--mono)', cursor: 'pointer',
+        }}
+      >
+        [re-authenticate]
+      </a>
+    </div>
+  )
+}
+
 function ApiPausedBanner() {
   const apiPaused = useStore(s => s.apiPaused)
   const settings  = useStore(s => s.settings)
@@ -198,7 +230,7 @@ function NotifPanel({ notifs, unseenCount, setNotifOpen, setUnseenCount, setNoti
             {'> no entries'}
           </div>
         : notifs.map(n => {
-            const ICONS = { pm:'PM', contract_new:'CTR', contract_status:'UPD', reply:'RPL' }
+            const ICONS = { pm:'PM', contract_new:'CTR', contract_status:'UPD', reply:'RPL', token_dead:'AUTH' }
             const tag   = ICONS[n.type] || '---'
             const ts    = n.created_at ? Math.floor(Date.now()/1000) - n.created_at : 0
             const timeStr = ts < 60 ? 'now' : ts < 3600 ? `${Math.floor(ts/60)}m` : ts < 86400 ? `${Math.floor(ts/3600)}h` : `${Math.floor(ts/86400)}d`
@@ -295,6 +327,8 @@ export default function Shell() {
   const loc    = useLocation()
   const [theme, setTheme] = useTheme()
 
+  const setTokenExpiry = useStore(s => s.setTokenExpiry)
+
   const [profile,     setProfile]     = useState(null)
   const [replyCount,  setReplyCount]  = useState(0)
   const [notifs,      setNotifs]      = useState([])
@@ -307,10 +341,11 @@ export default function Shell() {
   useEffect(() => {
     const poll = () => api.get('/api/shell-data').then(d => {
       if (!d) return
-      if (d.profile)        setProfile(d.profile)
+      if (d.profile)             setProfile(d.profile)
       if (d.reply_count != null) setReplyCount(d.reply_count)
-      if (d.notifications)  setNotifs(d.notifications)
-      if (d.unseen != null) setUnseenCount(d.unseen)
+      if (d.notifications)       setNotifs(d.notifications)
+      if (d.unseen != null)      setUnseenCount(d.unseen)
+      if (d.token_expiry != null) setTokenExpiry(d.token_expiry)
     }).catch(()=>{})
     poll(); const id = setInterval(poll, 60000); return () => clearInterval(id)
   }, [])
@@ -432,6 +467,7 @@ export default function Shell() {
 
         {/* ── MAIN ── */}
         <div className="main">
+          <TokenExpiryBanner />
           <ApiPausedBanner />
 
           {/* Topbar */}

@@ -318,6 +318,12 @@ def get_refresh_token(uid: str) -> str | None:
         return val or None
 
 
+def update_token_expiry(uid: str, expiry_ts: int) -> None:
+    """Store the absolute token expiry timestamp without touching refresh_token."""
+    with _db() as conn:
+        conn.execute("UPDATE users SET token_expiry=%s WHERE uid=%s", (expiry_ts, uid))
+
+
 def mark_token_dead(uid: str, dead: bool = True) -> None:
     """Flag a user's token as dead (expired/revoked, refresh failed)."""
     with _db() as conn:
