@@ -230,7 +230,7 @@ function NotifPanel({ notifs, unseenCount, setNotifOpen, setUnseenCount, setNoti
             {'> no entries'}
           </div>
         : notifs.map(n => {
-            const ICONS = { pm:'PM', contract_new:'CTR', contract_status:'UPD', reply:'RPL', token_dead:'AUTH' }
+            const ICONS = { pm:'PM', pm_unread_increase:'PM', contract_new:'CTR', contract_status:'UPD', reply:'RPL', reply_tracked_thread:'RPL', token_dead:'AUTH' }
             const tag   = ICONS[n.type] || '---'
             const ts    = n.created_at ? Math.floor(Date.now()/1000) - n.created_at : 0
             const timeStr = ts < 60 ? 'now' : ts < 3600 ? `${Math.floor(ts/60)}m` : ts < 86400 ? `${Math.floor(ts/3600)}h` : `${Math.floor(ts/86400)}d`

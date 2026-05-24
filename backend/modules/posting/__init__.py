@@ -33,6 +33,7 @@ from .posting_db import (
     get_unread_count,
 )
 import db
+import integration_db
 
 log = logging.getLogger("posting")
 
@@ -340,6 +341,14 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             await asyncio.to_thread(
                 upsert_reply, uid, tid_str, pid_str, thread_title,
                 post_uid, post_username, post_date, preview, post_message,
+            )
+            await asyncio.to_thread(
+                integration_db.create_alert_event,
+                uid, "reply_tracked_thread", f"pid:{pid_str}",
+                f"Reply in: {thread_title or tid_str}",
+                f"{post_username}: {preview}" if post_username else preview,
+                f"https://hackforums.net/showthread.php?tid={tid_str}&pid={pid_str}#pid{pid_str}",
+                "toolbox", None, False,
             )
 
         # ── Update last_pid cursors ──────────────────────────────────────────

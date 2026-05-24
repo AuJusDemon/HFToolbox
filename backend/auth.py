@@ -16,6 +16,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 from HFClient import exchange_code_for_token, HFClient
 import db
+import integration_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -110,6 +111,7 @@ async def callback(
         uid, str(me.get("username") or ""), access_token,
         clean_av, groups,
     )
+    await asyncio.to_thread(integration_db.upsert_integration_account, uid)
     # expires_in is relative seconds — convert to absolute timestamp
     expiry_ts = int(_time.time()) + int(token_expiry) if token_expiry else 0
     if refresh_token:

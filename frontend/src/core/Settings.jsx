@@ -213,6 +213,152 @@ function CrawlerSection() {
   )
 }
 
+// ── Section: Telegram Alerts ──────────────────────────────────────────────────
+
+function TelegramSection() {
+  const [status,    setStatus]    = useState(null)
+  const [loading,   setLoading]   = useState(true)
+  const [linkData,  setLinkData]  = useState(null)
+  const [generating, setGenerating] = useState(false)
+  const [copied,    setCopied]    = useState(false)
+  const [unlinking, setUnlinking] = useState(false)
+
+  const loadStatus = () => {
+    setLoading(true)
+    api.get('/api/telegram/status')
+      .then(d => { setStatus(d); setLoading(false) })
+      .catch(() => setLoading(false))
+  }
+
+  useEffect(() => { loadStatus() }, [])
+
+  const generate = async () => {
+    setGenerating(true)
+    try {
+      const d = await api.post('/api/telegram/link-code')
+      setLinkData(d)
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const copy = () => {
+    if (!linkData?.link) return
+    navigator.clipboard.writeText(linkData.link).catch(() => {})
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1800)
+  }
+
+  const unlink = async () => {
+    setUnlinking(true)
+    try {
+      await api.post('/api/telegram/unlink')
+      setLinkData(null)
+      loadStatus()
+    } finally {
+      setUnlinking(false)
+    }
+  }
+
+  const mono = { fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--sub)' }
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="card-head">
+        <span className="card-icon">TG</span>
+        <span className="card-title">Telegram Alerts</span>
+        {status?.linked && (
+          <span style={{ fontSize: 10, color: 'var(--acc)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>
+            ● linked
+          </span>
+        )}
+      </div>
+      <div className="card-body">
+        <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 12, lineHeight: 1.6 }}>
+          Get instant Telegram alerts for contracts, PMs, and thread replies via HF Radar.
+        </div>
+
+        {loading && <div className="spin" style={{ width: 16, height: 16, margin: '8px 0' }} />}
+
+        {!loading && status?.linked && (
+          <>
+            <Row label="Status" hint={`Chat ID: ${status.chat_id} · linked ${ago(status.linked_at)}`}>
+              <span style={{ ...mono, color: 'var(--acc)' }}>connected</span>
+            </Row>
+            <Row label="Disconnect" hint="Removes the Telegram link — alerts will stop" last>
+              <button
+                className="btn btn-ghost"
+                onClick={unlink}
+                disabled={unlinking}
+                style={{ fontSize: 11 }}
+              >
+                {unlinking ? 'Disconnecting…' : 'Disconnect'}
+              </button>
+            </Row>
+          </>
+        )}
+
+        {!loading && !status?.linked && !linkData && (
+          <Row label="Connect Telegram" hint="Generates a one-time link — open it in Telegram to link your account" last>
+            <button
+              className="btn btn-ghost"
+              onClick={generate}
+              disabled={generating}
+              style={{ fontSize: 11 }}
+            >
+              {generating ? 'Generating…' : 'Generate link'}
+            </button>
+          </Row>
+        )}
+
+        {!loading && linkData && (
+          <>
+            <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 8, lineHeight: 1.6 }}>
+              Open this link in Telegram. It expires in {Math.floor(linkData.expires / 60)} minutes.
+            </div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: 'var(--b1)', borderRadius: 4, padding: '8px 10px', marginBottom: 10,
+            }}>
+              <span style={{
+                ...mono, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {linkData.link}
+              </span>
+              <button
+                className="btn btn-ghost"
+                onClick={copy}
+                style={{ fontSize: 10, padding: '2px 8px', flexShrink: 0 }}
+              >
+                {copied ? '✓ copied' : 'copy'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <a
+                href={linkData.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-ghost"
+                style={{ fontSize: 11 }}
+              >
+                Open in Telegram ↗
+              </a>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setLinkData(null)}
+                style={{ fontSize: 11 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 // ── Section: Account ───────────────────────────────────────────────────────────
 
 function AccountSection() {
@@ -345,6 +491,7 @@ export default function Settings() {
       <ApiProtectionSection settings={settings} save={saveSettings} />
       <VisibilitySection />
       <CrawlerSection />
+      <TelegramSection />
       <AccountSection />
     </>
   )

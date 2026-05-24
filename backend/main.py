@@ -29,6 +29,7 @@ except ImportError:
 
 import db
 import auth
+import integration_db
 from module_registry import all_modules, all_routers
 
 logging.basicConfig(
@@ -224,11 +225,12 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                     status_n = str(c.get("status_n", c.get("status", "")))
                     status_label = STATUS_LABELS.get(status_n, f"Status {status_n}")
                     await asyncio.to_thread(
-                        db.add_notification, uid, "contract_new",
+                        integration_db.create_alert_event,
+                        uid, "contract_new", f"cid:{cid}",
                         f"New contract #{cid}",
                         f"Status: {status_label}",
                         f"/dashboard/contracts/{cid}",
-                        f"new_{cid}"
+                        "toolbox", None, True,
                     )
             except Exception as e:
                 log.warning("Crawl: contract notification failed uid=%s: %s", uid, e)
@@ -404,9 +406,13 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             if unread > 0:
                 last_pm = await asyncio.to_thread(db.get_last_pm_count, uid)
                 if last_pm is None or unread > last_pm:
-                    await asyncio.to_thread(db.add_notification, uid, "pm",
+                    await asyncio.to_thread(
+                        integration_db.create_alert_event,
+                        uid, "pm_unread_increase", f"unread:{unread}",
                         f"You have {unread} unread PM{'s' if unread != 1 else ''}",
-                        "", "https://hackforums.net/private.php", f"pm_{unread}")
+                        "", "https://hackforums.net/private.php",
+                        "toolbox", None, True,
+                    )
                 await asyncio.to_thread(db.set_last_pm_count, uid, unread)
             else:
                 await asyncio.to_thread(db.set_last_pm_count, uid, 0)
@@ -794,6 +800,7 @@ async def lifespan(app: FastAPI):
     db.init_db()
     db.init_user_settings()
     db.init_notifications_table()
+    integration_db.init_integration_tables()
     from modules.posting.posting_db import init_posting_db
     init_posting_db()
     from modules.sigmarket.sigmarket_db import init_sigmarket_db
@@ -2623,6 +2630,47 @@ def _manifest_exclusions() -> dict:
         "env_files": [".env", ".env.* except .env.example"],
         "suffixes": list(_MANIFEST_EXCLUDE_SUFFIXES),
     }
+
+
+@app.get("/api/telegram/status")
+async def telegram_status(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    link = await asyncio.to_thread(integration_db.get_telegram_link, uid)
+    mode = await asyncio.to_thread(integration_db.get_integration_mode, uid)
+    bot_username = os.environ.get("RADAR_BOT_USERNAME", "HFRadarBot")
+    return {
+        "linked":       link is not None,
+        "chat_id":      link["chat_id"] if link else None,
+        "linked_at":    link["linked_at"] if link else None,
+        "mode":         mode,
+        "bot_username": bot_username,
+    }
+
+
+@app.post("/api/telegram/link-code")
+async def telegram_link_code(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    code = await asyncio.to_thread(integration_db.generate_link_code, uid)
+    bot_username = os.environ.get("RADAR_BOT_USERNAME", "HFRadarBot")
+    return {
+        "code":     code,
+        "link":     f"https://t.me/{bot_username}?start=tb_{code}",
+        "expires":  integration_db.LINK_CODE_TTL,
+    }
+
+
+@app.post("/api/telegram/unlink")
+async def telegram_unlink(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    await asyncio.to_thread(integration_db.unlink_telegram, uid)
+    await asyncio.to_thread(integration_db.set_integration_mode, uid, "toolbox_only")
+    return {"ok": True}
 
 
 @app.get("/health")
