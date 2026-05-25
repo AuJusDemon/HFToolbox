@@ -218,8 +218,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             tracked  = tid_map.get(tid_str, {})
             last_pid = tracked.get("last_pid")
 
-            # Treat NULL/0 last_pid as 0 — normal processing will queue any
-            # non-self posts found. Handles first-time and recovery cases.
+            seed_only = not last_pid or last_pid == "0"
             if not last_pid:
                 last_pid = "0"
 
@@ -303,8 +302,9 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 if int(max_pid) > last_pid_int or firstpost_pid > 0:
                     tid_max_pid[tid_str] = max_pid
 
-                for p in new_posts:
-                    pending.append({"tid_str": tid_str, "thread_title": thread_title, "post": p})
+                if not seed_only:
+                    for p in new_posts:
+                        pending.append({"tid_str": tid_str, "thread_title": thread_title, "post": p})
 
             except Exception as e:
                 log.warning("Reply poll: post fetch failed uid=%s tid=%s: %s", uid, tid_str, e)
