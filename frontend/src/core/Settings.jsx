@@ -215,12 +215,6 @@ function CrawlerSection() {
 
 // ── Section: Telegram Alerts ──────────────────────────────────────────────────
 
-const PREF_LABELS = {
-  contract_new:        { label: 'Contracts',       hint: 'New contracts awarded to you' },
-  pm_unread_increase:  { label: 'Private messages', hint: 'When your unread PM count increases' },
-  reply_tracked_thread:{ label: 'Thread replies',   hint: 'Replies in threads you are tracking' },
-}
-
 function TelegramSection() {
   const [status,     setStatus]     = useState(null)
   const [loading,    setLoading]    = useState(true)
@@ -228,7 +222,6 @@ function TelegramSection() {
   const [generating, setGenerating] = useState(false)
   const [copied,     setCopied]     = useState(false)
   const [unlinking,  setUnlinking]  = useState(false)
-  const [prefs,      setPrefs]      = useState(null)
   const pollRef = useRef(null)
 
   const loadStatus = () => {
@@ -239,14 +232,6 @@ function TelegramSection() {
   }
 
   useEffect(() => { loadStatus() }, [])
-
-  // Load preferences when linked
-  useEffect(() => {
-    if (!status?.linked) { setPrefs(null); return }
-    api.get('/api/telegram/preferences')
-      .then(d => setPrefs(d))
-      .catch(() => {})
-  }, [status?.linked])
 
   // Poll for link completion while a code is pending
   useEffect(() => {
@@ -290,19 +275,9 @@ function TelegramSection() {
     try {
       await api.post('/api/telegram/unlink')
       setLinkData(null)
-      setPrefs(null)
       loadStatus()
     } finally {
       setUnlinking(false)
-    }
-  }
-
-  const setPref = async (type, val) => {
-    setPrefs(p => ({ ...p, [type]: val }))
-    try {
-      await api.post(`/api/telegram/preferences/${type}`, { enabled: val })
-    } catch {
-      setPrefs(p => ({ ...p, [type]: !val }))
     }
   }
 
@@ -331,7 +306,7 @@ function TelegramSection() {
             <Row label="Status" hint={`Chat ID: ${status.chat_id} · linked ${ago(status.linked_at)}`}>
               <span style={{ ...mono, color: 'var(--acc)' }}>connected</span>
             </Row>
-            <Row label="Disconnect" hint="Removes the Telegram link — alerts will stop">
+            <Row label="Disconnect" hint="Removes the Telegram link — alerts will stop" last>
               <button
                 className="btn btn-ghost"
                 onClick={unlink}
@@ -341,16 +316,6 @@ function TelegramSection() {
                 {unlinking ? 'Disconnecting…' : 'Disconnect'}
               </button>
             </Row>
-            {prefs && (
-              <>
-                <SectionLabel>Alert types</SectionLabel>
-                {Object.entries(PREF_LABELS).map(([type, { label, hint }], i, arr) => (
-                  <Row key={type} label={label} hint={hint} last={i === arr.length - 1}>
-                    <Toggle value={prefs[type] !== false} onChange={v => setPref(type, v)} />
-                  </Row>
-                ))}
-              </>
-            )}
           </>
         )}
 
