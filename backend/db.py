@@ -256,6 +256,32 @@ def get_existing_contract_cids(uid: str, cids: list) -> set:
         return {row[0] for row in rows}
 
 
+def get_contracts_statuses(uid: str, cids: list) -> dict:
+    """Return {cid: {status_n, brating}} for the given CIDs. Used to detect changes before upsert."""
+    if not cids:
+        return {}
+    with _db() as conn:
+        placeholders = ",".join("?" * len(cids))
+        rows = conn.execute(
+            f"SELECT cid, status_n, brating FROM contracts_history WHERE uid=? AND cid IN ({placeholders})",
+            (uid, *cids)
+        ).fetchall()
+    return {str(r["cid"]): {"status_n": str(r["status_n"] or ""), "brating": str(r.get("brating") or "")} for r in rows}
+
+
+def get_existing_bytes_ids(uid: str, ids: list) -> set:
+    """Return set of bytes transaction IDs already stored for this user."""
+    if not ids:
+        return set()
+    with _db() as conn:
+        placeholders = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT id FROM bytes_history WHERE uid=? AND id IN ({placeholders})",
+            (uid, *ids)
+        ).fetchall()
+    return {str(r["id"]) for r in rows}
+
+
 def get_last_pm_count(uid: str) -> int | None:
     with _db() as conn:
         row = conn.execute("SELECT last_unreadpms FROM users WHERE uid=?", (uid,)).fetchone()
@@ -669,6 +695,10 @@ def init_contracts_history():
             conn.execute("ALTER TABLE contracts_crawl_state ADD COLUMN last_recheck_ts BIGINT DEFAULT 0")
         except Exception:
             pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN brating TEXT DEFAULT ''")
+        except Exception:
+            pass  # Column already exists
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
@@ -681,8 +711,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                 conn.execute("""
                     INSERT INTO contracts_history
                         (uid,cid,status_n,type_n,inituid,otheruid,
-                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,dateline,tid)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,dateline,tid,brating)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(uid,cid) DO UPDATE SET
                         status_n=excluded.status_n,
                         dateline=excluded.dateline,
@@ -694,7 +724,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                         ocurrency=excluded.ocurrency,
                         iproduct=excluded.iproduct,
                         oproduct=excluded.oproduct,
-                        tid=excluded.tid
+                        tid=excluded.tid,
+                        brating=excluded.brating
                 """, (
                     uid, str(c.get("cid","")),
                     str(c.get("status","")), str(c.get("type","")),
@@ -704,6 +735,7 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     e(c.get("iproduct","")), e(c.get("oproduct","")),
                     int(c.get("dateline") or 0),
                     e(c.get("tid","")),
+                    e(c.get("brating","")),
                 ))
                 count += 1
             except Exception:

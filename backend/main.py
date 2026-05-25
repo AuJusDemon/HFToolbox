@@ -133,7 +133,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             "iprice": True, "icurrency": True,
             "oprice": True, "ocurrency": True,
             "iproduct": True, "oproduct": True,
-            "dateline": True, "tid": True,
+            "dateline": True, "tid": True, "brating": True,
         },
         "threads": {
             "_uid": [uid_int], "_page": 1, "_perpage": 30,
@@ -157,7 +157,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             "iprice": True, "icurrency": True,
             "oprice": True, "ocurrency": True,
             "iproduct": True, "oproduct": True,
-            "dateline": True, "tid": True,
+            "dateline": True, "tid": True, "brating": True,
         }
     data2 = await asyncio.wait_for(client.read(call2_ask), timeout=35)
 
@@ -171,6 +171,30 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
 
     recv_txns = parse_bytes(data1, False)
     sent_txns = parse_bytes(data2, True)
+
+    # Detect new received transactions before they get upserted (dedup by ID)
+    if recv_done and recv_txns:
+        try:
+            recv_ids = [str(t["id"]) for t in recv_txns if t.get("id")]
+            existing_recv_ids = await asyncio.to_thread(db.get_existing_bytes_ids, uid, recv_ids)
+            for t in recv_txns:
+                txn_id = str(t.get("id") or "")
+                if not txn_id or txn_id in existing_recv_ids:
+                    continue
+                amount = str(t.get("amount") or "")
+                reason = str(t.get("reason") or "")
+                title = f"+{amount} bytes"
+                body  = reason[:120] if reason else ""
+                await asyncio.to_thread(
+                    integration_db.create_alert_event,
+                    uid, "bytes_received", f"txn:{txn_id}",
+                    title, body,
+                    "https://hackforums.net/private.php?action=send",
+                    "toolbox", None, True,
+                )
+        except Exception as e:
+            log.warning("Crawl: bytes_received alert failed uid=%s: %s", uid, e)
+
     await asyncio.to_thread(db.upsert_bytes_txns, uid, recv_txns + sent_txns)
 
     new_recv_done = recv_done or len(recv_txns) < 30
@@ -256,7 +280,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                         "iprice": True, "icurrency": True,
                         "oprice": True, "ocurrency": True,
                         "iproduct": True, "oproduct": True,
-                        "dateline": True, "tid": True,
+                        "dateline": True, "tid": True, "brating": True,
                     }}), timeout=12)
                 except asyncio.TimeoutError:
                     log.warning("Contracts re-check: API timeout uid=%s", uid)
@@ -265,8 +289,47 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                     updated = r.get("contracts", [])
                     if isinstance(updated, dict): updated = [updated]
                     if updated:
+                        # Snapshot current status/brating before overwriting so we can detect changes
+                        try:
+                            _recheck_cids = [str(c.get("cid","")) for c in updated if c.get("cid")]
+                            _before = await asyncio.to_thread(db.get_contracts_statuses, uid, _recheck_cids)
+                        except Exception:
+                            _before = {}
                         await asyncio.to_thread(db.upsert_contracts, uid, updated)
                         log.info("Contracts re-check uid=%s updated %d open contracts", uid, len(updated))
+                        # Fire contract change alerts
+                        try:
+                            STATUS_LABELS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
+                                             "6":"Complete","7":"Disputed","8":"Expired"}
+                            for c in updated:
+                                cid       = str(c.get("cid",""))
+                                new_sn    = str(c.get("status",""))
+                                new_br    = str(c.get("brating") or "")
+                                old_entry = _before.get(cid, {})
+                                old_sn    = old_entry.get("status_n","")
+                                old_br    = old_entry.get("brating","")
+                                if not cid or not old_entry:
+                                    continue
+                                if new_sn and new_sn != old_sn:
+                                    label = STATUS_LABELS.get(new_sn, f"Status {new_sn}")
+                                    atype = "contract_dispute" if new_sn == "7" else "contract_status_change"
+                                    await asyncio.to_thread(
+                                        integration_db.create_alert_event,
+                                        uid, atype, f"cid:{cid}:status:{new_sn}",
+                                        f"Contract #{cid} — {label}",
+                                        "", f"/dashboard/contracts/{cid}",
+                                        "toolbox", None, True,
+                                    )
+                                if new_br and new_br != old_br:
+                                    await asyncio.to_thread(
+                                        integration_db.create_alert_event,
+                                        uid, "contract_b_rating", f"cid:{cid}:brating",
+                                        f"Contract #{cid} — B-rating received",
+                                        "", f"/dashboard/contracts/{cid}",
+                                        "toolbox", None, True,
+                                    )
+                        except Exception as e:
+                            log.warning("Contracts re-check: alert failed uid=%s: %s", uid, e)
             await asyncio.to_thread(db.update_contracts_crawl_state, uid, last_recheck_ts=_now_ts)
     except Exception as e:
         log.warning("Contracts re-check failed uid=%s: %s", uid, e)
@@ -968,6 +1031,23 @@ async def lifespan(app: FastAPI):
                                 if not token:
                                     log.warning("Scheduler: uid=%s refresh failed — skipping autobump", uid)
                                     continue
+                            # Warn if token expiring within 72 hours
+                            try:
+                                import time as _tnow
+                                _user_row    = await asyncio.to_thread(db.get_user, uid)
+                                _tok_expiry  = int((_user_row or {}).get("token_expiry") or 0)
+                                _secs_left   = _tok_expiry - _tnow.time() if _tok_expiry else None
+                                if _secs_left is not None and 0 < _secs_left < 72 * 3600:
+                                    _hrs = int(_secs_left // 3600)
+                                    await asyncio.to_thread(
+                                        integration_db.create_alert_event,
+                                        uid, "token_expiring", f"token_expiring:{_tok_expiry}",
+                                        "Auth token expiring soon",
+                                        f"Expires in ~{_hrs} hour{'s' if _hrs != 1 else ''}. Log in to HFToolbox to refresh it before autobump stops.",
+                                        "/dashboard/settings", "toolbox", None, True,
+                                    )
+                            except Exception:
+                                pass
                             try:
                                 await poll_autobump(uid, token)
                                 await poll_sigmarket_rotations(uid, token)
@@ -985,6 +1065,33 @@ async def lifespan(app: FastAPI):
                                     log.warning("Scheduler: uid=%s refresh failed — clearing token", uid)
                                     await asyncio.to_thread(db.clear_token, uid)
                         _last_autobump = _t.time()
+                        # Daily bump digest — once per day per user if bumps ran
+                        try:
+                            from modules.autobump.autobump_db import get_bumped_since
+                            from datetime import datetime as _dt
+                            _today = _dt.utcnow().strftime("%Y-%m-%d")
+                            _since = int(_dt.utcnow().replace(hour=0, minute=0, second=0).timestamp())
+                            for uid in uids:
+                                bumps = await asyncio.to_thread(get_bumped_since, uid, _since)
+                                if not bumps:
+                                    continue
+                                thread_titles = list(dict.fromkeys(
+                                    b.get("thread_title") or f"TID {b['tid']}" for b in bumps
+                                ))
+                                n_bumps   = len(bumps)
+                                n_threads = len(thread_titles)
+                                preview   = ", ".join(thread_titles[:3])
+                                if n_threads > 3:
+                                    preview += f" +{n_threads - 3} more"
+                                await asyncio.to_thread(
+                                    integration_db.create_alert_event,
+                                    uid, "autobump_daily", f"autobump_daily:{_today}",
+                                    f"{n_bumps} bump{'s' if n_bumps != 1 else ''} ran today",
+                                    preview,
+                                    "/dashboard/autobump", "toolbox", None, True,
+                                )
+                        except Exception as _e:
+                            log.warning("Unified scheduler: daily digest error: %s", _e)
                     except Exception as e:
                         log.exception("Unified scheduler: autobump error: %s", e)
 

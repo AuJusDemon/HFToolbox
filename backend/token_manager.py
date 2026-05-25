@@ -68,6 +68,18 @@ async def try_refresh_token(uid: str) -> str | None:
             )
         except Exception:
             pass
+        try:
+            import time as _t, integration_db as _idb
+            _day = str(int(_t.time()) // 86400)
+            await asyncio.to_thread(
+                _idb.create_alert_event,
+                uid, "token_dead", f"token_dead:{_day}",
+                "Token expired — re-authentication required",
+                "Log back in to HFToolbox to resume autobump and alerts.",
+                "/dashboard/settings", "toolbox", None, True,
+            )
+        except Exception:
+            pass
         return None
 
     log.info("token_manager: attempting token refresh for uid=%s", uid)
@@ -106,6 +118,18 @@ async def try_refresh_token(uid: str) -> str | None:
                 "Token refresh failed — re-authentication required",
                 "Autobump and background sync are paused. Log in again to resume.",
                 "/dashboard/settings", "token_dead",
+            )
+        except Exception:
+            pass
+        try:
+            import time as _t, integration_db as _idb
+            _day = str(int(_t.time()) // 86400)
+            await asyncio.to_thread(
+                _idb.create_alert_event,
+                uid, "token_dead", f"token_dead:{_day}",
+                "Token refresh failed — re-authentication required",
+                "Log back in to HFToolbox to resume autobump and alerts.",
+                "/dashboard/settings", "toolbox", None, True,
             )
         except Exception:
             pass

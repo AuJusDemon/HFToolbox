@@ -102,12 +102,38 @@ async def poll_autobump(polling_uid: str, polling_token: str) -> None:
                         "skipped",
                         f"Weekly budget exceeded ({bytes_spent_this_week}/{weekly_budget} bytes)"
                     )
+                try:
+                    import time as _t
+                    from datetime import datetime as _dt
+                    _isoweek = _dt.utcfromtimestamp(_t.time()).strftime("%Y-W%W")
+                    import integration_db as _idb
+                    await asyncio.to_thread(
+                        _idb.create_alert_event,
+                        uid, "autobump_budget", f"autobump_budget:{_isoweek}",
+                        "Autobump weekly budget hit",
+                        f"Spent {bytes_spent_this_week:,} / {weekly_budget:,} bytes this week. Bumps are paused until next week.",
+                        "/dashboard/autobump", "toolbox", None, True,
+                    )
+                except Exception:
+                    pass
                 return
 
         # Skip immediately if token is known dead — don't waste API calls
         token_dead = await asyncio.to_thread(db.is_token_dead, uid)
         if token_dead:
             log.warning("Autobump: uid=%s token_dead=1 — skipping all jobs (user must re-login)", uid)
+            try:
+                import time as _t, integration_db as _idb
+                _day = str(int(_t.time()) // 86400)
+                await asyncio.to_thread(
+                    _idb.create_alert_event,
+                    uid, "autobump_paused", f"autobump_paused:{_day}",
+                    "Autobump paused — token expired",
+                    "Log back in to HFToolbox to resume your bump jobs.",
+                    "/dashboard/settings", "toolbox", None, True,
+                )
+            except Exception:
+                pass
             return
 
         client = HFClient(token)

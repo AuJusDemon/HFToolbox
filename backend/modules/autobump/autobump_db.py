@@ -300,6 +300,19 @@ def get_job_stats(uid: str, tid: str) -> dict:
     }
 
 
+def get_bumped_since(uid: str, since_ts: int) -> list[dict]:
+    """Return bump log entries (action='bumped') since since_ts, with thread title."""
+    with _db() as conn:
+        rows = conn.execute("""
+            SELECT bl.tid, bl.ts, bj.thread_title
+            FROM bump_log bl
+            LEFT JOIN bump_jobs bj ON bj.id = bl.job_id
+            WHERE bl.uid=%s AND bl.action='bumped' AND bl.ts >= %s
+            ORDER BY bl.ts DESC
+        """, (uid, since_ts)).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_last_log_ts() -> int | None:
     try:
         with _db() as conn:
