@@ -64,11 +64,12 @@ async def poll_sigmarket_rotations(uid: str, token: str) -> None:
 
         # Detect new sig order (sale) — fire once when active_order_count increases
         try:
-            import db as _db_mod, integration_db as _idb
-            _prev_data = _db_mod.get_dash_cache(uid, "sigmarket_order_count", max_age=86400 * 7)
+            import db as _db_mod, integration_db as _idb, time as _t
+            _prev_data = await asyncio.to_thread(
+                _db_mod.get_dash_cache, uid, "sigmarket_order_count", 86400 * 7
+            )
             _prev_count = (_prev_data or {}).get("count", -1)
             if _prev_count >= 0 and active_count > _prev_count:
-                import time as _t
                 _new_sales = active_count - _prev_count
                 _day = str(int(_t.time()) // 86400)
                 await asyncio.to_thread(
@@ -80,7 +81,9 @@ async def poll_sigmarket_rotations(uid: str, token: str) -> None:
                     "toolbox", None, True,
                 )
             if _prev_count != active_count:
-                _db_mod.set_dash_cache(uid, "sigmarket_order_count", {"count": active_count})
+                await asyncio.to_thread(
+                    _db_mod.set_dash_cache, uid, "sigmarket_order_count", {"count": active_count}
+                )
         except Exception as _e:
             log.warning("Sigmarket sale alert failed uid=%s: %s", uid, _e)
 

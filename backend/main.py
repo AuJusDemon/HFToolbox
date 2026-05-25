@@ -185,11 +185,12 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                 reason = str(t.get("reason") or "")
                 title = f"+{amount} bytes"
                 body  = reason[:120] if reason else ""
+                _bytes_link = (os.environ.get("FRONTEND_URL", "").rstrip("/") or "https://hftoolbox.com") + "/dashboard/bytes"
                 await asyncio.to_thread(
                     integration_db.create_alert_event,
                     uid, "bytes_received", f"txn:{txn_id}",
                     title, body,
-                    "https://hackforums.net/private.php?action=send",
+                    _bytes_link,
                     "toolbox", None, True,
                 )
         except Exception as e:
@@ -1068,9 +1069,10 @@ async def lifespan(app: FastAPI):
                         # Daily bump digest — once per day per user if bumps ran
                         try:
                             from modules.autobump.autobump_db import get_bumped_since
-                            from datetime import datetime as _dt
-                            _today = _dt.utcnow().strftime("%Y-%m-%d")
-                            _since = int(_dt.utcnow().replace(hour=0, minute=0, second=0).timestamp())
+                            import time as _tdig
+                            _now_dig = int(_tdig.time())
+                            _since   = _now_dig - (_now_dig % 86400)  # UTC midnight
+                            _today   = str(_since // 86400)
                             for uid in uids:
                                 bumps = await asyncio.to_thread(get_bumped_since, uid, _since)
                                 if not bumps:
