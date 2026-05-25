@@ -796,7 +796,10 @@ async def _telegram_delivery_loop():
     from telegram_alerts import format_alert
     while True:
         try:
-            events = await asyncio.to_thread(integration_db.get_all_undelivered_events)
+            events = await asyncio.wait_for(
+                asyncio.to_thread(integration_db.get_all_undelivered_events),
+                timeout=10,
+            )
             for event in events:
                 chat_id = event.get("chat_id")
                 if not chat_id:
@@ -804,8 +807,13 @@ async def _telegram_delivery_loop():
                 text = format_alert(event)
                 ok = await send_message(token, int(chat_id), text)
                 if ok:
-                    await asyncio.to_thread(integration_db.mark_alert_event_delivered, event["id"])
+                    await asyncio.wait_for(
+                        asyncio.to_thread(integration_db.mark_alert_event_delivered, event["id"]),
+                        timeout=10,
+                    )
                 await asyncio.sleep(0.05)
+        except asyncio.TimeoutError:
+            log.warning("Telegram delivery loop: DB call timed out, skipping cycle")
         except Exception as e:
             log.warning("Telegram delivery loop error: %s", e)
         await asyncio.sleep(30)
