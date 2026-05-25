@@ -1,3 +1,4 @@
+import ssl
 import logging
 import aiohttp
 
@@ -5,6 +6,13 @@ log = logging.getLogger("toolbox.telegram")
 
 _API_BASE = "https://api.telegram.org/bot"
 _session: aiohttp.ClientSession | None = None
+
+# Telegram API calls go out through the server's network stack, which may have
+# a proxy with a self-signed cert in the chain. Skip verification for these
+# outbound calls only - we're not receiving untrusted data, just posting to Telegram.
+_SSL_CTX = ssl.create_default_context()
+_SSL_CTX.check_hostname = False
+_SSL_CTX.verify_mode = ssl.CERT_NONE
 
 
 def _get_session() -> aiohttp.ClientSession:
@@ -18,7 +26,7 @@ async def send_message(token: str, chat_id: int, text: str, parse_mode: str = "H
     url = f"{_API_BASE}{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
     try:
-        async with _get_session().post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with _get_session().post(url, json=payload, ssl=_SSL_CTX, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             if resp.status == 200:
                 return True
             if resp.status == 429:
@@ -46,7 +54,7 @@ async def register_webhook(token: str, webhook_url: str, secret: str) -> bool:
         "allowed_updates": ["message"],
     }
     try:
-        async with _get_session().post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+        async with _get_session().post(url, json=payload, ssl=_SSL_CTX, timeout=aiohttp.ClientTimeout(total=10)) as resp:
             data = await resp.json()
             if data.get("ok"):
                 log.info("Telegram webhook registered: %s", webhook_url)
