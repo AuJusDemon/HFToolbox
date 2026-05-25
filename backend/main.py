@@ -391,6 +391,12 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             if t_lastpost <= stored_lastpost:
                 continue  # no change since last crawl
 
+            if stored_lastpost == 0:
+                try:
+                    await asyncio.to_thread(update_thread_last_checked, uid, t_tid, "0", t_lastpost)
+                except Exception:
+                    pass
+
             # If we or Stanley posted last — advance cursor, no reply to queue
             if t_lastposter in (uid, STANLEY_UID):
                 try:
