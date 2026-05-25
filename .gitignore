@@ -12,6 +12,10 @@ env/
 backend/.env
 agent.md
 
+## Launcher scripts — local to each checkout, never sync via git
+run_hfdash.bat
+*.bat
+
 ## Generated at runtime
 backend/deploy_info.json
 
