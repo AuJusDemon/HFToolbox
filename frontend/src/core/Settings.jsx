@@ -222,7 +222,6 @@ function TelegramSection() {
   const [generating, setGenerating] = useState(false)
   const [copied,     setCopied]     = useState(false)
   const [unlinking,  setUnlinking]  = useState(false)
-  const [switchingMode, setSwitchingMode] = useState(false)
   const pollRef = useRef(null)
 
   const loadStatus = () => {
@@ -282,16 +281,6 @@ function TelegramSection() {
     }
   }
 
-  const switchMode = async (mode) => {
-    setSwitchingMode(true)
-    try {
-      await api.post('/api/telegram/mode', { mode })
-      setStatus(s => ({ ...s, mode }))
-    } finally {
-      setSwitchingMode(false)
-    }
-  }
-
   const mono = { fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--sub)' }
 
   return (
@@ -307,7 +296,7 @@ function TelegramSection() {
       </div>
       <div className="card-body">
         <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 12, lineHeight: 1.6 }}>
-          Get instant Telegram alerts for contracts, PMs, and thread replies via HF Radar.
+          Get instant Telegram alerts for contracts, PMs, and thread replies.
         </div>
 
         {loading && <div className="spin" style={{ width: 16, height: 16, margin: '8px 0' }} />}
@@ -316,23 +305,6 @@ function TelegramSection() {
           <>
             <Row label="Status" hint={`Chat ID: ${status.chat_id} · linked ${ago(status.linked_at)}`}>
               <span style={{ ...mono, color: 'var(--acc)' }}>connected</span>
-            </Row>
-            <Row
-              label="Alert mode"
-              hint={status.mode === 'both_linked'
-                ? 'Full Radar — all Toolbox alerts plus Radar native polling (buddy activity, B-ratings, forum watches, disputes, and more)'
-                : 'Toolbox only — contracts, PMs, and tracked thread replies'}
-            >
-              <select
-                value={status.mode || 'toolbox_linked_relay'}
-                onChange={e => switchMode(e.target.value)}
-                disabled={switchingMode}
-                className="inp"
-                style={{ fontSize: 11, padding: '3px 8px', height: 28 }}
-              >
-                <option value="toolbox_linked_relay">Toolbox only</option>
-                <option value="both_linked">Full Radar</option>
-              </select>
             </Row>
             <Row label="Disconnect" hint="Removes the Telegram link — alerts will stop" last>
               <button

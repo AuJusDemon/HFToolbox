@@ -11,11 +11,12 @@ Put your credentials in backend/.env (copy from .env.example).
 
 import os
 import sys
+import hmac
 import logging
 import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
@@ -786,6 +787,30 @@ async def _tid_backfill_loop() -> None:
             log.warning("TID backfill: failed uid=%s: %s", uid, e)
 
 
+async def _telegram_delivery_loop():
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    if not token:
+        log.info("Telegram delivery: TELEGRAM_BOT_TOKEN not set, skipping")
+        return
+    from telegram_sender import send_message
+    from telegram_alerts import format_alert
+    while True:
+        try:
+            events = await asyncio.to_thread(integration_db.get_all_undelivered_events)
+            for event in events:
+                chat_id = event.get("chat_id")
+                if not chat_id:
+                    continue
+                text = format_alert(event)
+                ok = await send_message(token, int(chat_id), text)
+                if ok:
+                    await asyncio.to_thread(integration_db.mark_alert_event_delivered, event["id"])
+                await asyncio.sleep(0.05)
+        except Exception as e:
+            log.warning("Telegram delivery loop error: %s", e)
+        await asyncio.sleep(30)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Expand thread pool — default is too small for concurrent DB + crawl on Windows
@@ -1067,6 +1092,22 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(_username_resolve_loop(), name="username_resolver")
         asyncio.create_task(_tid_backfill_loop(),       name="tid_backfill")
         asyncio.create_task(_trigger_listener(),   name="crawl_trigger_listener")
+
+    # Telegram alert delivery - runs regardless of DEV_DISABLE_CRAWL (reads DB only, no HF API)
+    asyncio.create_task(_telegram_delivery_loop(), name="telegram_delivery")
+
+    # Register Telegram webhook on startup
+    _tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    _tg_secret  = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    _tg_baseurl = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    if _tg_token and _tg_secret and _tg_baseurl:
+        from telegram_sender import register_webhook as _reg_webhook
+        asyncio.create_task(
+            _reg_webhook(_tg_token, f"{_tg_baseurl}/api/telegram/webhook", _tg_secret),
+            name="telegram_webhook_registration",
+        )
+    elif _tg_token:
+        log.warning("TELEGRAM_BOT_TOKEN set but TELEGRAM_WEBHOOK_SECRET or FRONTEND_URL missing - webhook not registered")
 
     yield
 
@@ -2638,13 +2679,11 @@ async def telegram_status(request: Request):
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     link = await asyncio.to_thread(integration_db.get_telegram_link, uid)
-    mode = await asyncio.to_thread(integration_db.get_integration_mode, uid)
-    bot_username = os.environ.get("RADAR_BOT_USERNAME", "")
+    bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "")
     return {
         "linked":       link is not None,
         "chat_id":      link["chat_id"] if link else None,
         "linked_at":    link["linked_at"] if link else None,
-        "mode":         mode,
         "bot_username": bot_username,
     }
 
@@ -2655,11 +2694,12 @@ async def telegram_link_code(request: Request):
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     code = await asyncio.to_thread(integration_db.generate_link_code, uid)
-    bot_username = os.environ.get("RADAR_BOT_USERNAME", "")
+    bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "")
+    link = f"https://t.me/{bot_username}?start=tb_{code}" if bot_username else ""
     return {
-        "code":     code,
-        "link":     f"https://t.me/{bot_username}?start=tb_{code}",
-        "expires":  integration_db.LINK_CODE_TTL,
+        "code":    code,
+        "link":    link,
+        "expires": integration_db.LINK_CODE_TTL,
     }
 
 
@@ -2669,24 +2709,52 @@ async def telegram_unlink(request: Request):
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     await asyncio.to_thread(integration_db.unlink_telegram, uid)
-    await asyncio.to_thread(integration_db.set_integration_mode, uid, "toolbox_only")
     return {"ok": True}
 
 
-@app.post("/api/telegram/mode")
-async def set_telegram_mode(request: Request):
-    uid = request.session.get("uid")
-    if not uid:
-        return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    link = await asyncio.to_thread(integration_db.get_telegram_link, uid)
-    if not link:
-        return JSONResponse({"error": "not linked"}, status_code=400)
-    body = await request.json()
-    mode = body.get("mode", "")
-    if mode not in ("toolbox_linked_relay", "both_linked"):
-        return JSONResponse({"error": "invalid mode"}, status_code=400)
-    await asyncio.to_thread(integration_db.set_integration_mode, uid, mode)
-    return {"ok": True, "mode": mode}
+@app.post("/api/telegram/webhook")
+async def telegram_webhook(request: Request):
+    secret = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+    if secret:
+        incoming = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if not hmac.compare_digest(incoming, secret):
+            return Response(status_code=403)
+
+    try:
+        update = await request.json()
+    except Exception:
+        return Response(status_code=400)
+
+    msg     = update.get("message") or {}
+    text    = msg.get("text", "")
+    chat_id = (msg.get("chat") or {}).get("id")
+
+    if not chat_id or not text.startswith("/start tb_"):
+        return Response(status_code=200)
+
+    code = text[len("/start tb_"):].strip()
+    if not code:
+        return Response(status_code=200)
+
+    hf_uid    = await asyncio.to_thread(integration_db.consume_link_code, code)
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+    from telegram_sender import send_message as _tg_send
+    if not hf_uid:
+        if bot_token:
+            await _tg_send(bot_token, chat_id,
+                "That link has expired or already been used. "
+                "Generate a new one from HFToolbox Settings.")
+        return Response(status_code=200)
+
+    await asyncio.to_thread(integration_db.link_telegram, hf_uid, int(chat_id))
+
+    if bot_token:
+        await _tg_send(bot_token, chat_id,
+            "Connected! You'll receive Telegram alerts here as they happen.")
+
+    log.info("Telegram linked via webhook: hf_uid=%s chat_id=%s", hf_uid, chat_id)
+    return Response(status_code=200)
 
 
 @app.get("/health")

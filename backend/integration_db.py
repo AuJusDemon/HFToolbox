@@ -170,6 +170,29 @@ def mark_alert_event_delivered(event_id: int) -> None:
         )
 
 
+def get_all_undelivered_events(limit: int = 100) -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT ae.id, ae.hf_uid, ae.type, ae.dedupe_key, ae.title, ae.body, "
+            "       ae.link, ae.source, ae.payload, ae.created_at, tl.chat_id "
+            "FROM alert_events ae "
+            "INNER JOIN telegram_links tl ON tl.hf_uid = ae.hf_uid "
+            "WHERE ae.telegram_sent = 0 "
+            "ORDER BY ae.created_at ASC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d.get("payload"):
+            try:
+                d["payload"] = json.loads(d["payload"])
+            except Exception:
+                d["payload"] = None
+        result.append(d)
+    return result
+
+
 def mark_dashboard_sent(event_id: int) -> None:
     with _db() as conn:
         conn.execute(
