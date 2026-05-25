@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from './api.js'
 import useStore from '../store.js'
 
@@ -215,13 +215,21 @@ function CrawlerSection() {
 
 // ── Section: Telegram Alerts ──────────────────────────────────────────────────
 
+const PREF_LABELS = {
+  contract_new:        { label: 'Contracts',       hint: 'New contracts awarded to you' },
+  pm_unread_increase:  { label: 'Private messages', hint: 'When your unread PM count increases' },
+  reply_tracked_thread:{ label: 'Thread replies',   hint: 'Replies in threads you are tracking' },
+}
+
 function TelegramSection() {
-  const [status,    setStatus]    = useState(null)
-  const [loading,   setLoading]   = useState(true)
-  const [linkData,  setLinkData]  = useState(null)
+  const [status,     setStatus]     = useState(null)
+  const [loading,    setLoading]    = useState(true)
+  const [linkData,   setLinkData]   = useState(null)
   const [generating, setGenerating] = useState(false)
-  const [copied,    setCopied]    = useState(false)
-  const [unlinking, setUnlinking] = useState(false)
+  const [copied,     setCopied]     = useState(false)
+  const [unlinking,  setUnlinking]  = useState(false)
+  const [prefs,      setPrefs]      = useState(null)
+  const pollRef = useRef(null)
 
   const loadStatus = () => {
     setLoading(true)
@@ -231,6 +239,34 @@ function TelegramSection() {
   }
 
   useEffect(() => { loadStatus() }, [])
+
+  // Load preferences when linked
+  useEffect(() => {
+    if (!status?.linked) { setPrefs(null); return }
+    api.get('/api/telegram/preferences')
+      .then(d => setPrefs(d))
+      .catch(() => {})
+  }, [status?.linked])
+
+  // Poll for link completion while a code is pending
+  useEffect(() => {
+    if (!linkData) return
+    pollRef.current = setInterval(async () => {
+      try {
+        const d = await api.get('/api/telegram/status')
+        if (d?.linked) {
+          clearInterval(pollRef.current)
+          pollRef.current = null
+          setLinkData(null)
+          setStatus(d)
+          setLoading(false)
+        }
+      } catch {}
+    }, 3000)
+    return () => {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null }
+    }
+  }, [linkData])
 
   const generate = async () => {
     setGenerating(true)
@@ -254,9 +290,19 @@ function TelegramSection() {
     try {
       await api.post('/api/telegram/unlink')
       setLinkData(null)
+      setPrefs(null)
       loadStatus()
     } finally {
       setUnlinking(false)
+    }
+  }
+
+  const setPref = async (type, val) => {
+    setPrefs(p => ({ ...p, [type]: val }))
+    try {
+      await api.post(`/api/telegram/preferences/${type}`, { enabled: val })
+    } catch {
+      setPrefs(p => ({ ...p, [type]: !val }))
     }
   }
 
@@ -285,7 +331,7 @@ function TelegramSection() {
             <Row label="Status" hint={`Chat ID: ${status.chat_id} · linked ${ago(status.linked_at)}`}>
               <span style={{ ...mono, color: 'var(--acc)' }}>connected</span>
             </Row>
-            <Row label="Disconnect" hint="Removes the Telegram link — alerts will stop" last>
+            <Row label="Disconnect" hint="Removes the Telegram link — alerts will stop">
               <button
                 className="btn btn-ghost"
                 onClick={unlink}
@@ -295,6 +341,16 @@ function TelegramSection() {
                 {unlinking ? 'Disconnecting…' : 'Disconnect'}
               </button>
             </Row>
+            {prefs && (
+              <>
+                <SectionLabel>Alert types</SectionLabel>
+                {Object.entries(PREF_LABELS).map(([type, { label, hint }], i, arr) => (
+                  <Row key={type} label={label} hint={hint} last={i === arr.length - 1}>
+                    <Toggle value={prefs[type] !== false} onChange={v => setPref(type, v)} />
+                  </Row>
+                ))}
+              </>
+            )}
           </>
         )}
 
@@ -315,6 +371,7 @@ function TelegramSection() {
           <>
             <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 8, lineHeight: 1.6 }}>
               Open this link in Telegram. It expires in {Math.floor(linkData.expires / 60)} minutes.
+              Waiting for you to open it…
             </div>
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8,
@@ -333,7 +390,7 @@ function TelegramSection() {
                 {copied ? '✓ copied' : 'copy'}
               </button>
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <a
                 href={linkData.link}
                 target="_blank"
@@ -350,6 +407,7 @@ function TelegramSection() {
               >
                 Cancel
               </button>
+              <div className="spin" style={{ width: 12, height: 12 }} />
             </div>
           </>
         )}

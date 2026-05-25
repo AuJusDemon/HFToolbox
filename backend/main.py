@@ -2673,6 +2673,32 @@ async def telegram_unlink(request: Request):
     return {"ok": True}
 
 
+_TELEGRAM_PREF_TYPES = {"contract_new", "pm_unread_increase", "reply_tracked_thread"}
+_TELEGRAM_PREF_DEFAULTS = {t: True for t in _TELEGRAM_PREF_TYPES}
+
+
+@app.get("/api/telegram/preferences")
+async def telegram_preferences(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    stored = await asyncio.to_thread(integration_db.get_alert_preferences, uid)
+    return {**_TELEGRAM_PREF_DEFAULTS, **stored}
+
+
+@app.post("/api/telegram/preferences/{event_type}")
+async def set_telegram_preference(request: Request, event_type: str):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    if event_type not in _TELEGRAM_PREF_TYPES:
+        return JSONResponse({"error": "unknown event type"}, status_code=400)
+    body = await request.json()
+    enabled = bool(body.get("enabled", True))
+    await asyncio.to_thread(integration_db.set_alert_preference, uid, event_type, enabled)
+    return {"ok": True}
+
+
 @app.get("/health")
 async def health():
     deploy_info = _load_deploy_info()
