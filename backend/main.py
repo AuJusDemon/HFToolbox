@@ -2673,6 +2673,22 @@ async def telegram_unlink(request: Request):
     return {"ok": True}
 
 
+@app.post("/api/telegram/mode")
+async def set_telegram_mode(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    link = await asyncio.to_thread(integration_db.get_telegram_link, uid)
+    if not link:
+        return JSONResponse({"error": "not linked"}, status_code=400)
+    body = await request.json()
+    mode = body.get("mode", "")
+    if mode not in ("toolbox_linked_relay", "both_linked"):
+        return JSONResponse({"error": "invalid mode"}, status_code=400)
+    await asyncio.to_thread(integration_db.set_integration_mode, uid, mode)
+    return {"ok": True, "mode": mode}
+
+
 @app.get("/health")
 async def health():
     deploy_info = _load_deploy_info()
