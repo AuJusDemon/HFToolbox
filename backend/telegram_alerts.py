@@ -1,8 +1,18 @@
+import os as _os
+
+
+def _abs_link(link: str) -> str:
+    if link and link.startswith("/"):
+        base = (_os.environ.get("FRONTEND_URL") or "https://hftoolbox.com").rstrip("/")
+        return base + link
+    return link
+
+
 def format_alert(event: dict) -> str:
     t     = event.get("type", "")
     title = (event.get("title") or "").strip()
     body  = (event.get("body") or "").strip()
-    link  = (event.get("link") or "").strip()
+    link  = _abs_link((event.get("link") or "").strip())
 
     if t == "contract_new":
         text = "📜 <b>New contract</b>"
@@ -25,9 +35,8 @@ def format_alert(event: dict) -> str:
         if title:
             text += f"\n{title}"
     elif t == "reply_tracked_thread":
-        text = "💬 <b>New reply</b>"
-        if title:
-            text += f"\n{title}"
+        thread = title[len("Reply in: "):] if title.startswith("Reply in: ") else title
+        text = f"💬 <b>{thread}</b>" if thread else "💬 <b>New reply</b>"
         if body:
             text += f"\n{body}"
     elif t == "bytes_received":
@@ -51,13 +60,13 @@ def format_alert(event: dict) -> str:
         if body:
             text += f"\n{body}"
     elif t == "autobump_paused":
-        text = "⏸️ <b>Autobump paused — token expired</b>"
+        text = "⏸️ <b>Autobump paused - token expired</b>"
         if body:
             text += f"\n{body}"
         else:
             text += "\nLog back in to HFToolbox to resume."
     elif t == "autobump_daily":
-        text = "⚡ <b>Autobump daily recap</b>"
+        text = f"⚡ <b>{title}</b>" if title else "⚡ <b>Autobump daily recap</b>"
         if body:
             text += f"\n{body}"
     elif t == "sigmarket_sale":

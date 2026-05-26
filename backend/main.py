@@ -1083,20 +1083,18 @@ async def lifespan(app: FastAPI):
                                 bumps = await asyncio.to_thread(get_bumped_since, uid, _since)
                                 if not bumps:
                                     continue
-                                thread_titles = list(dict.fromkeys(
-                                    b.get("thread_title") or f"TID {b['tid']}" for b in bumps
-                                ))
-                                n_bumps   = len(bumps)
-                                n_threads = len(thread_titles)
-                                preview   = ", ".join(thread_titles[:3])
-                                if n_threads > 3:
-                                    preview += f" +{n_threads - 3} more"
+                                n_bumps = len(bumps)
+                                tids    = list(dict.fromkeys(str(b["tid"]) for b in bumps))
+                                preview = "TIDs: " + ", ".join(tids[:6])
+                                if len(tids) > 6:
+                                    preview += f" +{len(tids) - 6} more"
+                                _fe = (os.environ.get("FRONTEND_URL") or "https://hftoolbox.com").rstrip("/")
                                 await asyncio.to_thread(
                                     integration_db.create_alert_event,
                                     uid, "autobump_daily", f"autobump_daily:{_today}",
                                     f"{n_bumps} bump{'s' if n_bumps != 1 else ''} ran today",
                                     preview,
-                                    "/dashboard/autobump", "toolbox", None, True,
+                                    f"{_fe}/dashboard/autobump", "toolbox", None, True,
                                 )
                         except Exception as _e:
                             log.warning("Unified scheduler: daily digest error: %s", _e)
