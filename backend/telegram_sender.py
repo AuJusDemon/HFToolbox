@@ -22,7 +22,7 @@ def _new_session() -> aiohttp.ClientSession:
 
 async def send_message(token: str, chat_id: int, text: str, parse_mode: str = "HTML") -> bool:
     url = f"{_API_BASE}{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode, "disable_web_page_preview": True}
     try:
         async with _new_session() as session:
             async with session.post(url, json=payload) as resp:

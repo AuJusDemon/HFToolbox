@@ -334,7 +334,12 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             post_date    = int(p.get("dateline") or 0)
             post_username = username_map.get(post_uid, post_uid)
 
-            clean = _QUOTE_BLOCK.sub('', post_message).strip()
+            clean = post_message
+            prev = None
+            while prev != clean:
+                prev = clean
+                clean = _QUOTE_BLOCK.sub('', clean)
+            clean = clean.strip()
             if not _strip_bb(clean).strip():
                 continue
             preview = _strip_bb(clean)[:200]
