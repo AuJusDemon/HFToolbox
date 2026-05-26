@@ -1231,11 +1231,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="HF Dash", lifespan=lifespan)
 
-# In-memory cache for user activity (posts + threads).
-# Keyed by (session_uid, lookup_uid) so one user's lookups never bleed into another's.
-_activity_cache: dict = {}  # (session_uid, lookup_uid) -> {"ts": float, "data": dict}
-ACTIVITY_CACHE_TTL = 300    # 5 minutes
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL],
@@ -1937,7 +1932,7 @@ async def users_resolve(request: Request, uids: str = ""):
 
 @app.get("/api/dash/user/{lookup_uid}")
 async def dash_user_lookup(request: Request, lookup_uid: str):
-    """Real-time user lookup. No cache — explicit user action."""
+    """Cached user profile lookup. Returns from hf_resource_cache if fresh; live fetch on miss."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -1945,19 +1940,8 @@ async def dash_user_lookup(request: Request, lookup_uid: str):
     if not token:
         return JSONResponse({"error": "no token"}, status_code=401)
 
-    from HFClient import HFClient
-    client = HFClient(token)
-    try:
-        data = await client.read({"users": {
-            "_uid": [int(lookup_uid)],
-            "uid": True, "username": True, "usergroup": True,
-            "displaygroup": True, "additionalgroups": True,
-            "postnum": True, "threadnum": True, "myps": True,
-            "reputation": True, "usertitle": True, "awards": True,
-            "timeonline": True, "avatar": True,
-        }})
-    except _AuthExpired:
-        return _handle_auth_expired(request, uid)
+    import hf_service
+    data, _ = await hf_service.get_user_profile(lookup_uid, token)
     if not data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     users = data.get("users", {})
@@ -1967,16 +1951,16 @@ async def dash_user_lookup(request: Request, lookup_uid: str):
         user = users
     if not user:
         return JSONResponse({"error": "User not found"}, status_code=404)
-    # Passively cache the result so contract lists resolve this UID without extra calls
+    # Seed uid_usernames so contract lists can resolve this UID without extra calls
     if user.get("uid") and user.get("username"):
         try:
-            av_raw = str(user.get("avatar","") or "")
+            av_raw = str(user.get("avatar", "") or "")
             if av_raw and not av_raw.startswith("http"):
                 av_raw = "https://hackforums.net/" + av_raw.lstrip("./")
             await asyncio.to_thread(db.upsert_uid_usernames, {str(user["uid"]): {
-                "username":        user.get("username",""),
+                "username":        user.get("username", ""),
                 "avatar":          av_raw,
-                "usertitle":       user.get("usertitle","") or "",
+                "usertitle":       user.get("usertitle", "") or "",
                 "reputation":      int(user.get("reputation") or 0),
                 "displaygroup":    str(user.get("displaygroup") or user.get("usergroup") or ""),
                 "additionalgroups":str(user.get("additionalgroups") or ""),
@@ -2208,238 +2192,76 @@ async def crawl_status(request: Request):
 
 @app.get("/api/user/{lookup_uid}/activity")
 async def user_activity(request: Request, lookup_uid: str):
-    """Return profile + recent posts + threads. Results cached 5 min — no page params needed,
-    frontend paginates client-side so there are zero extra API calls on page navigation."""
-    import time, math
+    """Return profile + recent posts + threads. Cached per target UID with stale-while-revalidate."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-
-    # Return cached result if still fresh
-    _cache_key = (uid, lookup_uid)
-    cached = _activity_cache.get(_cache_key)
-    if cached and (time.time() - cached["ts"]) < ACTIVITY_CACHE_TTL:
-        return cached["data"]
-
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
         return JSONResponse({"error": "no token"}, status_code=401)
-    from HFClient import HFClient
-    client = HFClient(token)
-    target = int(lookup_uid)
 
-    PERPAGE = 20
+    import hf_service
+    import hf_cache as _hfc
+    force = request.query_params.get("force") == "true"
+    data, is_stale = await hf_service.get_user_activity(lookup_uid, token, force=force)
 
-    # ── Call 1 (2 endpoints): profile + threads page 1 ─────────────────────────
-    # Bundling saves a solo-profile call. We need postnum/threadnum from user data
-    # to estimate the posts page, so threads p2 + posts come in call 2.
-    try:
-        data1 = await client.read({
-            "users": {
-                "_uid": [target],
-                "uid": True, "username": True, "usergroup": True,
-                "displaygroup": True, "additionalgroups": True,
-                "postnum": True, "threadnum": True, "myps": True,
-                "reputation": True, "usertitle": True, "timeonline": True,
-                "avatar": True, "awards": True, "website": True, "referrals": True,
-            },
-            "threads": {
-                "_uid": [target], "_page": 1, "_perpage": PERPAGE,
-                "tid": True, "fid": True, "subject": True, "dateline": True,
-                "firstpost": True, "views": True, "lastpost": True,
-                "closed": True, "sticky": True,
-            },
-        })
-    except _AuthExpired:
-        return _handle_auth_expired(request, uid)
-    if not data1:
+    if data is None:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
-
-    users_raw = data1.get("users", {})
-    user = (users_raw[0] if isinstance(users_raw, list) else users_raw) or {}
-    if not user:
+    if not data.get("user"):
         return JSONResponse({"error": "User not found"}, status_code=404)
 
-    t1_raw = data1.get("threads", [])
-    if isinstance(t1_raw, dict): t1_raw = [t1_raw]
-    all_threads    = list(t1_raw or [])
-    firstpost_pids = {str(t["firstpost"]) for t in all_threads if t.get("firstpost")}
+    # Seed uid_usernames from the fetched profile so other views resolve this UID for free
+    user = data["user"]
+    if user.get("uid") and user.get("username"):
+        try:
+            av_raw = str(user.get("avatar", "") or "")
+            if av_raw and not av_raw.startswith("http"):
+                av_raw = "https://hackforums.net/" + av_raw.lstrip("./")
+            await asyncio.to_thread(db.upsert_uid_usernames, {str(user["uid"]): {
+                "username":        user.get("username", ""),
+                "avatar":          av_raw,
+                "usertitle":       user.get("usertitle", "") or "",
+                "reputation":      int(user.get("reputation") or 0),
+                "displaygroup":    str(user.get("displaygroup") or user.get("usergroup") or ""),
+                "additionalgroups":str(user.get("additionalgroups") or ""),
+            }})
+        except Exception:
+            pass
 
-    postnum     = int(user.get("postnum")   or 0)
-    threadnum   = int(user.get("threadnum") or 0)
-    reply_count = max(0, postnum - threadnum)
-    base_page   = max(1, -(-reply_count // PERPAGE))  # mathematical last page estimate
-
-    # ── Call 2 (2 endpoints): threads page 2 + posts estimated last page ────────
-    # posts._uid is oldest-first; base_page is the calculated last page.
-    try:
-        data2 = await client.read({
-            "threads": {
-                "_uid": [target], "_page": 2, "_perpage": PERPAGE,
-                "tid": True, "fid": True, "subject": True, "dateline": True,
-                "firstpost": True, "views": True, "lastpost": True,
-                "closed": True, "sticky": True,
-            },
-            "posts": {
-                "_uid": [target], "_page": base_page, "_perpage": PERPAGE,
-                "pid": True, "tid": True, "fid": True,
-                "dateline": True, "subject": True, "message": True,
-            },
-        })
-    except _AuthExpired:
-        return _handle_auth_expired(request, uid)
-
-    t2_raw = (data2 or {}).get("threads", [])
-    if isinstance(t2_raw, dict): t2_raw = [t2_raw]
-    if t2_raw:
-        all_threads.extend(t2_raw)
-        firstpost_pids.update(str(t["firstpost"]) for t in t2_raw if t.get("firstpost"))
-
-    posts_raw = (data2 or {}).get("posts", [])
-    if isinstance(posts_raw, dict): posts_raw = [posts_raw]
-    raw_last        = list(posts_raw or [])
-    true_last_page  = base_page
-
-    # ── Call 3 (1 endpoint): prev page for more history (or fallback if estimate missed) ──
-    # Old code scanned forward up to 8 pages. Now we make at most 1 extra call:
-    # if the estimated page was empty → back off by 1; otherwise → grab prev for depth.
-    raw_prev = []
-    need_extra = (not raw_last and base_page > 1) or (raw_last and base_page > 1)
-    if need_extra:
-        try_page = (base_page - 1) if not raw_last else (base_page - 1)
-        if try_page >= 1:
-            try:
-                pd3 = await client.read({"posts": {
-                    "_uid": [target], "_page": try_page, "_perpage": PERPAGE,
-                    "pid": True, "tid": True, "fid": True,
-                    "dateline": True, "subject": True, "message": True,
-                }})
-            except _AuthExpired:
-                return _handle_auth_expired(request, uid)
-            p3 = (pd3 or {}).get("posts", [])
-            if isinstance(p3, dict): p3 = [p3]
-            p3 = list(p3 or [])
-            if not raw_last:
-                # estimate was off by 1 — shift the pages down
-                raw_last       = p3
-                true_last_page = try_page
-            else:
-                raw_prev = p3
-
-    # Combine, filter OPs, sort newest-first
-    seen = set()
-    all_posts = []
-    for p in list(reversed(raw_last)) + list(reversed(raw_prev)):
-        pid = str(p.get("pid", ""))
-        if pid and pid not in firstpost_pids and pid not in seen:
-            seen.add(pid)
-            all_posts.append(p)
-    all_posts.sort(key=lambda p: int(p.get("dateline") or 0), reverse=True)
-
-    result = {
-        "user":    user,
-        "posts":   all_posts,
-        "threads": all_threads,
+    cache_key = f"user:{lookup_uid}:activity"
+    return {
+        **data,
+        "_cache": {
+            "stale":      is_stale,
+            "age":        _hfc.get_age(cache_key),
+            "refreshing": is_stale,
+        },
     }
-    _activity_cache[_cache_key] = {"ts": time.time(), "data": result}
-    return result
 
 
 
 @app.get("/api/user/{lookup_uid}/trust")
 async def user_trust(request: Request, lookup_uid: str, ratings_page: int = 1):
-    """Credibility ratings received + contract stats for trust lookup. 1 API call."""
+    """Credibility ratings + contract stats. Cached per target UID and page with stale-while-revalidate."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
         return JSONResponse({"error": "no token"}, status_code=401)
-    from HFClient import HFClient
-    client = HFClient(token)
-    target = int(lookup_uid)
-    PERPAGE = 15
-
-    # 1 call: credibility ratings received + contracts (2 endpoints, well under limit)
-    try:
-        data = await client.read({
-            "bratings": {
-                "_to": [target], "_page": ratings_page, "_perpage": PERPAGE,
-                "crid": True, "contractid": True, "fromid": True, "toid": True,
-                "dateline": True, "amount": True, "message": True,
-                "from": {"uid": True, "username": True},
-            },
-            "contracts": {
-                "_uid": [target], "_page": 1, "_perpage": 30,
-                "cid": True, "status": True, "type": True, "dateline": True,
-            },
-        })
-    except _AuthExpired:
-        return _handle_auth_expired(request, uid)
-
-    if not data:
+    import hf_service
+    import hf_cache as _hfc
+    force = request.query_params.get("force") == "true"
+    data, is_stale = await hf_service.get_user_trust(lookup_uid, token, ratings_page=ratings_page, force=force)
+    if data is None:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
-
-    # ── Parse credibility ratings ────────────────────────────────────────────
-    br_raw = data.get("bratings", [])
-    if isinstance(br_raw, dict): br_raw = [br_raw]
-    ratings = []
-    for r in (br_raw or []):
-        from_user = r.get("from") or {}
-        if isinstance(from_user, list):
-            from_user = from_user[0] if from_user else {}
-        if isinstance(from_user, dict):
-            from_username = str(from_user.get("username") or r.get("fromid") or "")
-            from_uid      = str(from_user.get("uid")      or r.get("fromid") or "")
-        else:
-            from_username = str(r.get("fromid") or "")
-            from_uid      = str(r.get("fromid") or "")
-        try:
-            amt = int(float(r.get("amount") or 0))
-        except (TypeError, ValueError):
-            amt = 0
-        ratings.append({
-            "crid":       str(r.get("crid") or ""),
-            "contractid": str(r.get("contractid") or ""),
-            "from_uid":   from_uid,
-            "from_username": from_username,
-            "dateline":   int(r.get("dateline") or 0),
-            "amount":     amt,
-            "message":    str(r.get("message") or ""),
-        })
-
-    # ── Parse contracts for stats ─────────────────────────────────────────────
-    c_raw = data.get("contracts", [])
-    if isinstance(c_raw, dict): c_raw = [c_raw]
-    counts: dict[str, int] = {}
-    for c in (c_raw or []):
-        s = str(c.get("status") or "")
-        counts[s] = counts.get(s, 0) + 1
-    total      = sum(counts.values())
-    complete   = counts.get("6", 0)
-    disputed   = counts.get("7", 0)
-    cancelled  = counts.get("2", 0)
-    active     = counts.get("5", 0)
-    awaiting   = counts.get("1", 0)
-    expired    = counts.get("8", 0)
-    non_canc   = total - cancelled
-    comp_rate  = round(complete / non_canc * 100) if non_canc > 0 else 0
-    disp_rate  = round(disputed / non_canc * 100) if non_canc > 0 else 0
-
+    cache_key = f"user:{lookup_uid}:trust:p{ratings_page}"
     return {
-        "ratings":          ratings,
-        "ratings_page":     ratings_page,
-        "ratings_has_more": len(ratings) >= PERPAGE,
-        "contract_stats": {
-            "total":           total,
-            "active":          active,
-            "awaiting":        awaiting,
-            "complete":        complete,
-            "disputed":        disputed,
-            "cancelled":       cancelled,
-            "expired":         expired,
-            "completion_rate": comp_rate,
-            "dispute_rate":    disp_rate,
+        **data,
+        "_cache": {
+            "stale":      is_stale,
+            "age":        _hfc.get_age(cache_key),
+            "refreshing": is_stale,
         },
     }
 
@@ -2476,82 +2298,40 @@ async def mark_seen(request: Request):
 
 @app.get("/api/contracts/{cid}")
 async def get_contract_detail(request: Request, cid: int):
-    """Fetch contract detail with 5-min cache. Force-refresh with ?force=true."""
+    """Fetch contract detail. Cached globally per CID with stale-while-revalidate."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-
-    force     = request.query_params.get("force") == "true"
-    cache_key = f"contract_detail_{cid}"
-    CACHE_TTL = 300  # 5 minutes
-
-    # Serve from cache unless forced or stale
-    if not force:
-        cached = await asyncio.to_thread(db.get_dash_cache, uid, cache_key, CACHE_TTL)
-        if cached:
-            return cached
-
-    try:
-        from HFClient import HFClient
-        client  = HFClient(token)
-        uid_int = int(uid)
-
-        async with _hf_sem:
-            data = await asyncio.wait_for(client.read({
-                "contracts": {
-                    "_cid": [int(cid)],
-                    "cid": True, "dateline": True, "status": True, "type": True,
-                    "istatus": True, "ostatus": True, "muid": True,
-                    "inituid": True, "otheruid": True,
-                    "iprice": True, "icurrency": True, "iproduct": True,
-                    "oprice": True, "ocurrency": True, "oproduct": True,
-                    "terms": True, "timeout_days": True, "timeout": True,
-                    "public": True, "tid": True, "idispute": True, "odispute": True,
-                },
-            }), timeout=30)
-        if not data:
-            return JSONResponse({"error": "No response from HF"}, status_code=503)
-        rows = data.get("contracts", [])
-        if isinstance(rows, dict): rows = [rows]
-        if not rows:
-            return JSONResponse({"error": "Contract not found"}, status_code=404)
-        c = rows[0]
-
-        # Counterparty username — local DB first, API only if missing
-        init_uid  = int(c.get("inituid") or 0)
-        other_uid = int(c.get("otheruid") or 0)
-        cp_uid    = other_uid if init_uid == uid_int else init_uid
-        username  = None
-        if cp_uid:
-            cached_names = await asyncio.to_thread(db.get_uid_usernames, [str(cp_uid)])
-            cached_user = cached_names.get(str(cp_uid), {})
-            username = cached_user.get("username") or None
-        if cp_uid and not username:
-            try:
-                async with _hf_sem:
-                    u_data = await asyncio.wait_for(client.read({
-                        "users": {"_uid": [cp_uid], "uid": True, "username": True}
-                    }), timeout=30)
-                u_rows = u_data.get("users", []) if u_data else []
-                if isinstance(u_rows, dict): u_rows = [u_rows]
-                if u_rows:
-                    username = u_rows[0].get("username")
-                    if username:
-                        await asyncio.to_thread(db.upsert_uid_usernames, {str(cp_uid): username})
-            except Exception:
-                pass
-
-        result = {"contract": c, "counterparty_username": username, "my_uid": uid}
-        await asyncio.to_thread(db.set_dash_cache, uid, cache_key, result)
-        return result
-    except asyncio.TimeoutError:
-        return JSONResponse({"error": "HF API timeout"}, status_code=503)
-    except Exception as e:
-        log.error("contract detail error cid=%s: %s", cid, e)
-        return JSONResponse({"error": str(e)}, status_code=500)
+    import hf_service
+    import hf_cache as _hfc
+    force = request.query_params.get("force") == "true"
+    data, is_stale = await hf_service.get_contract_detail(cid, token, force=force)
+    if data is None:
+        return JSONResponse({"error": "HF API unavailable"}, status_code=503)
+    contract = data.get("contract")
+    if not contract:
+        return JSONResponse({"error": "Contract not found"}, status_code=404)
+    # Pick counterparty relative to the requesting user
+    init_uid  = str(contract.get("inituid")  or "")
+    other_uid = str(contract.get("otheruid") or "")
+    if uid == init_uid:
+        counterparty_username = data.get("other_username") or None
+    else:
+        counterparty_username = data.get("init_username") or None
+    cache_key = f"contract:{cid}:detail"
+    return {
+        "contract":              contract,
+        "counterparty_username": counterparty_username,
+        "my_uid":                uid,
+        "_cache": {
+            "stale":      is_stale,
+            "age":        _hfc.get_age(cache_key),
+            "refreshing": is_stale,
+        },
+    }
 
 
 @app.post("/api/contracts/{cid}/action")
@@ -2578,6 +2358,8 @@ async def contract_action(request: Request, cid: int):
         data = await asyncio.wait_for(client.write({"contracts": payload}), timeout=8)
         if not data:
             return JSONResponse({"error": "No response from HF"}, status_code=503)
+        import hf_service
+        hf_service.invalidate_after_write("contract_action", uid=uid, cid=str(cid))
         return {"ok": True, "response": data}
     except asyncio.TimeoutError:
         return JSONResponse({"error": "HF API timeout"}, status_code=503)

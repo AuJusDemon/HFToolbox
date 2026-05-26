@@ -358,23 +358,13 @@ function ContractsOverview() {
 
 // ── USER LOOKUP ───────────────────────────────────────────────────────────────
 function UserLookup() {
-  const nav      = useNavigate()
-  const [uid,    setUid]  = useState('')
-  const [loading,setLd]   = useState(false)
-  const [err,    setErr]  = useState(null)
+  const nav     = useNavigate()
+  const [uid,   setUid] = useState('')
 
-  const lookup = async () => {
+  const lookup = () => {
     const id = uid.trim()
-    if (!id) return
-    setLd(true); setErr(null)
-    try {
-      // Quick validate the UID exists before navigating
-      await api.get(`/api/dash/user/${id}`)
-      nav(`/dashboard/user/${id}`)
-    } catch {
-      setErr('Not found')
-      setLd(false)
-    }
+    if (!id || !/^\d+$/.test(id)) return
+    nav(`/dashboard/user/${id}`)
   }
 
   return (
@@ -391,10 +381,9 @@ function UserLookup() {
             onKeyDown={e => e.key==='Enter' && lookup()}
             style={{flex:1}}
           />
-          <button className="btn btn-acc" onClick={lookup} disabled={loading||!uid}>
-            {loading ? <span className="spin"/> : 'Go'}
+          <button className="btn btn-acc" onClick={lookup} disabled={!uid}>
+            Go
           </button>
-          {err && <span style={{fontSize:11,color:'var(--red)',alignSelf:'center'}}>{err}</span>}
         </div>
         <div style={{fontSize:11,color:'var(--dim)',marginTop:6}}>
           Enter a UID to view their full profile, recent posts, and threads.
