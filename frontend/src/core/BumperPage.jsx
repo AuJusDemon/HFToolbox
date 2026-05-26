@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 const isUpgraded = (groups) => (groups || []).some(g => ['9','28','67'].includes(String(g)))
@@ -550,8 +551,8 @@ export default function BumperPage() {
               <BudgetSettings budgetData={budgetData} onSave={loadBudget}/>
 
               <div className="bumper-add-form" style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
-                <input className="inp" placeholder="Thread ID" value={tid}
-                  onChange={e=>setTid(e.target.value)} onKeyDown={e=>e.key==='Enter'&&add()} style={{width:110}}/>
+                <input className="inp" placeholder="Thread ID or URL" value={tid}
+                  onChange={e=>setTid(parseHfId(e.target.value,'tid'))} onKeyDown={e=>e.key==='Enter'&&add()} style={{width:150}}/>
 
                 <select className="inp" value={mode} onChange={e=>setMode(e.target.value)} style={{width:140}}>
                   <option value="timer">⏱ Timer</option>

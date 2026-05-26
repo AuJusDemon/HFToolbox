@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, throttledInterval } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 const ago = ts => {
@@ -212,8 +213,8 @@ function BytesOverview() {
       />
       <div style={{display:'flex',gap:5,padding:'6px 13px',borderBottom:'1px solid var(--b1)',minWidth:0}}
            onClick={e => e.stopPropagation()}>
-        <input className="inp" placeholder="UID" value={toUid}
-          onChange={e => setToUid(e.target.value)}
+        <input className="inp" placeholder="UID or URL" value={toUid}
+          onChange={e => setToUid(parseHfId(e.target.value, 'uid'))}
           style={{flex:'1 1 0',minWidth:0,fontSize:11,padding:'3px 7px'}} />
         <input className="inp" placeholder="Amt" value={amount}
           onChange={e => setAmount(e.target.value)}
@@ -376,8 +377,8 @@ function UserLookup() {
       <div className="card-body">
         <div style={{display:'flex',gap:5}}>
           <input
-            className="inp" placeholder="UID…" value={uid}
-            onChange={e => setUid(e.target.value)}
+            className="inp" placeholder="UID or profile URL…" value={uid}
+            onChange={e => setUid(parseHfId(e.target.value, 'uid'))}
             onKeyDown={e => e.key==='Enter' && lookup()}
             style={{flex:1}}
           />

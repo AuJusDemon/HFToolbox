@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 // Load award.css immediately when this module loads — must be ready before picker opens
@@ -3218,9 +3219,9 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                       </div>
                     ))}
                     <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
-                      <input className="inp" placeholder="HF UID (numbers)" value={addCollabUid}
-                        style={{ width: 140, fontSize: 11 }}
-                        onChange={e => { setAddCollabUid(e.target.value); setAddCollabErr(null) }}
+                      <input className="inp" placeholder="UID or profile URL" value={addCollabUid}
+                        style={{ width: 160, fontSize: 11 }}
+                        onChange={e => { setAddCollabUid(parseHfId(e.target.value,'uid')); setAddCollabErr(null) }}
                         onKeyDown={e => e.key === 'Enter' && addCollab(d.id)} />
                       <button className="btn btn-acc" style={{ fontSize: 11 }}
                         disabled={addCollabLoading || !addCollabUid.trim()}
