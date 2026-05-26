@@ -286,7 +286,12 @@ async def _user_analytics(target_uid: str, request: Request):
 
     import hf_service
     import hf_cache as _hfc
-    data, is_stale = await hf_service.get_sigmarket_analytics(target_uid, token, force=force)
+    try:
+        data, is_stale = await hf_service.get_sigmarket_analytics(target_uid, token, force=force)
+    except _AuthExpired:
+        request.session.clear()
+        await asyncio.to_thread(db.clear_token, uid)
+        return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
     if data is None:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     cache_key = f"sigmarket:analytics:{target_uid}"

@@ -518,9 +518,23 @@ function ListingSection({ status, onRefresh }) {
                 <button className="btn btn-ghost" style={{ fontSize: 11 }}
                   onClick={() => setMode('setsale')}>Change Price</button>
                 <button className="btn btn-danger" style={{ fontSize: 11 }} disabled={busy}
-                  onClick={() => { if (window.confirm('Remove your sig listing?')) act('removesale', {}) }}>
+                  onClick={() => setMode('confirm_remove')}>
                   {busy ? '\u2026' : 'Remove Listing'}
                 </button>
+              </div>
+            )}
+
+            {mode === 'confirm_remove' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ fontSize: 12, color: 'var(--text)' }}>Remove your sig listing? This cannot be undone.</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button className="btn btn-danger" style={{ fontSize: 11 }} disabled={busy}
+                    onClick={() => act('removesale', {})}>
+                    {busy ? '\u2026' : 'Remove'}
+                  </button>
+                  <button className="btn btn-ghost" style={{ fontSize: 11 }}
+                    onClick={() => setMode('view')}>Cancel</button>
+                </div>
               </div>
             )}
           </div>

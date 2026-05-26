@@ -495,6 +495,8 @@ export default function BumperPage() {
   const [busy,       setBusy]       = useState(false)
   const [msg,        setMsg]        = useState(null)
   const [tab,        setTab]        = useState('jobs')
+  const [feeStep,    setFeeStep]    = useState(false)
+  const feeConfirmed                = useRef(false)
 
   const load       = useCallback(() => api.get('/api/autobump/jobs').then(d => setJobs(d?.jobs||[])).catch(()=>{}), [])
   const loadLog    = useCallback(() => api.get('/api/autobump/log').then(d => setLog(d?.log||[])).catch(()=>{}), [])
@@ -506,12 +508,7 @@ export default function BumperPage() {
 
   const add = async () => {
     if (!tid) return
-    // Quick inline fee confirmation — non-blocking, one-time per session
-    const confirmed = window._bumpFeeConfirmed || window.confirm(
-      `Add Auto Bump job for TID ${tid}?\n\nThis will charge 10 bytes per bump as a service fee, on top of the ~50 byte Stanley fee.\n\nContinue?`
-    )
-    if (!confirmed) return
-    window._bumpFeeConfirmed = true  // don't ask again this session
+    if (!feeConfirmed.current) { setFeeStep(true); return }
     setBusy(true); setMsg(null)
     try {
       const bump_until = expiryDays > 0 ? Math.floor(Date.now()/1000) + (expiryDays * 86400) : null
@@ -520,6 +517,9 @@ export default function BumperPage() {
     } catch(e) { setMsg({ ok:false, t:e.message }) }
     finally { setBusy(false) }
   }
+
+  const confirmFee = () => { feeConfirmed.current = true; setFeeStep(false); add() }
+  const cancelFee  = () => setFeeStep(false)
 
   const remove = async t => { await api.delete(`/api/autobump/jobs/${t}`); load() }
   const toggle = async (t, en) => { await api.patch(`/api/autobump/jobs/${t}`, { enabled:en }); load() }
@@ -580,6 +580,19 @@ export default function BumperPage() {
                 </button>
                 {msg && <span style={{fontSize:11,color:msg.ok?'var(--acc)':'var(--red)'}}>{msg.t}</span>}
               </div>
+
+              {feeStep && (
+                <div style={{marginTop:8,padding:'10px 12px',background:'rgba(255,180,0,.08)',border:'1px solid rgba(255,180,0,.3)',borderRadius:'var(--r)',fontSize:12}}>
+                  <div style={{marginBottom:8,color:'var(--text)'}}>
+                    <strong>Confirm bytes cost</strong> — adding TID {tid} will charge
+                    {' '}<strong>~50 bytes Stanley fee + 10 bytes service fee</strong> per bump.
+                  </div>
+                  <div style={{display:'flex',gap:6}}>
+                    <button className="btn btn-acc" style={{fontSize:11}} onClick={confirmFee}>Confirm &amp; Add</button>
+                    <button className="btn btn-ghost" style={{fontSize:11}} onClick={cancelFee}>Cancel</button>
+                  </div>
+                </div>
+              )}
 
               {mode==='page1' && (
                 <div style={{marginTop:8,padding:'7px 10px',background:'rgba(75,140,245,.06)',border:'1px solid rgba(75,140,245,.18)',borderRadius:'var(--r)',fontSize:11,color:'var(--sub)'}}>

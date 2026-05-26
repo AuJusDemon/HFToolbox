@@ -2662,6 +2662,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   const [logLoading,     setLogLoading]     = useState(false)
   const [expandedDiff,   setExpandedDiff]   = useState(null)
   const [rollbackLoading,setRollbackLoading]= useState(null)
+  const [rollbackPending,setRollbackPending]= useState(null)
 
   // ── Scheduling (existing) ─────────────────────────────────────────────────
   const [scheduling, setScheduling] = useState(null)
@@ -2943,7 +2944,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   }
 
   const doRollback = async (draft, logId) => {
-    if (!window.confirm('Restore this version? Current content will be replaced.')) return
+    setRollbackPending(null)
     setRollbackLoading(logId)
     try {
       const res = await api.post(`/api/posting/drafts/${draft.id}/rollback/${logId}`)
@@ -3277,10 +3278,21 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                               onClick={() => setExpandedDiff(expandedDiff === entry.id ? null : entry.id)}>
                               {expandedDiff === entry.id ? 'Hide diff' : 'Diff'}
                             </button>
-                            {isOwner && (
+                            {isOwner && rollbackPending === entry.id ? (
+                              <>
+                                <button className="btn btn-acc" style={{ fontSize: 9, padding: '1px 7px' }}
+                                  onClick={() => doRollback(d, entry.id)}>
+                                  Confirm
+                                </button>
+                                <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 7px' }}
+                                  onClick={() => setRollbackPending(null)}>
+                                  Cancel
+                                </button>
+                              </>
+                            ) : isOwner && (
                               <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 7px' }}
                                 disabled={rollbackLoading === entry.id}
-                                onClick={() => doRollback(d, entry.id)}>
+                                onClick={() => setRollbackPending(entry.id)}>
                                 {rollbackLoading === entry.id ? '…' : 'Restore'}
                               </button>
                             )}

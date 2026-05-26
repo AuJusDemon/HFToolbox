@@ -1941,7 +1941,10 @@ async def dash_user_lookup(request: Request, lookup_uid: str):
         return JSONResponse({"error": "no token"}, status_code=401)
 
     import hf_service
-    data, _ = await hf_service.get_user_profile(lookup_uid, token)
+    try:
+        data, _ = await hf_service.get_user_profile(lookup_uid, token)
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if not data:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     users = data.get("users", {})
@@ -2203,8 +2206,10 @@ async def user_activity(request: Request, lookup_uid: str):
     import hf_service
     import hf_cache as _hfc
     force = request.query_params.get("force") == "true"
-    data, is_stale = await hf_service.get_user_activity(lookup_uid, token, force=force)
-
+    try:
+        data, is_stale = await hf_service.get_user_activity(lookup_uid, token, force=force)
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if data is None:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     if not data.get("user"):
@@ -2252,7 +2257,10 @@ async def user_trust(request: Request, lookup_uid: str, ratings_page: int = 1):
     import hf_service
     import hf_cache as _hfc
     force = request.query_params.get("force") == "true"
-    data, is_stale = await hf_service.get_user_trust(lookup_uid, token, ratings_page=ratings_page, force=force)
+    try:
+        data, is_stale = await hf_service.get_user_trust(lookup_uid, token, ratings_page=ratings_page, force=force)
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if data is None:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     cache_key = f"user:{lookup_uid}:trust:p{ratings_page}"
@@ -2308,7 +2316,10 @@ async def get_contract_detail(request: Request, cid: int):
     import hf_service
     import hf_cache as _hfc
     force = request.query_params.get("force") == "true"
-    data, is_stale = await hf_service.get_contract_detail(cid, token, force=force)
+    try:
+        data, is_stale = await hf_service.get_contract_detail(cid, token, force=force)
+    except _AuthExpired:
+        return _handle_auth_expired(request, uid)
     if data is None:
         return JSONResponse({"error": "HF API unavailable"}, status_code=503)
     contract = data.get("contract")

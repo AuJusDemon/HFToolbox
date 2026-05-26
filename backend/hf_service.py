@@ -42,6 +42,12 @@ from typing import Callable, Awaitable
 import db
 import hf_cache as cache
 
+try:
+    from HFClient import AuthExpired as _AuthExpired
+except ImportError:
+    class _AuthExpired(Exception):  # type: ignore[no-redef]
+        pass
+
 log = logging.getLogger("hf_service")
 
 
@@ -198,6 +204,10 @@ async def _acquire_and_fetch(
                                 "", ms, False, -1, cache_key, "miss_live_empty")
         return None, False
 
+    except _AuthExpired:
+        # Propagate so the route can clear the session and return 401.
+        # Do not swallow auth errors as generic 503s.
+        raise
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
         await asyncio.to_thread(cache.log_call, uid, "read", resource_type,
@@ -581,6 +591,7 @@ async def get_contract_detail(cid: int, token: str, force: bool = False) -> tupl
         fetch_fn      = _fetch,
         uid           = "",   # global, not per-viewer
         force         = force,
+        fetch_timeout = 30,   # 2 sequential calls (contract + username); needs more than default 20s
     )
 
 
