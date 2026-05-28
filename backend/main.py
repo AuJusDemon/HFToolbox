@@ -172,29 +172,56 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
     recv_txns = parse_bytes(data1, False)
     sent_txns = parse_bytes(data2, True)
 
-    # Detect new received transactions before they get upserted (dedup by ID)
     if recv_done and recv_txns:
         try:
-            recv_ids = [str(t["id"]) for t in recv_txns if t.get("id")]
+            _GAMBLING_KW = {"slots winner","blackjack winner","sports wager winner",
+                            "crypto game coin sell","flips winner"}
+            _bytes_link  = (os.environ.get("FRONTEND_URL","").rstrip("/") or "https://hftoolbox.com") + "/dashboard/bytes"
+            recv_ids     = [str(t["id"]) for t in recv_txns if t.get("id")]
             existing_recv_ids = await asyncio.to_thread(db.get_existing_bytes_ids, uid, recv_ids)
+            gambling_new: list = []
             for t in recv_txns:
                 txn_id = str(t.get("id") or "")
                 if not txn_id or txn_id in existing_recv_ids:
                     continue
                 amount = str(t.get("amount") or "")
                 reason = str(t.get("reason") or "")
-                title = f"+{amount} bytes"
-                body  = reason[:120] if reason else ""
-                _bytes_link = (os.environ.get("FRONTEND_URL", "").rstrip("/") or "https://hftoolbox.com") + "/dashboard/bytes"
-                await asyncio.to_thread(
-                    integration_db.create_alert_event,
-                    uid, "bytes_received", f"txn:{txn_id}",
-                    title, body,
-                    _bytes_link,
-                    "toolbox", None, True,
-                )
+                if any(k in reason.lower() for k in _GAMBLING_KW):
+                    gambling_new.append({"id": txn_id, "amount": amount, "reason": reason})
+                else:
+                    await asyncio.to_thread(
+                        integration_db.create_alert_event,
+                        uid, "bytes_received", f"txn:{txn_id}",
+                        f"+{amount} bytes", reason[:120] if reason else "",
+                        _bytes_link, "toolbox", None, True,
+                    )
+            if gambling_new:
+                _FLUSH_SECS  = 1800
+                _gpend = await asyncio.to_thread(db.get_dash_cache, uid, "gambling_pending", 86400 * 30) or {}
+                _pending_list = _gpend.get("txns", [])
+                _last_flush   = int(_gpend.get("flush_ts", 0))
+                _pending_list.extend(gambling_new)
+                _now_g = int(_t.time())
+                if _now_g - _last_flush >= _FLUSH_SECS:
+                    _count = len(_pending_list)
+                    _lines = "\n".join(
+                        f"+{x['amount']} - {x['reason']}" for x in _pending_list[:15]
+                    )
+                    if _count > 15:
+                        _lines += f"\n+{_count - 15} more"
+                    _wkey = str(int(_now_g // _FLUSH_SECS))
+                    await asyncio.to_thread(
+                        integration_db.create_alert_event,
+                        uid, "bytes_gambling_bundle", f"gambling:{_wkey}",
+                        f"{_count} gambling win{'s' if _count != 1 else ''}",
+                        _lines, _bytes_link, "toolbox", None, True,
+                    )
+                    await asyncio.to_thread(db.set_dash_cache, uid, "gambling_pending", {"txns": [], "flush_ts": _now_g})
+                else:
+                    await asyncio.to_thread(db.set_dash_cache, uid, "gambling_pending",
+                                            {"txns": _pending_list, "flush_ts": _last_flush or _now_g})
         except Exception as e:
-            log.warning("Crawl: bytes_received alert failed uid=%s: %s", uid, e)
+            log.warning("Crawl: bytes alert failed uid=%s: %s", uid, e)
 
     await asyncio.to_thread(db.upsert_bytes_txns, uid, recv_txns + sent_txns)
 
@@ -223,43 +250,90 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
     all_contracts = c_batch1 + c_batch2
 
     if all_contracts:
-        # Check which CIDs are genuinely new BEFORE upsert overwrites them
         try:
             all_cids = [str(c.get("cid","")) for c in all_contracts if c.get("cid")]
             existing_cids = await asyncio.to_thread(db.get_existing_contract_cids, uid, all_cids)
+            _c_before = await asyncio.to_thread(db.get_contracts_statuses, uid, all_cids) if c_done else {}
         except Exception:
             existing_cids = set()
+            _c_before = {}
 
         await asyncio.to_thread(db.upsert_contracts, uid, all_contracts)
 
-        # Only notify about new contracts if the initial crawl is already done
-        # (c_done was True before this run, meaning we've seen all history)
         if c_done:
             try:
-                STATUS_LABELS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
-                                 "6":"Complete","7":"Disputed","8":"Expired"}
+                _STATUS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
+                           "6":"Complete","7":"Disputed","8":"Expired"}
+                _TYPE   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
                 import time as _tnow
-                cutoff = _tnow.time() - 3600  # only notify contracts created in last hour
+                _fe     = (os.environ.get("FRONTEND_URL") or "https://hftoolbox.com").rstrip("/")
+                cutoff  = _tnow.time() - 3600
+
+                _cp_uids = list({
+                    str(c.get("otheruid","")) if str(c.get("inituid","")) == uid else str(c.get("inituid",""))
+                    for c in all_contracts if c.get("cid")
+                } - {""})
+                _cp_map = await asyncio.to_thread(db.get_uid_usernames, _cp_uids) if _cp_uids else {}
+
                 for c in all_contracts:
-                    cid = str(c.get("cid", ""))
-                    if not cid or cid in existing_cids:
+                    cid = str(c.get("cid",""))
+                    if not cid:
                         continue
-                    # Extra guard: only notify if contract was actually created recently
-                    dateline = int(c.get("dateline") or 0)
-                    if dateline and dateline < cutoff:
-                        continue
-                    status_n = str(c.get("status_n", c.get("status", "")))
-                    status_label = STATUS_LABELS.get(status_n, f"Status {status_n}")
-                    await asyncio.to_thread(
-                        integration_db.create_alert_event,
-                        uid, "contract_new", f"cid:{cid}",
-                        f"New contract #{cid}",
-                        f"Status: {status_label}",
-                        f"/dashboard/contracts/{cid}",
-                        "toolbox", None, True,
-                    )
+                    _cp_uid  = str(c.get("otheruid","")) if str(c.get("inituid","")) == uid else str(c.get("inituid",""))
+                    _cp_name = (_cp_map.get(_cp_uid) or {}).get("username") or f"UID {_cp_uid}"
+                    _link    = f"{_fe}/dashboard/contracts/{cid}"
+
+                    if cid not in existing_cids:
+                        dateline = int(c.get("dateline") or 0)
+                        if dateline and dateline < cutoff:
+                            continue
+                        _sn      = str(c.get("status_n", c.get("status","")))
+                        _slabel  = _STATUS.get(_sn, f"Status {_sn}")
+                        _tlabel  = _TYPE.get(str(c.get("type","")), "Contract")
+                        _product = str(c.get("iproduct","") or "").strip()[:60]
+                        _price   = str(c.get("iprice","") or "").strip()
+                        _curr    = str(c.get("icurrency","") or "").strip()
+                        body_parts = [f"With: {_cp_name}", f"Status: {_slabel}"]
+                        if _product:
+                            body_parts.insert(1, f"Product: {_product}")
+                        if _price:
+                            body_parts.append(f"Price: {_price} {_curr}".strip())
+                        await asyncio.to_thread(
+                            integration_db.create_alert_event,
+                            uid, "contract_new", f"cid:{cid}",
+                            f"New contract #{cid} - {_tlabel}",
+                            "\n".join(body_parts),
+                            _link, "toolbox", None, True,
+                        )
+                    else:
+                        old_entry = _c_before.get(cid, {})
+                        if not old_entry:
+                            continue
+                        new_sn = str(c.get("status",""))
+                        new_br = str(c.get("brating") or "")
+                        old_sn = old_entry.get("status_n","")
+                        old_br = old_entry.get("brating","")
+                        if new_sn and new_sn != old_sn:
+                            _slabel = _STATUS.get(new_sn, f"Status {new_sn}")
+                            atype   = "contract_dispute" if new_sn == "7" else "contract_status_change"
+                            _prod   = str(c.get("iproduct","") or "").strip()[:40]
+                            body    = f"With: {_cp_name}" + (f" | {_prod}" if _prod else "")
+                            await asyncio.to_thread(
+                                integration_db.create_alert_event,
+                                uid, atype, f"cid:{cid}:status:{new_sn}",
+                                f"Contract #{cid} - {_slabel}",
+                                body, _link, "toolbox", None, True,
+                            )
+                        if new_br and new_br != old_br:
+                            await asyncio.to_thread(
+                                integration_db.create_alert_event,
+                                uid, "contract_b_rating", f"cid:{cid}:brating:{new_br}",
+                                f"Contract #{cid} - B-rating received",
+                                f"With: {_cp_name} | Rating: {new_br}",
+                                _link, "toolbox", None, True,
+                            )
             except Exception as e:
-                log.warning("Crawl: contract notification failed uid=%s: %s", uid, e)
+                log.warning("Crawl: contract alert failed uid=%s: %s", uid, e)
 
     # ── Re-check any contracts still showing as open (Awaiting/Active) ──────────
     # Runs at most once every 15 minutes, capped at 1 batch (30 contracts).
@@ -298,10 +372,15 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                             _before = {}
                         await asyncio.to_thread(db.upsert_contracts, uid, updated)
                         log.info("Contracts re-check uid=%s updated %d open contracts", uid, len(updated))
-                        # Fire contract change alerts
                         try:
-                            STATUS_LABELS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
-                                             "6":"Complete","7":"Disputed","8":"Expired"}
+                            _RC_STATUS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
+                                          "6":"Complete","7":"Disputed","8":"Expired"}
+                            _fe_rc = (os.environ.get("FRONTEND_URL") or "https://hftoolbox.com").rstrip("/")
+                            _rc_cp_uids = list({
+                                str(c.get("otheruid","")) if str(c.get("inituid","")) == uid else str(c.get("inituid",""))
+                                for c in updated if c.get("cid")
+                            } - {""})
+                            _rc_cp_map = await asyncio.to_thread(db.get_uid_usernames, _rc_cp_uids) if _rc_cp_uids else {}
                             for c in updated:
                                 cid       = str(c.get("cid",""))
                                 new_sn    = str(c.get("status",""))
@@ -311,23 +390,27 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                                 old_br    = old_entry.get("brating","")
                                 if not cid or not old_entry:
                                     continue
+                                _rc_cp  = str(c.get("otheruid","")) if str(c.get("inituid","")) == uid else str(c.get("inituid",""))
+                                _rc_who = (_rc_cp_map.get(_rc_cp) or {}).get("username") or f"UID {_rc_cp}"
+                                _rc_lnk = f"{_fe_rc}/dashboard/contracts/{cid}"
                                 if new_sn and new_sn != old_sn:
-                                    label = STATUS_LABELS.get(new_sn, f"Status {new_sn}")
+                                    label = _RC_STATUS.get(new_sn, f"Status {new_sn}")
                                     atype = "contract_dispute" if new_sn == "7" else "contract_status_change"
+                                    _prod = str(c.get("iproduct","") or "").strip()[:40]
+                                    body  = f"With: {_rc_who}" + (f" | {_prod}" if _prod else "")
                                     await asyncio.to_thread(
                                         integration_db.create_alert_event,
                                         uid, atype, f"cid:{cid}:status:{new_sn}",
-                                        f"Contract #{cid} — {label}",
-                                        "", f"/dashboard/contracts/{cid}",
-                                        "toolbox", None, True,
+                                        f"Contract #{cid} - {label}",
+                                        body, _rc_lnk, "toolbox", None, True,
                                     )
                                 if new_br and new_br != old_br:
                                     await asyncio.to_thread(
                                         integration_db.create_alert_event,
-                                        uid, "contract_b_rating", f"cid:{cid}:brating",
-                                        f"Contract #{cid} — B-rating received",
-                                        "", f"/dashboard/contracts/{cid}",
-                                        "toolbox", None, True,
+                                        uid, "contract_b_rating", f"cid:{cid}:brating:{new_br}",
+                                        f"Contract #{cid} - B-rating received",
+                                        f"With: {_rc_who} | Rating: {new_br}",
+                                        _rc_lnk, "toolbox", None, True,
                                     )
                         except Exception as e:
                             log.warning("Contracts re-check: alert failed uid=%s: %s", uid, e)
@@ -877,13 +960,16 @@ async def _telegram_delivery_loop():
                 text = format_alert(event)
                 ok = await send_message(token, int(chat_id), text)
                 if ok:
-                    await asyncio.wait_for(
-                        asyncio.to_thread(integration_db.mark_alert_event_delivered, event["id"]),
-                        timeout=10,
-                    )
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(integration_db.mark_alert_event_delivered, event["id"]),
+                            timeout=10,
+                        )
+                    except Exception:
+                        log.warning("Delivery: failed to mark event %s delivered", event["id"])
                 await asyncio.sleep(0.05)
         except asyncio.TimeoutError:
-            log.warning("Telegram delivery loop: DB call timed out, skipping cycle")
+            log.warning("Telegram delivery loop: DB timed out fetching events, skipping cycle")
         except Exception as e:
             log.warning("Telegram delivery loop error: %s", e)
         await asyncio.sleep(30)

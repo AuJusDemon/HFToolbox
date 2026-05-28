@@ -15,34 +15,39 @@ def format_alert(event: dict) -> str:
     link  = _abs_link((event.get("link") or "").strip())
 
     if t == "contract_new":
-        text = "📜 <b>New contract</b>"
-        if title:
-            text += f"\n{title}"
+        text = f"📜 <b>{title}</b>" if title else "📜 <b>New contract</b>"
+        if body:
+            text += f"\n{body}"
     elif t == "contract_status_change":
-        text = "📜 <b>Contract updated</b>"
-        if title:
-            text += f"\n{title}"
+        text = f"📜 <b>{title}</b>" if title else "📜 <b>Contract updated</b>"
+        if body:
+            text += f"\n{body}"
     elif t == "contract_b_rating":
-        text = "⭐ <b>B-rating received</b>"
-        if title:
-            text += f"\n{title}"
+        text = f"⭐ <b>{title}</b>" if title else "⭐ <b>B-rating received</b>"
+        if body:
+            text += f"\n{body}"
     elif t == "contract_dispute":
-        text = "⚠️ <b>Contract disputed</b>"
-        if title:
-            text += f"\n{title}"
+        text = f"⚠️ <b>{title}</b>" if title else "⚠️ <b>Contract disputed</b>"
+        if body:
+            text += f"\n{body}"
     elif t == "pm_unread_increase":
         text = "✉️ <b>New private messages</b>"
         if title:
             text += f"\n{title}"
     elif t == "reply_tracked_thread":
-        thread = title[len("Reply in: "):] if title.startswith("Reply in: ") else title
-        text = f"💬 <b>{thread}</b>" if thread else "💬 <b>New reply</b>"
+        text = "💬 <b>New reply</b>"
+        if title:
+            text += f"\n{title}"
         if body:
             text += f"\n{body}"
     elif t == "bytes_received":
         text = "💰 <b>Bytes received</b>"
         if title:
             text += f"\n{title}"
+        if body:
+            text += f"\n{body}"
+    elif t == "bytes_gambling_bundle":
+        text = f"🎰 <b>{title}</b>" if title else "🎰 <b>Gambling wins</b>"
         if body:
             text += f"\n{body}"
     elif t == "token_dead":
