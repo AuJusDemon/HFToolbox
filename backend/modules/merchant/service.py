@@ -34,6 +34,20 @@ from modules.merchant.merchant_db import (
 )
 
 
+# ── Marketplace FID whitelist ──────────────────────────────────────────────────
+# Only threads in HF Marketplace sections are treated as seller offers.
+MARKETPLACE_FIDS: frozenset[str] = frozenset({
+    # Bazaar
+    '163', '402', '186', '205', '217', '111',
+    # Premium Marketplace
+    '107', '374', '299', '136', '182', '218',
+    # Services Marketplace
+    '145', '263', '106', '219', '171', '308',
+    # Auxiliary Marketplace
+    '44', '176', '291', '404', '339', '255', '225',
+})
+
+
 # ── Low-level fetchers ─────────────────────────────────────────────────────────
 
 def _get_contracts(uid: str) -> list[dict]:
@@ -166,7 +180,7 @@ def _get_crawl_freshness(uid: str) -> dict:
 def get_overview(uid: str) -> dict:
     now = int(time.time())
     contracts  = _get_contracts(uid)
-    threads    = _get_my_threads(uid)
+    threads    = [t for t in _get_my_threads(uid) if str(t.get('fid', '')) in MARKETPLACE_FIDS]
     replies    = _get_reply_queue(uid)
     bump_logs  = _get_bump_log(uid, 200)
     goals      = get_goals(uid)
@@ -277,7 +291,7 @@ def get_overview(uid: str) -> dict:
 
 
 def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health') -> list[dict]:
-    threads   = _get_my_threads(uid)
+    threads   = [t for t in _get_my_threads(uid) if str(t.get('fid', '')) in MARKETPLACE_FIDS]
     contracts = _get_contracts(uid)
     replies   = _get_reply_queue(uid)
     bump_logs = _get_bump_log(uid, 500)
@@ -385,7 +399,7 @@ def get_offer_detail(uid: str, tid: str) -> dict | None:
         enriched_contracts.append({
             **c,
             'counterparty_username': names.get(cp, ''),
-            'bucket': contract_bucket(str(c.get('status_n',''))),
+            'bucket': contract_bucket(str(c.get('status_n','')), int(c.get('dateline') or 0)),
         })
 
     enriched_replies = []
@@ -508,7 +522,7 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
 
     result = []
     for c in contracts:
-        bucket = contract_bucket(str(c.get('status_n', '')))
+        bucket = contract_bucket(str(c.get('status_n', '')), int(c.get('dateline') or 0))
         if bucket_filter and bucket != bucket_filter:
             continue
         cp = counterparty_uid(c, uid)
@@ -586,7 +600,7 @@ def get_customer_detail(uid: str, cp_uid: str) -> dict | None:
     for c in contracts:
         enriched.append({
             **c,
-            'bucket': contract_bucket(str(c.get('status_n', ''))),
+            'bucket': contract_bucket(str(c.get('status_n', '')), int(c.get('dateline') or 0)),
             'thread_title': tid_titles.get(str(c.get('tid','')), ''),
         })
 

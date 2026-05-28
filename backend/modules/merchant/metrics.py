@@ -8,24 +8,31 @@ No DB calls here — keeps the router/service easy to test and reason about.
 import time
 
 # ── Contract status codes ──────────────────────────────────────────────────────
-# From HF API: 1=awaiting approval, 2=cancelled, 3=voided(?), 4=dispute,
-# 5=active, 6=completed, 7=declined, 8=expired/timeout
+# Confirmed from HF API + empirical DB data:
+#   1=awaiting approval (but HF shows "Expired" if dateline > 90 days old)
+#   2=cancelled, 3=unknown/voided, 4=cancelled (HF website confirms),
+#   5=active deal, 6=complete, 7=disputed, 8=expired
 STATUS_ACTIVE      = {'1', '5'}
 STATUS_COMPLETE    = {'6'}
-STATUS_LOST        = {'2', '4', '7', '8'}
+STATUS_LOST        = {'2', '3', '4', '7', '8'}
 STATUS_AWAITING    = {'1'}
 STATUS_FULFILLMENT = {'5'}
-STATUS_DISPUTE     = {'4'}
+STATUS_DISPUTE     = {'7'}
+
+_AGE_EXPIRED_S = 90 * 86400  # HF stops updating status 1 after ~90 days → "Expired"
 
 
-def contract_bucket(status_n: str) -> str:
+def contract_bucket(status_n: str, dateline: int = 0) -> str:
     s = str(status_n or '')
-    if s == '1':  return 'awaiting_approval'
+    now = int(time.time())
+    if s == '1':
+        if dateline and (now - int(dateline)) > _AGE_EXPIRED_S:
+            return 'expired'
+        return 'awaiting_approval'
     if s == '5':  return 'active_fulfillment'
     if s == '6':  return 'completed'
-    if s == '2':  return 'cancelled'
-    if s == '4':  return 'disputed'
-    if s == '7':  return 'declined'
+    if s in ('2', '3', '4'):  return 'cancelled'
+    if s == '7':  return 'disputed'
     if s == '8':  return 'expired'
     return 'other'
 
@@ -47,19 +54,26 @@ def offer_stats_from_contracts(contracts: list, my_uid: str) -> dict:
         'awaiting': 0, 'disputed': 0,
         'last_contract_at': 0, 'counterparties': set(),
     })
+    now = int(time.time())
     for c in contracts:
         tid = str(c.get('tid') or '')
         if not tid:
             continue
         s = str(c.get('status_n') or '')
+        dl = int(c.get('dateline') or 0)
         r = result[tid]
         r['total'] += 1
-        if s in STATUS_COMPLETE:    r['complete'] += 1
-        elif s in STATUS_ACTIVE:    r['active'] += 1
-        elif s in STATUS_AWAITING:  r['awaiting'] += 1
+        # Treat stale status-1 as expired (HF stops updating after ~90 days)
+        s_is_old_awaiting = (s == '1' and dl and (now - dl) > _AGE_EXPIRED_S)
+        if s in STATUS_COMPLETE:
+            r['complete'] += 1
+        elif s in STATUS_FULFILLMENT:
+            r['active'] += 1
+        elif s == '1' and not s_is_old_awaiting:
+            r['awaiting'] += 1
         if s in STATUS_DISPUTE:     r['disputed'] += 1
-        if s in STATUS_LOST:        r['lost'] += 1
-        dl = int(c.get('dateline') or 0)
+        if s in STATUS_LOST or s_is_old_awaiting:
+            r['lost'] += 1
         if dl > r['last_contract_at']:
             r['last_contract_at'] = dl
         cp = counterparty_uid(c, my_uid)

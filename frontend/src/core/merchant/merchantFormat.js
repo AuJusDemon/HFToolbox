@@ -22,7 +22,6 @@ export function bucketLabel(bucket) {
     completed:          'Completed',
     cancelled:          'Cancelled',
     disputed:           'Disputed',
-    declined:           'Declined',
     expired:            'Expired',
     other:              'Other',
   }
@@ -34,7 +33,7 @@ export function bucketColor(bucket) {
   if (bucket === 'active_fulfillment')return 'var(--acc)'
   if (bucket === 'awaiting_approval') return 'var(--yellow)'
   if (bucket === 'disputed')          return 'var(--red)'
-  if (bucket === 'cancelled' || bucket === 'declined' || bucket === 'expired')
+  if (bucket === 'cancelled' || bucket === 'expired')
                                       return 'var(--dim)'
   return 'var(--sub)'
 }

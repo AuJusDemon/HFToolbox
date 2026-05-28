@@ -66,31 +66,30 @@ function DealCard({ deal }) {
 }
 
 export default function MerchantDeals() {
-  const [deals, setDeals]   = useState([])
-  const [loading, setLoading] = useState(true)
-  const [bucket, setBucket] = useState(null)
+  const [allDeals, setAllDeals] = useState([])
+  const [loading, setLoading]   = useState(true)
+  const [bucket, setBucket]     = useState(null)
 
-  const load = (b) => {
+  useEffect(() => {
     setLoading(true)
-    const params = b ? `?bucket=${b}` : ''
-    api.get(`/api/merchant/deals${params}`)
-      .then(d => { setDeals(Array.isArray(d) ? d : []); setLoading(false) })
+    api.get('/api/merchant/deals')
+      .then(d => { setAllDeals(Array.isArray(d) ? d : []); setLoading(false) })
       .catch(() => setLoading(false))
-  }
+  }, [])
 
-  useEffect(() => { load(bucket) }, [bucket])
-
-  const counts = deals.reduce((acc, d) => {
+  const counts = allDeals.reduce((acc, d) => {
     acc[d.bucket] = (acc[d.bucket] || 0) + 1
     return acc
   }, {})
+
+  const visible = bucket ? allDeals.filter(d => d.bucket === bucket) : allDeals
 
   return (
     <div>
       {/* Bucket tabs */}
       <div style={{display:'flex', gap:4, marginBottom:12, overflowX:'auto', whiteSpace:'nowrap'}}>
         {BUCKETS.map(b => {
-          const cnt = b.val ? counts[b.val] ?? 0 : deals.length
+          const cnt = b.val ? counts[b.val] ?? 0 : allDeals.length
           return (
             <button key={b.val || 'all'}
               className={`tab${bucket === b.val ? ' on' : ''}`}
@@ -104,9 +103,9 @@ export default function MerchantDeals() {
 
       {loading
         ? <div className="empty"><div className="spin" /></div>
-        : deals.length === 0
+        : visible.length === 0
           ? <div className="empty" style={{color:'var(--dim)'}}>No deals found.</div>
-          : deals.map(d => <DealCard key={d.cid} deal={d} />)
+          : visible.map(d => <DealCard key={d.cid} deal={d} />)
       }
     </div>
   )
