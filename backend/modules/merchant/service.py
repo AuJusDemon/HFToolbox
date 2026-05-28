@@ -479,8 +479,22 @@ def get_offer_detail(uid: str, tid: str) -> dict | None:
 
 
 def get_pipeline(uid: str) -> dict:
+    # Replies only exist in pipeline from when the user first authed with the dashboard.
+    # created_at is set by upsert_user() on first login; fall back to last_seen for
+    # existing accounts that predate the fix.
+    with _db() as conn:
+        user_row = conn.execute(
+            "SELECT created_at, last_seen FROM users WHERE uid=?", (uid,)
+        ).fetchone()
+    if user_row:
+        pipeline_since = int(user_row['created_at'] or user_row['last_seen'] or 0)
+    else:
+        pipeline_since = 0
+
     marketplace_tids = _get_marketplace_tids(uid)
-    replies    = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
+    all_replies = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
+    replies = [r for r in all_replies
+               if not pipeline_since or int(r.get('dateline') or 0) >= pipeline_since]
     lead_metas = _get_lead_metas(uid)
     contracts  = _get_contracts(uid)
     goals      = get_goals(uid)

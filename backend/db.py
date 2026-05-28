@@ -86,15 +86,17 @@ def init_db() -> None:
 def upsert_user(uid: str, username: str, token: str, avatar: str = "", groups: list[str] = []) -> None:
     token = crypto.encrypt_token(token)
     import time as _t
+    now = int(_t.time())
     with _db() as conn:
         conn.execute("""
-            INSERT INTO users (uid, username, token, avatar, `groups`, last_seen)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO users (uid, username, token, avatar, `groups`, last_seen, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 username=VALUES(username), token=VALUES(token),
                 avatar=VALUES(avatar), `groups`=VALUES(`groups`),
-                last_seen=VALUES(last_seen)
-        """, (uid, username, token, avatar, json.dumps(groups), int(_t.time())))
+                last_seen=VALUES(last_seen),
+                created_at=IF(created_at=0, VALUES(created_at), created_at)
+        """, (uid, username, token, avatar, json.dumps(groups), now, now))
 
 
 def get_user(uid: str) -> dict | None:
