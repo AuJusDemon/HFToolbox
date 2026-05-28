@@ -311,6 +311,17 @@ select.inp,select.input{
 .bb-ta::-webkit-resizer{background:var(--b2);border-left:2px solid var(--acc)}
 .bb-ta:focus{border-color:var(--sub);box-shadow:var(--glow-sm)}
 
+/* ── MERCHANT HQ ─────────────────────────────────────────────────────────── */
+.mhq-tabs{display:flex;gap:4px;overflow-x:auto;white-space:nowrap;scrollbar-width:none;padding-bottom:2px}
+.mhq-tabs::-webkit-scrollbar{display:none}
+.mhq-card-list{display:grid;grid-template-columns:1fr;gap:6px}
+.mhq-offer-card{transition:opacity 100ms}
+.mhq-offer-card:hover{opacity:.9}
+.mhq-action-item:last-child{margin-bottom:0}
+@media(min-width:721px){
+  .mhq-card-list{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+}
+
 /* ── MOBILE ──────────────────────────────────────────────────────────────── */
 .mob-nav{display:none}
 @media(max-width:720px){
@@ -319,6 +330,9 @@ select.inp,select.input{
   .sidebar{display:none}
   .main{padding-bottom:58px}
   .content{padding:10px 10px 20px}
+
+  /* ── Merchant HQ sticky tabs ── */
+  .mhq-tabs{position:sticky;top:0;background:var(--bg);z-index:10;padding:4px 0 6px;border-bottom:1px solid var(--b2)}
 
   /* ── Scrollable bottom nav with all pages ── */
   .mob-nav{

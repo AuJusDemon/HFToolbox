@@ -994,6 +994,8 @@ async def lifespan(app: FastAPI):
     init_posting_db()
     from modules.sigmarket.sigmarket_db import init_sigmarket_db
     init_sigmarket_db()
+    from modules.merchant.merchant_db import init_merchant_db
+    init_merchant_db()
 
     # ── Startup DB cleanup ──────────────────────────────────────────────────
     # 1. Reset NULL last_pid rows so cursor comparisons work cleanly.
