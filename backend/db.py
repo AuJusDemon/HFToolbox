@@ -984,9 +984,17 @@ def get_contracts_preview(uid: str, status_n: str | None = None,
 
     counts    = {r["status_n"]: r["cnt"] for r in status_rows}
     complete  = counts.get("6", 0)
-    cancelled = counts.get("2", 0)
+    cancelled = sum(counts.get(s, 0) for s in ("2", "3", "4"))
     non_canc  = total - cancelled
     comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    # Merge rows that share the same display label (e.g. status 2 and 4 both → "Cancelled")
+    _sm: dict = {}
+    for r in status_rows:
+        lbl = STATUS_MAP.get(str(r["status_n"]), "Unknown")
+        _sm[lbl] = _sm.get(lbl, 0) + r["cnt"]
+    by_status_merged = [{"label": lbl, "count": cnt}
+                        for lbl, cnt in sorted(_sm.items(), key=lambda x: -x[1])]
 
     def _val(r):
         ip, ic = r.get("iprice","0") or "0", r.get("icurrency","other") or "other"
@@ -1047,7 +1055,7 @@ def get_contracts_preview(uid: str, status_n: str | None = None,
         "comp_rate":   comp_rate,
         "date_min":    date_row["mn"] if date_row else None,
         "date_max":    date_row["mx"] if date_row else None,
-        "by_status":   [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in status_rows],
+        "by_status":   by_status_merged,
         "by_type":     [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in type_rows],
         "rows":        rows,
         "with_thread": with_thread,
@@ -1181,16 +1189,23 @@ def get_contracts_analytics(uid: str, status_n: str | None = None,
 
     counts = {r["status_n"]: r["cnt"] for r in by_status_rows}
     complete  = counts.get("6", 0)
-    cancelled = counts.get("2", 0)
+    cancelled = sum(counts.get(s, 0) for s in ("2", "3", "4"))
     non_canc  = total - cancelled
     comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    _sm2: dict = {}
+    for r in by_status_rows:
+        lbl = STATUS_MAP.get(str(r["status_n"]), "Unknown")
+        _sm2[lbl] = _sm2.get(lbl, 0) + r["cnt"]
+    by_status_merged2 = [{"label": lbl, "count": cnt}
+                         for lbl, cnt in sorted(_sm2.items(), key=lambda x: -x[1])]
 
     return {
         "total":     total,
         "comp_rate": comp_rate,
         "date_min":  date_row["mn"] if date_row else None,
         "date_max":  date_row["mx"] if date_row else None,
-        "by_status": [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in by_status_rows],
+        "by_status": by_status_merged2,
         "by_type":   [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in by_type_rows],
         "top_counterparties": [{"uid": r["cp"], "count": r["cnt"]} for r in cp_rows if r["cp"]],
         "monthly":   [{"month": r["month"], "count": r["cnt"]} for r in monthly_rows],

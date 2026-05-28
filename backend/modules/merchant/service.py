@@ -26,6 +26,8 @@ from modules.merchant.metrics import (
     STATUS_COMPLETE,
     STATUS_AWAITING,
     STATUS_LOST,
+    STATUS_FULFILLMENT,
+    _AGE_EXPIRED_S,
 )
 from modules.merchant.merchant_db import (
     get_all_offer_meta,
@@ -103,6 +105,39 @@ def _get_scheduled_threads(uid: str) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def _get_marketplace_tids(uid: str) -> frozenset[str]:
+    """
+    Return TIDs of confirmed marketplace threads for this uid.
+    A thread is "marketplace" if any of these are true:
+      - Its FID in my_threads matches a known marketplace section
+      - It has a bump_job (user is actively promoting it to sell)
+      - It has at least one contract (contracts only happen in marketplace)
+    """
+    tids: set[str] = set()
+    fids_list = list(MARKETPLACE_FIDS)
+    with _db() as conn:
+        if fids_list:
+            ph = ','.join('?' * len(fids_list))
+            for r in conn.execute(
+                f"SELECT tid FROM my_threads WHERE uid=? AND fid IN ({ph})",
+                [uid] + fids_list,
+            ).fetchall():
+                tids.add(str(r['tid']))
+
+        for r in conn.execute(
+            "SELECT DISTINCT tid FROM bump_jobs WHERE uid=?", (uid,)
+        ).fetchall():
+            tids.add(str(r['tid']))
+
+        for r in conn.execute(
+            "SELECT DISTINCT tid FROM contracts_history WHERE uid=?", (uid,)
+        ).fetchall():
+            tids.add(str(r['tid']))
+
+    tids.discard('')
+    return frozenset(tids)
+
+
 def _get_username(uid_str: str) -> str | None:
     with _db() as conn:
         row = conn.execute(
@@ -178,18 +213,27 @@ def _get_crawl_freshness(uid: str) -> dict:
 # ── Public service functions ───────────────────────────────────────────────────
 
 def get_overview(uid: str) -> dict:
-    now = int(time.time())
-    contracts  = _get_contracts(uid)
-    threads    = [t for t in _get_my_threads(uid) if str(t.get('fid', '')) in MARKETPLACE_FIDS]
-    replies    = _get_reply_queue(uid)
-    bump_logs  = _get_bump_log(uid, 200)
-    goals      = get_goals(uid)
-    sla_hours  = goals.get('reply_sla_hours', 24)
-    lead_metas = _get_lead_metas(uid)
+    now              = int(time.time())
+    marketplace_tids = _get_marketplace_tids(uid)
+    contracts        = _get_contracts(uid)
+    all_threads      = _get_my_threads(uid)
+    threads          = [t for t in all_threads if str(t.get('tid','')) in marketplace_tids]
+    replies          = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
+    bump_logs        = _get_bump_log(uid, 200)
+    goals            = get_goals(uid)
+    sla_hours        = goals.get('reply_sla_hours', 24)
+    lead_metas       = _get_lead_metas(uid)
+
+    def _old_awaiting(c: dict) -> bool:
+        dl = int(c.get('dateline') or 0)
+        return str(c.get('status_n','')) == '1' and dl and (now - dl) > _AGE_EXPIRED_S
 
     unread_replies   = [r for r in replies if r.get('status') == 'unread']
-    active_contracts = [c for c in contracts if str(c.get('status_n','')) in STATUS_ACTIVE]
-    awaiting         = [c for c in contracts if str(c.get('status_n','')) in STATUS_AWAITING]
+    active_contracts = [c for c in contracts
+                        if str(c.get('status_n','')) in STATUS_FULFILLMENT
+                        or (str(c.get('status_n','')) == '1' and not _old_awaiting(c))]
+    awaiting         = [c for c in contracts
+                        if str(c.get('status_n','')) == '1' and not _old_awaiting(c)]
 
     # SLA breaches: unread leads older than sla_hours with no lead workflow dismissal
     sla_breaches = 0
@@ -291,7 +335,8 @@ def get_overview(uid: str) -> dict:
 
 
 def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health') -> list[dict]:
-    threads   = [t for t in _get_my_threads(uid) if str(t.get('fid', '')) in MARKETPLACE_FIDS]
+    marketplace_tids = _get_marketplace_tids(uid)
+    threads   = [t for t in _get_my_threads(uid) if str(t.get('tid','')) in marketplace_tids]
     contracts = _get_contracts(uid)
     replies   = _get_reply_queue(uid)
     bump_logs = _get_bump_log(uid, 500)
@@ -434,7 +479,8 @@ def get_offer_detail(uid: str, tid: str) -> dict | None:
 
 
 def get_pipeline(uid: str) -> dict:
-    replies    = _get_reply_queue(uid)
+    marketplace_tids = _get_marketplace_tids(uid)
+    replies    = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
     lead_metas = _get_lead_metas(uid)
     contracts  = _get_contracts(uid)
     goals      = get_goals(uid)
