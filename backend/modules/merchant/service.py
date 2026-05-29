@@ -219,6 +219,9 @@ def get_overview(uid: str) -> dict:
     contracts        = _get_contracts(uid)
     all_threads      = _get_my_threads(uid)
     threads          = [t for t in all_threads if str(t.get('tid','')) in marketplace_tids]
+    # TIDs the user owns - used to filter seller-side contracts (excludes threads user bought on)
+    own_thread_tids  = {str(t.get('tid','')) for t in all_threads} - {''}
+
     replies          = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
     bump_logs        = _get_bump_log(uid, 200)
     goals            = get_goals(uid)
@@ -299,6 +302,16 @@ def get_overview(uid: str) -> dict:
         if int(r.get('dateline') or 0) >= today_start
     )
 
+    # 7-day completed deal counts (oldest → newest, index 6 = today)
+    daily_completions = []
+    for day_offset in range(6, -1, -1):
+        ds = today_start - day_offset * 86400
+        daily_completions.append(sum(
+            1 for c in contracts
+            if str(c.get('status_n','')) in STATUS_COMPLETE
+            and ds <= int(c.get('dateline') or 0) < ds + 86400
+        ))
+
     # Top problems
     problems = []
     for t in threads:
@@ -322,15 +335,17 @@ def get_overview(uid: str) -> dict:
         s = meta.get('stage', 'new')
         pipeline_by_stage[s] = pipeline_by_stage.get(s, 0) + 1
 
-    # Top customers by completed deal count
-    cust_stats_map = customer_stats(contracts, uid)
+    # Top customers by completed deal count - seller side only
+    # (exclude contracts on threads the user doesn't own, i.e. where user is the buyer)
+    seller_contracts = [c for c in contracts if str(c.get('tid','')) in own_thread_tids]
+    cust_stats_map = customer_stats(seller_contracts, uid)
     top_cp_pairs = sorted(
         cust_stats_map.items(),
         key=lambda x: (-x[1]['complete'], -(x[1]['last_deal_at'] or 0))
     )[:5]
 
     # Recent contracts - already sorted DESC by dateline from DB
-    recent_slice = contracts[:5]
+    recent_slice = contracts[:8]
 
     # Batch username fetch for recent contracts + top customers
     all_lookup_uids = list({
@@ -386,6 +401,7 @@ def get_overview(uid: str) -> dict:
         },
         'recent_contracts': recent_contracts,
         'top_customers': top_customers_out,
+        'daily_completions': daily_completions,
     }
 
 
