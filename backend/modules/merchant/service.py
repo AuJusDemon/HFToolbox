@@ -316,6 +316,53 @@ def get_overview(uid: str) -> dict:
                              'unread': rs['unread_replies']})
     problems = problems[:5]
 
+    # Pipeline stage breakdown from lead group metas (already fetched)
+    pipeline_by_stage: dict[str, int] = {}
+    for meta in lead_group_metas.values():
+        s = meta.get('stage', 'new')
+        pipeline_by_stage[s] = pipeline_by_stage.get(s, 0) + 1
+
+    # Top customers by completed deal count
+    cust_stats_map = customer_stats(contracts, uid)
+    top_cp_pairs = sorted(
+        cust_stats_map.items(),
+        key=lambda x: (-x[1]['complete'], -(x[1]['last_deal_at'] or 0))
+    )[:5]
+
+    # Recent contracts - already sorted DESC by dateline from DB
+    recent_slice = contracts[:5]
+
+    # Batch username fetch for recent contracts + top customers
+    all_lookup_uids = list({
+        u for u in
+        [counterparty_uid(c, uid) for c in recent_slice]
+        + [cp for cp, _ in top_cp_pairs]
+        if u
+    })
+    name_cache = _get_usernames(all_lookup_uids) if all_lookup_uids else {}
+
+    recent_contracts = []
+    for c in recent_slice:
+        cp = counterparty_uid(c, uid)
+        recent_contracts.append({
+            'cid': c.get('cid', ''),
+            'cp_uid': cp,
+            'cp_username': name_cache.get(cp, ''),
+            'bucket': contract_bucket(str(c.get('status_n', '')), int(c.get('dateline') or 0)),
+            'product': (c.get('iproduct') or c.get('oproduct') or '').strip(),
+            'dateline': c.get('dateline', 0),
+            'tid': str(c.get('tid', '')),
+        })
+
+    top_customers_out = [{
+        'uid': cp,
+        'username': name_cache.get(cp, ''),
+        'complete': stats['complete'],
+        'active': stats['active'],
+        'is_repeat': stats['is_repeat'],
+        'last_deal_at': stats['last_deal_at'],
+    } for cp, stats in top_cp_pairs]
+
     return {
         'action_queue': action_queue,
         'today': {
@@ -332,6 +379,13 @@ def get_overview(uid: str) -> dict:
             'total_contracts': len(contracts),
             'completed_contracts': sum(1 for c in contracts if str(c.get('status_n','')) in STATUS_COMPLETE),
         },
+        'pipeline': {
+            'by_stage': pipeline_by_stage,
+            'total': len(lead_group_metas),
+            'sla_breaches': sla_breaches,
+        },
+        'recent_contracts': recent_contracts,
+        'top_customers': top_customers_out,
     }
 
 
