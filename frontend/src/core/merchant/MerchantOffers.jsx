@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { healthLabel, healthColor, relTime } from './merchantFormat.js'
+import { healthLabel, healthColor, relTime, bucketLabel, bucketColor } from './merchantFormat.js'
 
 const STATUS_FILTERS = [
   { val: null,             label: 'All' },
@@ -119,21 +119,35 @@ function OfferDetail({ tid, onBack }) {
               <div style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:6}}>CONTRACTS</div>
               {data.contracts.map(c => (
                 <div key={c.cid} style={{
-                  padding:'6px 10px', background:'var(--s2)', marginBottom:3,
-                  display:'flex', justifyContent:'space-between', gap:8,
+                  padding:'5px 10px', background:'var(--s2)', marginBottom:3,
+                  display:'flex', alignItems:'center', gap:8,
                 }}>
                   <a
                     href={`/dashboard/contracts/${c.cid}`}
-                    style={{fontSize:11, fontFamily:'var(--mono)', color:'var(--acc)'}}
+                    style={{fontSize:11, fontFamily:'var(--mono)', color:'var(--acc)', flexShrink:0, width:62}}
                   >
                     #{c.cid}
                   </a>
-                  <span style={{fontSize:11, color:'var(--sub)'}}>{c.counterparty_username || c.counterparty_uid || '—'}</span>
-                  <span style={{fontSize:11, color:'var(--dim)', fontFamily:'var(--mono)'}}>{c.iproduct || c.oproduct || '—'}</span>
                   <span style={{
-                    fontSize:10, fontFamily:'var(--mono)',
-                    color: c.bucket === 'completed' ? 'var(--green)' : c.bucket === 'disputed' ? 'var(--red)' : 'var(--dim)',
-                  }}>{c.bucket.replace('_',' ')}</span>
+                    fontSize:11, color:'var(--sub)', fontFamily:'var(--mono)',
+                    flexShrink:0, width:130,
+                    overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                  }}>
+                    {c.counterparty_username || c.counterparty_uid || '—'}
+                  </span>
+                  <span style={{
+                    fontSize:11, color:'var(--dim)', fontFamily:'var(--mono)',
+                    flex:1, minWidth:0,
+                    overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+                  }}>
+                    {c.iproduct || c.oproduct || '—'}
+                  </span>
+                  <span style={{
+                    fontSize:10, fontFamily:'var(--mono)', flexShrink:0,
+                    color: bucketColor(c.bucket),
+                  }}>
+                    {bucketLabel(c.bucket)}
+                  </span>
                 </div>
               ))}
             </>
