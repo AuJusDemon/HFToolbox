@@ -202,6 +202,12 @@ async def _acquire_and_fetch(
 
         await asyncio.to_thread(cache.log_call, uid, "read", resource_type,
                                 "", ms, False, -1, cache_key, "miss_live_empty")
+        # Fall back to any cached version (even fully expired) rather than returning None.
+        # Stale data is always better than a 503 for the user.
+        emergency = await asyncio.to_thread(cache.get_any, cache_key)
+        if emergency:
+            log.warning("live fetch returned nothing key=%s — serving expired cache", cache_key)
+            return emergency, True
         return None, False
 
     except _AuthExpired:

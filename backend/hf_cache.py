@@ -50,7 +50,7 @@ TIERS: dict[str, dict] = {
     "threads_uid":         {"ttl":  300, "stale":  600},
     # Tier 2: Warm
     "sigmarket_status":    {"ttl":  900, "stale": 3600},   # 15 min fresh,  1 hr usable
-    "contract_detail":     {"ttl":  300, "stale": 1800},
+    "contract_detail":     {"ttl":  300, "stale": 7200},  # 5 min fresh, 2 hr usable
     "thread_meta":         {"ttl":  300, "stale": 1800},
     "user_profile":        {"ttl":  900, "stale": 7200},
     # Tier 3: Cold / public
@@ -206,6 +206,12 @@ def set_cache(cache_key: str, resource_type: str, data: dict,
             now + tier["ttl"],
             now + tier["ttl"] + tier["stale"],
         ))
+
+
+def get_any(cache_key: str) -> dict | None:
+    """Return data regardless of TTL. Last-resort fallback when all fetches fail."""
+    row = _get_row(cache_key)
+    return row["data"] if row else None
 
 
 def invalidate(cache_key: str) -> None:
