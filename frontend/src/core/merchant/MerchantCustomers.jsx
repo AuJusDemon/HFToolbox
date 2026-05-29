@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { relTime, absDate, parseTags, serializeTags } from './merchantFormat.js'
+import { relTime, absDate, parseTags, serializeTags, contractTerms, bucketLabel, bucketColor } from './merchantFormat.js'
 
 function TagList({ tags }) {
   if (!tags.length) return null
@@ -193,36 +193,40 @@ function CustomerDetail({ cpUid, onBack }) {
         <div className="card">
           <div className="card-head">Contract History</div>
           <div className="card-body" style={{padding:'8px 10px'}}>
-            {data.contracts.map(c => (
-              <div key={c.cid} style={{
-                display:'flex', gap:8, padding:'5px 8px', marginBottom:3,
-                background:'var(--s2)', alignItems:'center',
-              }}>
-                <a href={`/dashboard/contracts/${c.cid}`}
-                   style={{fontSize:11, fontFamily:'var(--mono)', color:'var(--acc)', flexShrink:0}}>
-                  #{c.cid}
-                </a>
-                <span style={{fontSize:11, color:'var(--sub)', flex:1, minWidth:0,
-                               overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
-                  {c.iproduct || c.oproduct || '—'}
-                </span>
-                {c.thread_title && (
-                  <span style={{fontSize:10, color:'var(--dim)', flex:1, minWidth:0,
-                                 overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
-                    {c.thread_title.slice(0,40)}
-                  </span>
-                )}
-                <span style={{
-                  fontSize:9, fontFamily:'var(--mono)', flexShrink:0,
-                  color: c.bucket === 'completed' ? 'var(--green)' : c.bucket === 'disputed' ? 'var(--red)' : 'var(--dim)',
-                }}>
-                  {c.bucket.replace('_',' ')}
-                </span>
-                <span style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', flexShrink:0}}>
-                  {relTime(c.dateline)}
-                </span>
-              </div>
-            ))}
+            {data.contracts.map(c => {
+              const terms = contractTerms(c)
+              const product = c.iproduct || c.oproduct || c.thread_title || '—'
+              return (
+                <div key={c.cid} style={{padding:'6px 8px', marginBottom:3, background:'var(--s2)'}}>
+                  <div style={{display:'flex', gap:8, alignItems:'center'}}>
+                    <a href={`/dashboard/contracts/${c.cid}`}
+                       style={{fontSize:11, fontFamily:'var(--mono)', color:'var(--acc)', flexShrink:0}}>
+                      #{c.cid}
+                    </a>
+                    <span style={{fontSize:11, color:'var(--sub)', flex:1, minWidth:0,
+                                   overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
+                      {product}
+                    </span>
+                    <span style={{fontSize:9, fontFamily:'var(--mono)', flexShrink:0, color: bucketColor(c.bucket)}}>
+                      {bucketLabel(c.bucket)}
+                    </span>
+                    <span style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', flexShrink:0}}>
+                      {relTime(c.dateline)}
+                    </span>
+                  </div>
+                  <div style={{display:'flex', gap:10, marginTop:3, alignItems:'center', paddingLeft:2}}>
+                    <span style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)'}}>
+                      {terms}
+                    </span>
+                    {c.brating && (
+                      <span style={{fontSize:10, color:'var(--yellow)', fontFamily:'var(--mono)'}}>
+                        {c.brating}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
