@@ -33,6 +33,7 @@ from modules.merchant.merchant_db import (
     get_all_offer_meta,
     get_customer_meta,
     get_goals,
+    get_all_lead_group_metas,
 )
 
 
@@ -222,7 +223,7 @@ def get_overview(uid: str) -> dict:
     bump_logs        = _get_bump_log(uid, 200)
     goals            = get_goals(uid)
     sla_hours        = goals.get('reply_sla_hours', 24)
-    lead_metas       = _get_lead_metas(uid)
+    lead_group_metas = get_all_lead_group_metas(uid)
 
     def _old_awaiting(c: dict) -> bool:
         dl = int(c.get('dateline') or 0)
@@ -235,19 +236,19 @@ def get_overview(uid: str) -> dict:
     awaiting         = [c for c in contracts
                         if str(c.get('status_n','')) == '1' and not _old_awaiting(c)]
 
-    # SLA breaches: unread leads older than sla_hours with no lead workflow dismissal
+    # SLA breaches: unread leads older than sla_hours with stage not yet resolved
     sla_breaches = 0
     for r in unread_replies:
         age = now - int(r.get('dateline') or now)
-        rid = r.get('id')
-        meta = lead_metas.get(rid, {})
+        key = (str(r.get('from_uid', '') or ''), str(r.get('tid', '') or ''))
+        meta = lead_group_metas.get(key, {})
         stage = meta.get('stage', 'new')
         if stage not in ('ignored', 'lost', 'won') and age > sla_hours * 3600:
             sla_breaches += 1
 
     # Follow-ups due
     followup_due = 0
-    for meta in lead_metas.values():
+    for meta in lead_group_metas.values():
         fa = meta.get('followup_at')
         stage = meta.get('stage', 'new')
         if fa and fa <= now and stage not in ('ignored', 'lost', 'won'):
@@ -495,67 +496,95 @@ def get_pipeline(uid: str) -> dict:
     all_replies = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
     replies = [r for r in all_replies
                if not pipeline_since or int(r.get('dateline') or 0) >= pipeline_since]
-    lead_metas = _get_lead_metas(uid)
-    contracts  = _get_contracts(uid)
-    goals      = get_goals(uid)
-    now        = int(time.time())
-    sla_hours  = goals.get('reply_sla_hours', 24)
+    lead_group_metas = get_all_lead_group_metas(uid)
+    contracts        = _get_contracts(uid)
+    goals            = get_goals(uid)
+    now              = int(time.time())
+    sla_hours        = goals.get('reply_sla_hours', 24)
 
-    # Collect counterparty UIDs for name lookup
-    reply_uids = list({str(r.get('from_uid','')) for r in replies if r.get('from_uid')})
-    names = _get_usernames(reply_uids)
-
-    # Map contracts by (tid, counterparty_uid) to detect conversions
+    # Contracts by (tid, from_uid) to flag conversions
     converted: set[tuple] = set()
     for c in contracts:
         cp = counterparty_uid(c, uid)
-        tid = str(c.get('tid', ''))
-        if cp and tid:
-            converted.add((tid, cp))
+        t  = str(c.get('tid', ''))
+        if cp and t:
+            converted.add((t, cp))
+
+    # Group replies by (from_uid, tid) - one card per person per thread
+    from collections import defaultdict
+    groups: dict[tuple, list] = defaultdict(list)
+    for r in replies:
+        fu = str(r.get('from_uid', '') or '')
+        t  = str(r.get('tid', '') or '')
+        if fu:
+            groups[(fu, t)].append(r)
+
+    all_from_uids = list({k[0] for k in groups})
+    names = _get_usernames(all_from_uids)
 
     leads = []
-    for r in replies:
-        rid = r.get('id')
-        meta = lead_metas.get(rid, {})
-        stage = meta.get('stage', 'new') if meta else 'new'
-        priority = meta.get('priority', 'normal') if meta else 'normal'
-        note = meta.get('note') if meta else None
-        followup_at = meta.get('followup_at') if meta else None
+    for (from_uid_str, tid_str), grp in groups.items():
+        grp.sort(key=lambda r: int(r.get('dateline') or 0))
+        first_r  = grp[0]
+        latest_r = grp[-1]
 
-        from_uid = str(r.get('from_uid', ''))
-        tid = str(r.get('tid', ''))
-        age_s = now - int(r.get('dateline') or now)
-        sla_breached = (stage not in ('ignored', 'lost', 'won', 'contract_opened')
-                        and age_s > sla_hours * 3600)
-        likely_converted = (tid, from_uid) in converted
+        unread_in_grp   = [r for r in grp if r.get('status') == 'unread']
+        latest_unread_ts = max((int(r.get('dateline') or 0) for r in unread_in_grp), default=0)
+
+        meta       = lead_group_metas.get((from_uid_str, tid_str), {})
+        stage      = meta.get('stage', 'new')
+        priority   = meta.get('priority', 'normal')
+        note       = meta.get('note')
+        followup_at = meta.get('followup_at')
+
+        first_dl = int(first_r.get('dateline') or 0)
+        sla_breached = (
+            stage not in ('ignored', 'lost', 'won', 'contract_opened')
+            and bool(unread_in_grp)
+            and bool(latest_unread_ts)
+            and (now - latest_unread_ts) > sla_hours * 3600
+        )
 
         leads.append({
-            'reply_id': rid,
-            'tid': tid,
-            'pid': r.get('pid', ''),
-            'thread_title': r.get('thread_title', ''),
-            'from_uid': from_uid,
-            'from_username': names.get(from_uid) or r.get('from_username', ''),
-            'dateline': r.get('dateline', 0),
-            'age_seconds': age_s,
-            'message_preview': r.get('message_preview', ''),
-            'status': r.get('status', 'unread'),
-            'stage': stage,
-            'priority': priority,
-            'note': note,
-            'followup_at': followup_at,
-            'sla_breached': sla_breached,
-            'likely_converted': likely_converted,
+            'from_uid':        from_uid_str,
+            'tid':             tid_str,
+            'from_username':   names.get(from_uid_str) or latest_r.get('from_username', ''),
+            'thread_title':    first_r.get('thread_title', ''),
+            'first_reply_id':  first_r.get('id'),
+            'latest_reply_id': latest_r.get('id'),
+            'latest_pid':      latest_r.get('pid', ''),
+            'dateline':        first_dl,
+            'latest_dateline': int(latest_r.get('dateline') or 0),
+            'age_seconds':     now - first_dl if first_dl else 0,
+            'reply_count':     len(grp),
+            'unread_count':    len(unread_in_grp),
+            'message_preview': latest_r.get('message_preview', ''),
+            'stage':           stage,
+            'priority':        priority,
+            'note':            note,
+            'followup_at':     followup_at,
+            'sla_breached':    sla_breached,
+            'likely_converted': (tid_str, from_uid_str) in converted,
         })
 
-    # Sort: sla_breached first, then by dateline desc
-    leads.sort(key=lambda x: (not x['sla_breached'], -(x['dateline'] or 0)))
+    # SLA breached first, then most recent activity
+    leads.sort(key=lambda x: (not x['sla_breached'], -(x['latest_dateline'] or 0)))
 
-    summary = pipeline_summary(replies, lead_metas, contracts, uid, sla_hours)
+    stage_counts: dict[str, int] = {}
+    sla_total = 0
+    for lead in leads:
+        s = lead['stage']
+        stage_counts[s] = stage_counts.get(s, 0) + 1
+        if lead['sla_breached']:
+            sla_total += 1
 
     return {
         'leads': leads,
-        'summary': summary,
+        'summary': {
+            'by_stage': stage_counts,
+            'sla_breaches': sla_total,
+            'total': len(leads),
+        },
         'sla_hours': sla_hours,
     }
 

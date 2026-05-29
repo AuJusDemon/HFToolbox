@@ -70,6 +70,40 @@ def init_merchant_db() -> None:
                 PRIMARY KEY (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        # One lead group per person per thread - replaces per-reply merchant_leads for pipeline
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS merchant_lead_groups (
+                uid             VARCHAR(64) NOT NULL,
+                from_uid        VARCHAR(64) NOT NULL,
+                tid             VARCHAR(64) NOT NULL,
+                stage           VARCHAR(32) NOT NULL DEFAULT 'new',
+                priority        VARCHAR(16) NOT NULL DEFAULT 'normal',
+                note            TEXT,
+                followup_at     BIGINT,
+                closed_at       BIGINT,
+                first_reply_id  INT,
+                created_at      BIGINT      NOT NULL DEFAULT 0,
+                updated_at      BIGINT      NOT NULL DEFAULT 0,
+                PRIMARY KEY (uid, from_uid, tid),
+                INDEX idx_mlg_uid (uid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        # One-time migration: carry existing merchant_leads stage data into the new table.
+        # INSERT OR IGNORE is idempotent - safe to run on every startup.
+        try:
+            conn.execute("""
+                INSERT OR IGNORE INTO merchant_lead_groups
+                    (uid, from_uid, tid, stage, priority, note, followup_at,
+                     closed_at, first_reply_id, created_at, updated_at)
+                SELECT ml.uid, rq.from_uid, ml.tid,
+                       ml.stage, ml.priority, ml.note, ml.followup_at,
+                       ml.closed_at, ml.reply_id, ml.created_at, ml.updated_at
+                FROM merchant_leads ml
+                JOIN reply_queue rq ON rq.id = ml.reply_id
+                WHERE rq.from_uid IS NOT NULL AND rq.from_uid != ''
+            """)
+        except Exception:
+            pass
 
 
 # ── Leads ─────────────────────────────────────────────────────────────────────
@@ -223,6 +257,44 @@ def get_goals(uid: str) -> dict:
             'min_contract_value': 0,
             'settings_json': None,
         }
+
+
+# ── Lead groups (per person per thread) ───────────────────────────────────────
+
+def get_all_lead_group_metas(uid: str) -> dict[tuple, dict]:
+    """Returns {(from_uid, tid): row_dict} for all lead groups belonging to uid."""
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM merchant_lead_groups WHERE uid=?", (uid,)
+        ).fetchall()
+        return {(r['from_uid'], r['tid']): dict(r) for r in rows}
+
+
+def patch_lead_group(uid: str, from_uid: str, tid: str, **fields) -> None:
+    allowed = {'stage', 'priority', 'note', 'followup_at'}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return
+    now = int(time.time())
+    if 'stage' in updates:
+        s = updates['stage']
+        updates['stage'] = s if s in VALID_STAGES else 'new'
+        if updates['stage'] in ('won', 'lost', 'ignored'):
+            updates['closed_at'] = now
+    updates['updated_at'] = now
+    set_clause = ', '.join(f"{k}=?" for k in updates)
+    values = list(updates.values()) + [uid, from_uid, tid]
+    with _db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO merchant_lead_groups
+               (uid, from_uid, tid, created_at, updated_at)
+               VALUES (?,?,?,?,?)""",
+            (uid, from_uid, tid, now, now)
+        )
+        conn.execute(
+            f"UPDATE merchant_lead_groups SET {set_clause} WHERE uid=? AND from_uid=? AND tid=?",
+            values
+        )
 
 
 def upsert_goals(uid: str, reply_sla_hours: int = 24,

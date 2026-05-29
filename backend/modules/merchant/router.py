@@ -101,37 +101,21 @@ async def merchant_freshness(request: Request):
 
 # ── Workflow state mutations ────────────────────────────────────────────────────
 
-class LeadPatch(BaseModel):
-    stage:      Optional[str] = None
-    priority:   Optional[str] = None
-    note:       Optional[str] = None
+class LeadGroupPatch(BaseModel):
+    stage:       Optional[str] = None
+    priority:    Optional[str] = None
+    note:        Optional[str] = None
     followup_at: Optional[int] = None
-    tid:        Optional[str] = None
-    pid:        Optional[str] = None
 
 
-@router.patch("/leads/{reply_id}")
-async def patch_lead(reply_id: int, body: LeadPatch, request: Request):
+@router.patch("/leads/{from_uid}/{tid}")
+async def patch_lead_group(from_uid: str, tid: str, body: LeadGroupPatch, request: Request):
     uid = _uid(request)
-    from modules.merchant.merchant_db import patch_lead as _patch, upsert_lead
-
-    # Ensure row exists (create with defaults if first touch)
-    if body.tid is not None:
-        await asyncio.to_thread(
-            upsert_lead, uid, reply_id,
-            body.tid or '', body.pid or '',
-            body.stage or 'new', body.priority or 'normal',
-            body.note, body.followup_at
-        )
-        return {"ok": True}
-
-    updates = {k: v for k, v in body.model_dump().items()
-               if v is not None and k not in ('tid', 'pid')}
+    from modules.merchant.merchant_db import patch_lead_group as _patch
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(400, "No fields to update")
-    ok = await asyncio.to_thread(_patch, uid, reply_id, **updates)
-    if not ok:
-        raise HTTPException(404, "Lead not found — use tid+pid to create it first")
+    await asyncio.to_thread(_patch, uid, from_uid, tid, **updates)
     return {"ok": True}
 
 
