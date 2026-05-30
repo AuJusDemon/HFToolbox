@@ -4,7 +4,6 @@ import { healthLabel, healthColor, relTime, bucketLabel, bucketColor } from './m
 
 const STATUS_FILTERS = [
   { val: null,             label: 'All' },
-  { val: 'needs_attention',label: 'Needs Reply' },
   { val: 'wasting_spend',  label: 'Bump Waste' },
   { val: 'no_contracts',   label: 'No Contracts' },
   { val: 'stale',          label: 'Stale' },
@@ -26,18 +25,31 @@ function OfferCard({ offer, onSelect }) {
                      overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
           {offer.title || `TID ${offer.tid}`}
         </div>
-        <span style={{
-          fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.04em',
-          color: hc, whiteSpace:'nowrap', flexShrink:0,
-        }}>
-          {healthLabel(offer.health)}
-        </span>
+        <div style={{display:'flex', gap:5, alignItems:'center', flexShrink:0}}>
+          {offer.unread_leads > 0 && (
+            <span style={{
+              fontSize:9, fontFamily:'var(--mono)',
+              color:'var(--yellow)',
+              background:'rgba(255,200,0,.08)',
+              border:'1px solid rgba(255,200,0,.3)',
+              padding:'1px 5px', whiteSpace:'nowrap',
+            }}>
+              {offer.unread_leads} NEW
+            </span>
+          )}
+          <span style={{
+            fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.04em',
+            color: hc, whiteSpace:'nowrap',
+          }}>
+            {healthLabel(offer.health)}
+          </span>
+        </div>
       </div>
 
       <div style={{display:'flex', gap:10, flexWrap:'wrap'}}>
         {[
-          { label:'REPLIES',   val: offer.reply_count,         alert: offer.unread_leads > 0 },
-          { label:'UNREAD',    val: offer.unread_leads,        alert: offer.unread_leads > 0 },
+          { label:'REPLIES',   val: offer.reply_count },
+          { label:'NEW',       val: offer.unread_leads,        alert: offer.unread_leads > 0 },
           { label:'CONTRACTS', val: offer.contracts_total },
           { label:'DONE',      val: offer.contracts_complete,  color:'var(--green)' },
           { label:'BUMPS',     val: offer.bump_count },
