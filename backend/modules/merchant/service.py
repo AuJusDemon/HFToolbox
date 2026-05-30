@@ -812,11 +812,15 @@ def get_customer_detail(uid: str, cp_uid: str) -> dict | None:
 
 
 def get_promotion(uid: str) -> dict:
+    from collections import defaultdict
+
+    now       = int(time.time())
     threads   = _get_my_threads(uid)
     bump_jobs = _get_bump_jobs(uid)
     bump_logs = _get_bump_log(uid, 1000)
     contracts = _get_contracts(uid)
     replies   = _get_reply_queue(uid)
+    completion_events = _get_completion_events(uid, 0)
 
     bstats = bump_stats_from_log(bump_logs)
     rstats = reply_stats_from_queue(replies)
@@ -825,36 +829,213 @@ def get_promotion(uid: str) -> dict:
     thread_map = {str(t.get('tid','')): t for t in threads}
     job_map    = {str(j.get('tid','')): j for j in bump_jobs}
 
+    # Group bumps by tid sorted ASC, skips by tid
+    bumps_by_tid: dict[str, list[dict]] = defaultdict(list)
+    skips_by_tid: dict[str, int] = defaultdict(int)
+    for b in bump_logs:
+        tid = str(b.get('tid', '') or '')
+        if not tid:
+            continue
+        if b.get('action') == 'bumped':
+            bumps_by_tid[tid].append(b)
+        else:
+            skips_by_tid[tid] += 1
+    for tid in bumps_by_tid:
+        bumps_by_tid[tid].sort(key=lambda b: int(b.get('ts', 0)))
+
+    # Group contracts and replies by tid
+    contracts_by_tid: dict[str, list[dict]] = defaultdict(list)
+    for c in contracts:
+        contracts_by_tid[str(c.get('tid', '') or '')].append(c)
+
+    replies_by_tid: dict[str, list[dict]] = defaultdict(list)
+    for r in replies:
+        replies_by_tid[str(r.get('tid', '') or '')].append(r)
+
+    # Map completion events by cid -> detected_at
+    completion_by_cid: dict[str, int] = {
+        str(e['cid']): int(e['detected_at']) for e in completion_events
+    }
+
+    thirty_days_ago = now - 30 * 86400
+
     offers = []
-    all_tids = set(bstats.keys()) | set(job_map.keys())
+    needs_review_count  = 0
+    got_activity_count  = 0
+    open_replies_total  = 0
+    paused_count        = 0
+
+    all_tids = set(bumps_by_tid.keys()) | set(job_map.keys())
+
     for tid in all_tids:
         bs = bstats.get(tid, {})
         rs = rstats.get(tid, {})
         cs = cstats.get(tid, {})
         t  = thread_map.get(tid, {})
         job = job_map.get(tid)
+
+        bumps         = bumps_by_tid.get(tid, [])   # ASC
+        skip_count    = skips_by_tid.get(tid, 0)
+        tid_contracts = contracts_by_tid.get(tid, [])
+        tid_replies   = replies_by_tid.get(tid, [])
+
         waste = bump_waste_score(
             bs.get('bump_count', 0),
             rs.get('unread_replies', 0),
             cs.get('complete', 0),
+            bumps_30d=bs.get('bumps_30d', 0),
         )
+
+        # Build bump periods (each bump to the next, last is open)
+        periods = []
+        for i, bump in enumerate(bumps):
+            bump_ts = int(bump.get('ts', 0))
+            next_bump = bumps[i + 1] if i + 1 < len(bumps) else None
+            end_ts  = int(next_bump['ts']) if next_bump else now
+            is_open = next_bump is None
+
+            curr_nr = bump.get('numreplies')
+            if is_open:
+                next_nr = t.get('numreplies')
+            else:
+                next_nr = next_bump.get('numreplies') if next_bump else None
+
+            if curr_nr is not None and next_nr is not None:
+                reply_gain = int(next_nr) - int(curr_nr)
+            else:
+                reply_gain = None
+
+            opened = sum(
+                1 for c in tid_contracts
+                if bump_ts <= int(c.get('dateline') or 0) < end_ts
+            )
+            completed = sum(
+                1 for c in tid_contracts
+                if completion_by_cid.get(str(c.get('cid', ''))) is not None
+                and bump_ts <= completion_by_cid[str(c.get('cid', ''))] < end_ts
+            )
+            periods.append({
+                'bump_ts': bump_ts,
+                'end_ts': end_ts,
+                'is_open': is_open,
+                'reply_gain': reply_gain,
+                'contracts_opened': opened,
+                'contracts_completed': completed,
+            })
+
+        # since_last_bump stats
+        last_bump_ts = int(bumps[-1]['ts']) if bumps else 0
+        last_bump_nr = bumps[-1].get('numreplies') if bumps else None
+        curr_nr_thread = t.get('numreplies')
+
+        if last_bump_ts:
+            slb_replies  = [r for r in tid_replies if int(r.get('dateline') or 0) >= last_bump_ts]
+            slb_open     = [r for r in slb_replies  if r.get('status') == 'unread']
+            slb_contracts = [c for c in tid_contracts if int(c.get('dateline') or 0) >= last_bump_ts]
+            slb_completed = sum(
+                1 for c in tid_contracts
+                if completion_by_cid.get(str(c.get('cid', ''))) is not None
+                and completion_by_cid[str(c.get('cid', ''))] >= last_bump_ts
+            )
+            last_reply_ts    = max((int(r.get('dateline') or 0) for r in slb_replies),    default=0)
+            last_contract_ts = max((int(c.get('dateline') or 0) for c in slb_contracts),  default=0)
+            last_activity_at = max(last_reply_ts, last_contract_ts) or None
+
+            if last_bump_nr is not None and curr_nr_thread is not None:
+                slb_reply_gain = int(curr_nr_thread) - int(last_bump_nr)
+            else:
+                slb_reply_gain = None
+
+            since_last_bump = {
+                'tracked_replies':    len(slb_replies),
+                'open_replies':       len(slb_open),
+                'contracts_opened':   len(slb_contracts),
+                'contracts_completed': slb_completed,
+                'reply_gain':         slb_reply_gain,
+                'last_activity_at':   last_activity_at,
+                'has_activity':       len(slb_replies) > 0 or len(slb_contracts) > 0,
+            }
+        else:
+            since_last_bump = {
+                'tracked_replies': 0, 'open_replies': 0,
+                'contracts_opened': 0, 'contracts_completed': 0,
+                'reply_gain': None, 'last_activity_at': None, 'has_activity': False,
+            }
+
+        # period_summary
+        recent_bumps   = sum(1 for b in bumps if int(b.get('ts', 0)) >= thirty_days_ago)
+        active_periods = sum(
+            1 for p in periods
+            if (p['reply_gain'] is not None and p['reply_gain'] > 0) or p['contracts_opened'] > 0
+        )
+        dead_periods = sum(
+            1 for p in periods
+            if not p['is_open']
+            and (p['reply_gain'] is None or p['reply_gain'] == 0)
+            and p['contracts_opened'] == 0
+        )
+        closed_gains = [p['reply_gain'] for p in periods if not p['is_open'] and p['reply_gain'] is not None]
+        avg_reply_gain = round(sum(closed_gains) / len(closed_gains), 1) if closed_gains else None
+
+        period_summary = {
+            'recent_bumps':   recent_bumps,
+            'active_periods': active_periods,
+            'dead_periods':   dead_periods,
+            'skip_count':     skip_count,
+            'avg_reply_gain': avg_reply_gain,
+        }
+
+        # bump_periods_preview: up to 5 most recent, newest first
+        preview_n = min(5, len(periods))
+        bump_periods_preview = list(reversed(periods[-preview_n:])) if periods else []
+
+        # recommendation
+        is_closed      = bool(t.get('closed'))
+        has_active_job = job is not None and bool(job.get('enabled'))
+        has_activity   = since_last_bump['has_activity']
+
+        if is_closed:
+            recommendation = 'closed_thread'
+        elif not has_active_job:
+            recommendation = 'paused'
+        elif waste >= 80 and not has_activity:
+            recommendation = 'pause_candidate'
+        elif waste >= 60:
+            recommendation = 'review'
+        elif has_activity and recent_bumps > 0 and active_periods >= dead_periods:
+            recommendation = 'keep_bumping'
+        else:
+            recommendation = 'watch'
+
+        if recommendation in ('review', 'pause_candidate'):
+            needs_review_count += 1
+        if has_activity:
+            got_activity_count += 1
+        open_replies_total += since_last_bump['open_replies']
+        if recommendation in ('paused', 'closed_thread'):
+            paused_count += 1
+
         offers.append({
             'tid': tid,
             'title': t.get('title', '')[:80],
-            'closed': bool(t.get('closed')),
+            'closed': is_closed,
             'bump_count': bs.get('bump_count', 0),
-            'skip_count': bs.get('skip_count', 0),
+            'skip_count': skip_count,
             'latest_bump_at': bs.get('latest_bump_at', 0),
             'reply_count': rs.get('total_replies', 0),
-            'unread_replies': rs.get('unread_replies', 0),
             'contracts_complete': cs.get('complete', 0),
             'contracts_active': cs.get('active', 0),
             'waste_score': waste,
-            'has_active_job': job is not None and bool(job.get('enabled')),
+            'has_active_job': has_active_job,
             'job_interval_h': job.get('interval_h', 0) if job else 0,
+            'since_last_bump': since_last_bump,
+            'period_summary': period_summary,
+            'bump_periods_preview': bump_periods_preview,
+            'recommendation': recommendation,
         })
 
-    offers.sort(key=lambda x: -x['bump_count'])
+    rec_order = {'pause_candidate': 0, 'review': 1, 'watch': 2, 'keep_bumping': 3, 'paused': 4, 'closed_thread': 5}
+    offers.sort(key=lambda x: (rec_order.get(x['recommendation'], 9), -x['bump_count']))
 
     waste_offers = [o for o in offers if o['waste_score'] >= 60]
 
@@ -863,6 +1044,12 @@ def get_promotion(uid: str) -> dict:
         'waste_warnings': waste_offers,
         'total_bumps': sum(o['bump_count'] for o in offers),
         'total_skips': sum(o['skip_count'] for o in offers),
+        'summary': {
+            'needs_review':    needs_review_count,
+            'got_activity':    got_activity_count,
+            'open_replies':    open_replies_total,
+            'paused_or_closed': paused_count,
+        },
     }
 
 

@@ -2,81 +2,139 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { relTime } from './merchantFormat.js'
 
-function WasteBar({ score }) {
-  const color = score >= 80 ? 'var(--red)' : score >= 60 ? 'var(--yellow)' : 'var(--green)'
+const REC_LABEL = {
+  keep_bumping:    'Working',
+  watch:           'Watch',
+  review:          'Review',
+  pause_candidate: 'Pause?',
+  paused:          'Paused',
+  closed_thread:   'Closed',
+}
+
+const REC_COLOR = {
+  keep_bumping:    'var(--green)',
+  watch:           'var(--dim)',
+  review:          'var(--yellow)',
+  pause_candidate: 'var(--red)',
+  paused:          'var(--acc)',
+  closed_thread:   'var(--red)',
+}
+
+function PeriodTimeline({ periods }) {
+  if (!periods || periods.length === 0) return null
   return (
-    <div style={{display:'flex', alignItems:'center', gap:8}}>
-      <div style={{
-        flex:1, height:6, background:'var(--b2)', position:'relative',
-      }}>
-        <div style={{
-          position:'absolute', left:0, top:0, bottom:0,
-          width:`${score}%`, background: color, transition:'width .3s',
-        }} />
+    <div>
+      <div style={{fontSize:8, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:3}}>
+        RECENT BUMPS (newest →)
       </div>
-      <span style={{fontSize:10, fontFamily:'var(--mono)', color, minWidth:28}}>{score}</span>
+      <div style={{display:'flex', gap:3, alignItems:'flex-end', height:26}}>
+        {periods.map((p, i) => {
+          const isActive = (p.reply_gain != null && p.reply_gain > 0) || p.contracts_opened > 0
+          const color    = p.is_open ? 'var(--dim)' : isActive ? 'var(--green)' : 'var(--red)'
+          const opacity  = p.is_open ? 0.45 : 1
+          const label    = p.is_open ? '…'
+            : p.reply_gain != null ? (p.reply_gain > 0 ? `+${p.reply_gain}` : String(p.reply_gain))
+            : '?'
+          return (
+            <div key={i} style={{flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:2, height:'100%', justifyContent:'flex-end'}}>
+              <span style={{fontSize:7, fontFamily:'var(--mono)', color, lineHeight:1, opacity}}>{label}</span>
+              <div style={{width:'100%', height:8, background:color, opacity}} />
+            </div>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
-function OfferRow({ offer }) {
-  const hasWaste = offer.waste_score >= 60
+function BumpCard({ offer }) {
+  const rec      = offer.recommendation
+  const recColor = REC_COLOR[rec] || 'var(--dim)'
+  const slb      = offer.since_last_bump  || {}
+  const ps       = offer.period_summary   || {}
+  const preview  = offer.bump_periods_preview || []
+
   return (
     <div style={{
       padding:'10px 14px', marginBottom:4, background:'var(--s1)',
-      borderLeft: `3px solid ${hasWaste ? 'var(--red)' : offer.has_active_job ? 'var(--acc)' : 'var(--b2)'}`,
+      borderLeft: `3px solid ${recColor}`,
     }}>
+      {/* Header */}
       <div style={{
         display:'flex', justifyContent:'space-between', alignItems:'flex-start',
         gap:8, marginBottom:6,
       }}>
         <div style={{
-          fontFamily:'var(--mono)', fontSize:12, color:'var(--text)', flex:1, minWidth:0,
+          fontFamily:'var(--mono)', fontSize:12, color:'var(--text)',
+          flex:1, minWidth:0,
           overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
         }}>
           {offer.title || `TID ${offer.tid}`}
-          {offer.closed && <span style={{color:'var(--red)', marginLeft:8, fontSize:9}}>CLOSED</span>}
         </div>
-        {offer.has_active_job && (
-          <span style={{fontSize:9, color:'var(--acc)', fontFamily:'var(--mono)', flexShrink:0}}>
-            ACTIVE JOB
+        <div style={{display:'flex', gap:5, alignItems:'center', flexShrink:0}}>
+          {slb.open_replies > 0 && (
+            <span style={{
+              fontSize:9, fontFamily:'var(--mono)',
+              color:'var(--yellow)',
+              background:'rgba(255,200,0,.08)',
+              border:'1px solid rgba(255,200,0,.3)',
+              padding:'1px 5px', whiteSpace:'nowrap',
+            }}>
+              {slb.open_replies} OPEN
+            </span>
+          )}
+          <span style={{
+            fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.04em',
+            color: recColor, whiteSpace:'nowrap',
+          }}>
+            {REC_LABEL[rec] || rec}
           </span>
+        </div>
+      </div>
+
+      {/* Stats row */}
+      <div style={{display:'flex', gap:10, flexWrap:'wrap', marginBottom: preview.length ? 8 : 0}}>
+        {[
+          { l:'BUMPS',  v: offer.bump_count,          c: offer.bump_count > 0 ? 'var(--acc)' : undefined },
+          { l:'SKIPS',  v: offer.skip_count },
+          { l:'REPLIES', v: slb.tracked_replies ?? offer.reply_count },
+          { l:'DONE',   v: offer.contracts_complete,  c: offer.contracts_complete > 0 ? 'var(--green)' : undefined },
+        ].map(({l, v, c}) => (
+          <div key={l} style={{textAlign:'center', minWidth:40}}>
+            <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>{l}</div>
+            <div style={{fontSize:13, fontFamily:'var(--mono)', fontWeight:700, color: c || 'var(--sub)'}}>{v ?? 0}</div>
+          </div>
+        ))}
+        {ps.avg_reply_gain != null && (
+          <div style={{textAlign:'center', minWidth:44}}>
+            <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>AVG GAIN</div>
+            <div style={{
+              fontSize:13, fontFamily:'var(--mono)', fontWeight:700,
+              color: ps.avg_reply_gain > 0 ? 'var(--green)' : 'var(--dim)',
+            }}>
+              {ps.avg_reply_gain > 0 ? `+${ps.avg_reply_gain}` : ps.avg_reply_gain}
+            </div>
+          </div>
         )}
       </div>
 
-      <div style={{display:'flex', gap:12, flexWrap:'wrap', marginBottom:6}}>
-        {[
-          { l:'BUMPS',   v: offer.bump_count,           c: offer.bump_count > 0 ? 'var(--acc)' : 'var(--dim)' },
-          { l:'SKIPPED', v: offer.skip_count },
-          { l:'REPLIES', v: offer.reply_count },
-          { l:'UNREAD',  v: offer.unread_replies,       c: offer.unread_replies > 0 ? 'var(--yellow)' : 'var(--dim)' },
-          { l:'DONE',    v: offer.contracts_complete,   c: offer.contracts_complete > 0 ? 'var(--green)' : 'var(--dim)' },
-        ].map(({l,v,c}) => (
-          <div key={l} style={{textAlign:'center', minWidth:44}}>
-            <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>{l}</div>
-            <div style={{fontSize:14, fontFamily:'var(--mono)', fontWeight:700, color:c||'var(--sub)'}}>{v}</div>
-          </div>
-        ))}
-      </div>
-
-      {offer.bump_count > 0 && (
-        <div>
-          <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:3}}>
-            WASTE SCORE
-          </div>
-          <WasteBar score={offer.waste_score} />
-          {hasWaste && (
-            <div style={{fontSize:10, color:'var(--red)', marginTop:4}}>
-              {offer.bump_count} bumps with low reply/contract activity
-              {offer.has_active_job && offer.closed ? ' — job active on closed thread' : ''}
-            </div>
-          )}
+      {/* Mini timeline */}
+      {preview.length > 0 && (
+        <div style={{marginBottom:6}}>
+          <PeriodTimeline periods={preview} />
         </div>
       )}
 
+      {/* Footer: timing + activity */}
       {offer.latest_bump_at > 0 && (
-        <div style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', marginTop:5}}>
-          last bumped {relTime(offer.latest_bump_at)}
+        <div style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', marginTop:4}}>
+          {'bumped '}
+          {relTime(offer.latest_bump_at)}
+          {slb.has_activity && slb.last_activity_at
+            ? ` · activity ${relTime(slb.last_activity_at)}`
+            : !slb.has_activity && offer.bump_count > 0
+              ? ' · no activity since'
+              : ''}
           {offer.job_interval_h > 0 && ` · every ${offer.job_interval_h}h`}
         </div>
       )}
@@ -98,38 +156,60 @@ export default function MerchantPromotion() {
   if (loading) return <div className="empty"><div className="spin" /></div>
   if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Failed to load bump data</div>
 
-  const { offers = [], waste_warnings = [], total_bumps = 0, total_skips = 0 } = data
-  const visible = tab === 'waste' ? waste_warnings : offers
+  const { offers = [], summary = {}, total_bumps = 0, total_skips = 0 } = data
+
+  const visible =
+    tab === 'review'   ? offers.filter(o => o.recommendation === 'review' || o.recommendation === 'pause_candidate')
+    : tab === 'activity' ? offers.filter(o => o.since_last_bump?.has_activity)
+    : tab === 'paused'   ? offers.filter(o => o.recommendation === 'paused' || o.recommendation === 'closed_thread')
+    : offers
 
   return (
     <div>
-      <div style={{display:'flex', gap:10, flexWrap:'wrap', marginBottom:12}}>
+      {/* Stat strip */}
+      <div style={{display:'flex', gap:6, marginBottom:12, flexWrap:'wrap'}}>
         {[
-          { l:'TOTAL BUMPS',  v: total_bumps },
-          { l:'TOTAL SKIPS',  v: total_skips },
-          { l:'BUMP WASTE', v: waste_warnings.length, c:'var(--red)' },
-        ].map(({l,v,c}) => (
-          <div key={l} style={{background:'var(--s1)', padding:'7px 14px', flex:1, minWidth:80, textAlign:'center'}}>
+          { l:'NEEDS REVIEW',  v: summary.needs_review    ?? 0, c:'var(--red)'    },
+          { l:'GOT ACTIVITY',  v: summary.got_activity    ?? 0, c:'var(--green)'  },
+          { l:'OPEN REPLIES',  v: summary.open_replies    ?? 0, c:'var(--yellow)' },
+          { l:'PAUSED/CLOSED', v: summary.paused_or_closed ?? 0                   },
+        ].map(({l, v, c}) => (
+          <div key={l} style={{
+            background:'var(--s1)', padding:'7px 14px',
+            flex:'1 1 0', minWidth:80, textAlign:'center',
+          }}>
             <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>{l}</div>
-            <div style={{fontSize:18, fontFamily:'var(--mono)', fontWeight:700, color:c||'var(--sub)'}}>{v}</div>
+            <div style={{fontSize:18, fontFamily:'var(--mono)', fontWeight:700, color: c || 'var(--sub)'}}>{v}</div>
           </div>
         ))}
       </div>
 
-      <div style={{display:'flex', gap:4, marginBottom:12}}>
-        <button className={`tab${tab==='all'?' on':''}`} onClick={() => setTab('all')}>
-          All ({offers.length})
-        </button>
-        <button className={`tab${tab==='waste'?' on':''}`} onClick={() => setTab('waste')}>
-          Bump Waste ({waste_warnings.length})
-        </button>
+      {/* Tabs */}
+      <div style={{display:'flex', gap:4, marginBottom:12, flexWrap:'wrap'}}>
+        {[
+          { val:'all',      label:`All (${offers.length})`                      },
+          { val:'review',   label:`Needs Review (${summary.needs_review ?? 0})` },
+          { val:'activity', label:`Got Activity (${summary.got_activity ?? 0})` },
+          { val:'paused',   label:`Paused (${summary.paused_or_closed  ?? 0})`  },
+        ].map(f => (
+          <button key={f.val}
+            className={`tab${tab === f.val ? ' on' : ''}`}
+            onClick={() => setTab(f.val)}
+          >
+            {f.label}
+          </button>
+        ))}
       </div>
 
       {visible.length === 0
         ? <div className="empty" style={{color:'var(--dim)'}}>
-            {tab === 'waste' ? 'No bump waste showing right now.' : 'No bumped threads.'}
+            {tab === 'all' ? 'No bumped threads.' : 'Nothing in this category.'}
           </div>
-        : visible.map(o => <OfferRow key={o.tid} offer={o} />)
+        : (
+          <div className="mhq-card-list">
+            {visible.map(o => <BumpCard key={o.tid} offer={o} />)}
+          </div>
+        )
       }
     </div>
   )
