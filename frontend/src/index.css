@@ -318,8 +318,12 @@ select.inp,select.input{
 .mhq-offer-card{transition:opacity 100ms}
 .mhq-offer-card:hover{opacity:.9}
 .mhq-action-item:last-child{margin-bottom:0}
+.mhq-overview-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;align-items:start}
 @media(min-width:721px){
   .mhq-card-list{grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+}
+@media(max-width:720px){
+  .mhq-overview-row{grid-template-columns:1fr}
 }
 
 /* ── MOBILE ──────────────────────────────────────────────────────────────── */

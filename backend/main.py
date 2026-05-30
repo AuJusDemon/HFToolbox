@@ -324,6 +324,11 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                                 f"Contract #{cid} - {_slabel}",
                                 body, _link, "toolbox", None, True,
                             )
+                            try:
+                                from modules.merchant.merchant_db import record_contract_status_event as _rec_ev
+                                await asyncio.to_thread(_rec_ev, uid, cid, old_sn, new_sn)
+                            except Exception:
+                                pass
                         if new_br and new_br != old_br:
                             await asyncio.to_thread(
                                 integration_db.create_alert_event,
@@ -404,6 +409,11 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                                         f"Contract #{cid} - {label}",
                                         body, _rc_lnk, "toolbox", None, True,
                                     )
+                                    try:
+                                        from modules.merchant.merchant_db import record_contract_status_event as _rec_ev
+                                        await asyncio.to_thread(_rec_ev, uid, cid, old_sn, new_sn)
+                                    except Exception:
+                                        pass
                                 if new_br and new_br != old_br:
                                     await asyncio.to_thread(
                                         integration_db.create_alert_event,

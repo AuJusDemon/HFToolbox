@@ -57,7 +57,7 @@ function PipelineBar({ byStage }) {
   if (!total) return null
   return (
     <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--b2)' }}>
-      <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 5 }}>PIPELINE BY STAGE</div>
+      <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 5 }}>REPLIES BY STATUS</div>
       <div style={{ display: 'flex', height: 6, overflow: 'hidden', gap: 1 }}>
         {ACTIVE.map(s => {
           const cnt = byStage[s] || 0
@@ -145,7 +145,7 @@ function WeekChart({ dailyDone }) {
   return (
     <div>
       <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 8 }}>
-        COMPLETED DEALS — LAST 7 DAYS
+        COMPLETED CONTRACTS — LAST 7 DAYS
         <span style={{ marginLeft: 10, color: 'var(--green)' }}>{total} total</span>
       </div>
       <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 72 }}>
@@ -212,19 +212,19 @@ export default function MerchantOverview({ setTab }) {
 
       {/* Stat strip */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        <Chip label="ACTIVE DEALS"   value={today.active_contracts ?? 0} color="var(--yellow)" tab="deals"    setTab={setTab} />
-        <Chip label="PIPELINE LEADS" value={pipelineTotal}               color="var(--acc)"    tab="pipeline" setTab={setTab} />
-        <Chip label="SLA BREACHES"   value={slaBreaches}
+        <Chip label="ACTIVE CONTRACTS" value={today.active_contracts ?? 0} color="var(--yellow)" tab="deals"    setTab={setTab} />
+        <Chip label="OPEN REPLIES"     value={pipelineTotal}               color="var(--acc)"    tab="pipeline" setTab={setTab} />
+        <Chip label="LATE REPLIES"     value={slaBreaches}
           color={slaBreaches > 0 ? 'var(--red)' : 'var(--green)'}
           tab="pipeline" setTab={setTab} />
-        <Chip label="DONE THIS WEEK" value={week.completed_deals ?? 0} color="var(--green)" tab="deals"   setTab={setTab} />
-        <Chip label="TOTAL"          value={totals.total_contracts ?? 0}    tab="deals"   setTab={setTab} />
-        <Chip label="COMPLETED"      value={totals.completed_contracts ?? 0} color="var(--green)" tab="deals" setTab={setTab} />
-        <Chip label="OFFERS"         value={totals.tracked_offers ?? 0}     tab="offers"  setTab={setTab} />
+        <Chip label="COMPLETED THIS WEEK" value={week.completed_deals ?? 0} color="var(--green)" tab="deals"   setTab={setTab} />
+        <Chip label="TOTAL CONTRACTS"  value={totals.total_contracts ?? 0}    tab="deals"   setTab={setTab} />
+        <Chip label="COMPLETED"        value={totals.completed_contracts ?? 0} color="var(--green)" tab="deals" setTab={setTab} />
+        <Chip label="SALES THREADS"    value={totals.tracked_offers ?? 0}     tab="offers"  setTab={setTab} />
       </div>
 
       {/* Row 1: Needs Attention | Recent Activity */}
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
+      <div className="mhq-overview-row">
 
         <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
           <div className="card-head">
@@ -244,8 +244,8 @@ export default function MerchantOverview({ setTab }) {
 
         <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
           <div className="card-head">
-            <span>Recent Activity</span>
-            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('deals')}>All Deals</button>
+            <span>Recent Contracts</span>
+            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('deals')}>All Contracts</button>
           </div>
           <div className="card-body" style={{ padding: '8px 10px' }}>
             {recent_contracts.length === 0
@@ -258,27 +258,27 @@ export default function MerchantOverview({ setTab }) {
       </div>
 
       {/* Row 2: Top Buyers | 7-day chart */}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+      <div className="mhq-overview-row" style={{ marginBottom: 0 }}>
 
         <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
           <div className="card-head">
-            <span>Top Buyers</span>
-            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('customers')}>All Customers</button>
+            <span>Repeat Buyers</span>
+            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('customers')}>All People</button>
           </div>
           <div className="card-body" style={{ padding: '8px 10px' }}>
             {top_customers.length === 0
-              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No customers on your threads yet.</div>
+              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No people on your threads yet.</div>
               : top_customers.map(c => <BuyerRow key={c.uid} c={c} setTab={setTab} />)
             }
           </div>
         </div>
 
         <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
-          <div className="card-head">Weekly Activity</div>
+          <div className="card-head">Weekly Recap</div>
           <div className="card-body" style={{ padding: '8px 10px' }}>
             <WeekChart dailyDone={daily_completions} />
             {daily_completions.every(n => n === 0) && (
-              <div style={{ color: 'var(--dim)', fontSize: 12 }}>No completed deals in the last 7 days.</div>
+              <div style={{ color: 'var(--dim)', fontSize: 12 }}>No completed contracts in the last 7 days.</div>
             )}
           </div>
         </div>

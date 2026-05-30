@@ -4,8 +4,8 @@ import { healthLabel, healthColor, relTime, bucketLabel, bucketColor } from './m
 
 const STATUS_FILTERS = [
   { val: null,             label: 'All' },
-  { val: 'needs_attention',label: 'Needs Attention' },
-  { val: 'wasting_spend',  label: 'Wasting Spend' },
+  { val: 'needs_attention',label: 'Needs Reply' },
+  { val: 'wasting_spend',  label: 'Bump Waste' },
   { val: 'no_contracts',   label: 'No Contracts' },
   { val: 'stale',          label: 'Stale' },
 ]
@@ -36,7 +36,7 @@ function OfferCard({ offer, onSelect }) {
 
       <div style={{display:'flex', gap:10, flexWrap:'wrap'}}>
         {[
-          { label:'LEADS',     val: offer.reply_count,         alert: offer.unread_leads > 0 },
+          { label:'REPLIES',   val: offer.reply_count,         alert: offer.unread_leads > 0 },
           { label:'UNREAD',    val: offer.unread_leads,        alert: offer.unread_leads > 0 },
           { label:'CONTRACTS', val: offer.contracts_total },
           { label:'DONE',      val: offer.contracts_complete,  color:'var(--green)' },
@@ -52,7 +52,7 @@ function OfferCard({ offer, onSelect }) {
         ))}
         {offer.bump_waste_score >= 60 && (
           <div style={{textAlign:'center', minWidth:40}}>
-            <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>WASTE</div>
+            <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>BUMP WASTE</div>
             <div style={{fontSize:14, fontFamily:'var(--mono)', fontWeight:700, color:'var(--red)'}}>{offer.bump_waste_score}</div>
           </div>
         )}
@@ -84,7 +84,7 @@ function OfferDetail({ tid, onBack }) {
 
   return (
     <div>
-      <button className="btn" style={{marginBottom:10, fontSize:11}} onClick={onBack}>← Back to Offers</button>
+      <button className="btn" style={{marginBottom:10, fontSize:11}} onClick={onBack}>← Back to Sales Threads</button>
       <div className="card" style={{marginBottom:12}}>
         <div className="card-head">
           <span>{data.title || `TID ${data.tid}`}</span>
@@ -199,7 +199,7 @@ export default function MerchantOffers() {
           value={sort}
           onChange={e => setSort(e.target.value)}
         >
-          <option value="health">Sort: Health</option>
+          <option value="health">Sort: Status</option>
           <option value="activity">Sort: Activity</option>
           <option value="contracts">Sort: Contracts</option>
         </select>
@@ -208,7 +208,7 @@ export default function MerchantOffers() {
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : offers.length === 0
-          ? <div className="empty" style={{color:'var(--dim)'}}>No offers found.</div>
+          ? <div className="empty" style={{color:'var(--dim)'}}>No sales threads found.</div>
           : (
             <div className="mhq-card-list">
               {offers.map(o => (

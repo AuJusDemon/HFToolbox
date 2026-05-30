@@ -104,7 +104,7 @@ export default function MerchantDeals() {
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : visible.length === 0
-          ? <div className="empty" style={{color:'var(--dim)'}}>No deals found.</div>
+          ? <div className="empty" style={{color:'var(--dim)'}}>No contracts found.</div>
           : visible.map(d => <DealCard key={d.cid} deal={d} />)
       }
     </div>

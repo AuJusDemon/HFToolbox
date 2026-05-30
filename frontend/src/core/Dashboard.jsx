@@ -492,6 +492,77 @@ function SigmarketOverview() {
 }
 
 
+// ── MERCHANT HQ CARD ──────────────────────────────────────────────────────────
+function MerchantHQCard() {
+  const nav = useNavigate()
+  const [data, setData] = useState(null)
+
+  const load = useCallback(() => {
+    api.get('/api/merchant/overview').then(d => { if (d) setData(d) }).catch(() => {})
+  }, [])
+
+  useEffect(() => { load() }, [load])
+  const throttle = useStore(s => s.throttle)
+  usePolling(load, throttledInterval(120000, throttle))
+
+  const actionCount = data?.action_queue?.length ?? 0
+  const slaBreaches = data?.pipeline?.sla_breaches ?? 0
+  const activeDone  = data?.today?.active_contracts ?? 0
+  const weekDone    = data?.week?.completed_deals ?? 0
+  const pipeTotal   = data?.pipeline?.total ?? 0
+
+  return (
+    <div className="card" style={{cursor:'pointer'}} onClick={() => nav('/dashboard/merchant')}>
+      <CardHeader
+        icon="MCH" title="Seller HQ" to="/dashboard/merchant"
+        badge={
+          slaBreaches > 0 ? `${slaBreaches} LATE REPL${slaBreaches > 1 ? 'IES' : 'Y'}`
+          : actionCount > 0 ? `${actionCount} ACTION${actionCount > 1 ? 'S' : ''}`
+          : null
+        }
+        badgeColor={slaBreaches > 0 ? 'var(--red)' : 'var(--yellow)'}
+      />
+      <div className="card-body">
+        {!data ? (
+          <div style={{fontSize:11, color:'var(--sub)', fontStyle:'italic'}}>Loading...</div>
+        ) : (
+          <div style={{display:'flex', gap:16, flexWrap:'wrap'}}>
+            {[
+              { l:'ACTIVE CONTRACTS', v: activeDone, c: activeDone  > 0 ? 'var(--yellow)' : 'var(--dim)' },
+              { l:'OPEN REPLIES',    v: pipeTotal,  c: pipeTotal   > 0 ? 'var(--acc)'    : 'var(--dim)' },
+              { l:'LATE REPLIES',    v: slaBreaches, c: slaBreaches > 0 ? 'var(--red)'   : 'var(--green)' },
+              { l:'DONE THIS WEEK', v: weekDone,   c: weekDone    > 0 ? 'var(--green)'  : 'var(--dim)' },
+            ].map(({ l, v, c }) => (
+              <div key={l}>
+                <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:2}}>{l}</div>
+                <div style={{fontSize:20, fontFamily:'var(--mono)', fontWeight:700, color: c, lineHeight:1.1}}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {data?.action_queue?.length > 0 && (
+          <div style={{marginTop:10, paddingTop:8, borderTop:'1px solid var(--b1)'}}>
+            {data.action_queue.slice(0, 3).map((item, i) => (
+              <div key={i} style={{
+                display:'flex', gap:8, alignItems:'center',
+                padding:'4px 0', borderBottom:'1px solid rgba(21,30,46,.4)',
+              }}>
+                <span style={{
+                  fontSize:11, fontFamily:'var(--mono)', fontWeight:700,
+                  color: item.severity === 'high' ? 'var(--red)' : item.severity === 'medium' ? 'var(--yellow)' : 'var(--sub)',
+                  minWidth:18,
+                }}>{item.count}</span>
+                <span style={{fontSize:11, color:'var(--text)'}}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 function DashGrid({ children }) {
   // Filter out false/null/undefined children — only count what actually renders
   const real = Array.isArray(children) ? children.filter(Boolean) : [children].filter(Boolean)
@@ -515,6 +586,7 @@ export default function Dashboard() {
   const showBytes     = isEnabled('bytes')
   const showContracts = isEnabled('contracts')
   const showSigmarket = isEnabled('sigmarket')
+  const showMerchant  = isEnabled('merchant')
 
   return (
     <>
@@ -524,7 +596,10 @@ export default function Dashboard() {
         {showContracts && <ContractsOverview />}
       </DashGrid>
       <DashGrid>
+        {showMerchant  && <MerchantHQCard />}
         {showSigmarket && <SigmarketOverview />}
+      </DashGrid>
+      <DashGrid>
         <UserLookup />
       </DashGrid>
     </>

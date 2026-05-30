@@ -52,19 +52,19 @@ export default function MerchantReports() {
           ? <div className="empty" style={{color:'var(--red)'}}>Failed to load report</div>
           : (
             <div className="card">
-              <div className="card-head">Weekly Seller Report</div>
+              <div className="card-head">Seller Recap</div>
               <div className="card-body">
-                <StatRow label="Completed Deals"      value={report.completed_deals}   color="var(--green)" />
+                <StatRow label="Completed Contracts"  value={report.completed_deals}   color="var(--green)" />
                 <StatRow label="New Contracts"        value={report.new_contracts} />
-                <StatRow label="Active Pipeline"      value={report.active_pipeline}    color="var(--yellow)" />
-                <StatRow label="New Leads"            value={report.new_leads} />
-                <StatRow label="Repeat Customers"     value={report.repeat_customers}   color="var(--acc)" />
-                <StatRow label="SLA Breaches"         value={report.sla_breaches}       color={report.sla_breaches > 0 ? 'var(--red)' : 'var(--green)'} />
-                <StatRow label="Needs Attention"      value={report.needs_attention}    color={report.needs_attention > 0 ? 'var(--yellow)' : 'var(--green)'} />
+                <StatRow label="Active Contracts"     value={report.active_pipeline}    color="var(--yellow)" />
+                <StatRow label="New Replies"          value={report.new_leads} />
+                <StatRow label="Repeat Buyers"        value={report.repeat_customers}   color="var(--acc)" />
+                <StatRow label="Late Replies"         value={report.sla_breaches}       color={report.sla_breaches > 0 ? 'var(--red)' : 'var(--green)'} />
+                <StatRow label="Needs Reply"          value={report.needs_attention}    color={report.needs_attention > 0 ? 'var(--yellow)' : 'var(--green)'} />
 
                 {report.best_offer && (
                   <div style={{marginTop:12}}>
-                    <div style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:4}}>TOP OFFER BY COMPLETIONS</div>
+                    <div style={{fontSize:10, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:4}}>TOP SALES THREAD</div>
                     <div style={{fontSize:12, color:'var(--green)'}}>
                       {report.best_offer.title || `TID ${report.best_offer.tid}`}
                     </div>

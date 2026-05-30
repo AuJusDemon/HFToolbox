@@ -62,10 +62,10 @@ async def merchant_deals(request: Request, bucket: Optional[str] = None):
 
 
 @router.get("/customers")
-async def merchant_customers(request: Request):
+async def merchant_customers(request: Request, seller_only: bool = True):
     uid = _uid(request)
     from modules.merchant.service import get_customers
-    return await asyncio.to_thread(get_customers, uid)
+    return await asyncio.to_thread(get_customers, uid, seller_only)
 
 
 @router.get("/customers/{cp_uid}")
@@ -74,7 +74,7 @@ async def merchant_customer_detail(cp_uid: str, request: Request):
     from modules.merchant.service import get_customer_detail
     detail = await asyncio.to_thread(get_customer_detail, uid, cp_uid)
     if not detail:
-        raise HTTPException(404, "Customer not found")
+        raise HTTPException(404, "Person not found")
     return detail
 
 
@@ -156,9 +156,12 @@ async def patch_offer(tid: str, body: OfferPatch, request: Request):
 
 
 class GoalsPatch(BaseModel):
-    reply_sla_hours:    Optional[int] = None
-    weekly_bump_budget: Optional[int] = None
-    min_contract_value: Optional[int] = None
+    reply_sla_hours:             Optional[int] = None
+    weekly_bump_budget:          Optional[int] = None
+    weekly_completed_deal_goal:  Optional[int] = None
+    max_stale_offer_days:        Optional[int] = None
+    max_bumps_without_lead:      Optional[int] = None
+    weekly_new_lead_goal:        Optional[int] = None
 
 
 @router.get("/goals")
@@ -175,8 +178,11 @@ async def patch_goals(body: GoalsPatch, request: Request):
     current = await asyncio.to_thread(get_goals, uid)
     await asyncio.to_thread(
         upsert_goals, uid,
-        body.reply_sla_hours    if body.reply_sla_hours    is not None else current['reply_sla_hours'],
-        body.weekly_bump_budget if body.weekly_bump_budget is not None else current['weekly_bump_budget'],
-        body.min_contract_value if body.min_contract_value is not None else current['min_contract_value'],
+        body.reply_sla_hours            if body.reply_sla_hours            is not None else current['reply_sla_hours'],
+        body.weekly_bump_budget         if body.weekly_bump_budget         is not None else current['weekly_bump_budget'],
+        body.weekly_completed_deal_goal if body.weekly_completed_deal_goal is not None else current.get('weekly_completed_deal_goal', 0),
+        body.max_stale_offer_days       if body.max_stale_offer_days       is not None else current.get('max_stale_offer_days', 30),
+        body.max_bumps_without_lead     if body.max_bumps_without_lead     is not None else current.get('max_bumps_without_lead', 10),
+        body.weekly_new_lead_goal       if body.weekly_new_lead_goal       is not None else current.get('weekly_new_lead_goal', 0),
     )
     return {"ok": True}

@@ -6,6 +6,7 @@ Only stores UX/workflow data that doesn't exist anywhere else:
   - merchant_customers: private notes/tags on counterparties
   - merchant_offers: local label/category/status/hidden flag for tracked threads
   - merchant_goals: per-user seller goals and SLA thresholds
+  - contract_status_events: crawler-detected contract status transitions (with timestamp)
 """
 
 import time
@@ -62,11 +63,15 @@ def init_merchant_db() -> None:
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS merchant_goals (
-                uid                 VARCHAR(64) NOT NULL,
-                reply_sla_hours     INT         NOT NULL DEFAULT 24,
-                weekly_bump_budget  INT         NOT NULL DEFAULT 0,
-                min_contract_value  INT         NOT NULL DEFAULT 0,
-                settings_json       TEXT,
+                uid                          VARCHAR(64) NOT NULL,
+                reply_sla_hours              INT         NOT NULL DEFAULT 24,
+                weekly_bump_budget           INT         NOT NULL DEFAULT 0,
+                min_contract_value           INT         NOT NULL DEFAULT 0,
+                weekly_completed_deal_goal   INT         NOT NULL DEFAULT 0,
+                max_stale_offer_days         INT         NOT NULL DEFAULT 30,
+                max_bumps_without_lead       INT         NOT NULL DEFAULT 10,
+                weekly_new_lead_goal         INT         NOT NULL DEFAULT 0,
+                settings_json                TEXT,
                 PRIMARY KEY (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
@@ -88,6 +93,27 @@ def init_merchant_db() -> None:
                 INDEX idx_mlg_uid (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS contract_status_events (
+                uid          VARCHAR(64)  NOT NULL,
+                cid          VARCHAR(64)  NOT NULL,
+                from_status  VARCHAR(8)   NOT NULL DEFAULT '',
+                to_status    VARCHAR(8)   NOT NULL,
+                detected_at  BIGINT       NOT NULL,
+                PRIMARY KEY (uid, cid, to_status),
+                INDEX idx_cse_uid_ts (uid, detected_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        for _col in [
+            "ALTER TABLE merchant_goals ADD COLUMN weekly_completed_deal_goal INT NOT NULL DEFAULT 0",
+            "ALTER TABLE merchant_goals ADD COLUMN max_stale_offer_days INT NOT NULL DEFAULT 30",
+            "ALTER TABLE merchant_goals ADD COLUMN max_bumps_without_lead INT NOT NULL DEFAULT 10",
+            "ALTER TABLE merchant_goals ADD COLUMN weekly_new_lead_goal INT NOT NULL DEFAULT 0",
+        ]:
+            try:
+                conn.execute(_col)
+            except Exception:
+                pass
         # One-time migration: carry existing merchant_leads stage data into the new table.
         # INSERT OR IGNORE is idempotent - safe to run on every startup.
         try:
@@ -249,12 +275,20 @@ def get_goals(uid: str) -> dict:
             "SELECT * FROM merchant_goals WHERE uid=?", (uid,)
         ).fetchone()
         if row:
-            return dict(row)
+            r = dict(row)
+            r.setdefault('weekly_completed_deal_goal', 0)
+            r.setdefault('max_stale_offer_days', 30)
+            r.setdefault('max_bumps_without_lead', 10)
+            r.setdefault('weekly_new_lead_goal', 0)
+            return r
         return {
             'uid': uid,
             'reply_sla_hours': 24,
             'weekly_bump_budget': 0,
-            'min_contract_value': 0,
+            'weekly_completed_deal_goal': 0,
+            'max_stale_offer_days': 30,
+            'max_bumps_without_lead': 10,
+            'weekly_new_lead_goal': 0,
             'settings_json': None,
         }
 
@@ -297,18 +331,43 @@ def patch_lead_group(uid: str, from_uid: str, tid: str, **fields) -> None:
         )
 
 
-def upsert_goals(uid: str, reply_sla_hours: int = 24,
-                 weekly_bump_budget: int = 0, min_contract_value: int = 0,
+def upsert_goals(uid: str, reply_sla_hours: int = 24, weekly_bump_budget: int = 0,
+                 weekly_completed_deal_goal: int = 0, max_stale_offer_days: int = 30,
+                 max_bumps_without_lead: int = 10, weekly_new_lead_goal: int = 0,
                  settings_json: str | None = None) -> None:
     with _db() as conn:
         conn.execute(
             """INSERT INTO merchant_goals
-               (uid, reply_sla_hours, weekly_bump_budget, min_contract_value, settings_json)
-               VALUES (?,?,?,?,?)
+               (uid, reply_sla_hours, weekly_bump_budget,
+                weekly_completed_deal_goal, max_stale_offer_days,
+                max_bumps_without_lead, weekly_new_lead_goal, settings_json)
+               VALUES (?,?,?,?,?,?,?,?)
                ON CONFLICT(uid) DO UPDATE SET
                  reply_sla_hours=excluded.reply_sla_hours,
                  weekly_bump_budget=excluded.weekly_bump_budget,
-                 min_contract_value=excluded.min_contract_value,
+                 weekly_completed_deal_goal=excluded.weekly_completed_deal_goal,
+                 max_stale_offer_days=excluded.max_stale_offer_days,
+                 max_bumps_without_lead=excluded.max_bumps_without_lead,
+                 weekly_new_lead_goal=excluded.weekly_new_lead_goal,
                  settings_json=excluded.settings_json""",
-            (uid, reply_sla_hours, weekly_bump_budget, min_contract_value, settings_json)
+            (uid, reply_sla_hours, weekly_bump_budget,
+             weekly_completed_deal_goal, max_stale_offer_days,
+             max_bumps_without_lead, weekly_new_lead_goal, settings_json)
         )
+
+
+# ── Contract status events ─────────────────────────────────────────────────────
+
+def record_contract_status_event(uid: str, cid: str,
+                                  from_status: str, to_status: str) -> None:
+    now = int(time.time())
+    try:
+        with _db() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO contract_status_events
+                   (uid, cid, from_status, to_status, detected_at)
+                   VALUES (?,?,?,?,?)""",
+                (uid, str(cid), str(from_status), str(to_status), now)
+            )
+    except Exception:
+        pass  # Never break the crawl

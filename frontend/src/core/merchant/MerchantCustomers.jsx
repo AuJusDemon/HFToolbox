@@ -115,7 +115,7 @@ function CustomerDetail({ cpUid, onBack }) {
   }
 
   if (loading) return <div className="empty"><div className="spin" /></div>
-  if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Customer not found</div>
+  if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Person not found</div>
 
   return (
     <div>
@@ -239,12 +239,16 @@ export default function MerchantCustomers() {
   const [loading, setLoading]     = useState(true)
   const [selected, setSelected]   = useState(null)
   const [search, setSearch]       = useState('')
+  const [sellerOnly, setSellerOnly] = useState(true)
 
-  useEffect(() => {
-    api.get('/api/merchant/customers')
+  const load = (so) => {
+    setLoading(true)
+    api.get(`/api/merchant/customers?seller_only=${so}`)
       .then(d => { setCustomers(Array.isArray(d) ? d : []); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [])
+  }
+
+  useEffect(() => { load(sellerOnly) }, [sellerOnly])
 
   if (selected) return <CustomerDetail cpUid={selected} onBack={() => setSelected(null)} />
 
@@ -258,6 +262,19 @@ export default function MerchantCustomers() {
 
   return (
     <div>
+      <div style={{display:'flex', gap:6, marginBottom:10, alignItems:'center', flexWrap:'wrap'}}>
+        {[
+          { val: true,  label: 'My People' },
+          { val: false, label: 'All Counterparties' },
+        ].map(f => (
+          <button key={String(f.val)}
+            className={`tab${sellerOnly === f.val ? ' on' : ''}`}
+            onClick={() => setSellerOnly(f.val)}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
       <input
         className="inp"
         style={{width:'100%', marginBottom:12, fontSize:12, boxSizing:'border-box'}}
@@ -269,7 +286,7 @@ export default function MerchantCustomers() {
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : filtered.length === 0
-          ? <div className="empty" style={{color:'var(--dim)'}}>No customers found.</div>
+          ? <div className="empty" style={{color:'var(--dim)'}}>No people found.</div>
           : (
             <div className="mhq-card-list">
               {filtered.map(c => (

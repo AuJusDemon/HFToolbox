@@ -40,11 +40,11 @@ export function bucketColor(bucket) {
 
 export function healthLabel(h) {
   const map = {
-    needs_attention: 'Needs Attention',
-    wasting_spend:   'Wasting Spend',
-    healthy:         'Healthy',
+    needs_attention: 'Needs Reply',
+    wasting_spend:   'Bump Waste',
+    healthy:         'Active',
     stale:           'Stale',
-    new:             'New',
+    new:             'New Thread',
   }
   return map[h] || h
 }
@@ -59,12 +59,12 @@ export function healthColor(h) {
 
 export function stageLabel(s) {
   const map = {
-    new:              'New',
-    qualified:        'Qualified',
-    follow_up:        'Follow-Up',
-    contract_opened:  'Contract Opened',
-    won:              'Won',
-    lost:             'Lost',
+    new:              'New Reply',
+    qualified:        'Interested',
+    follow_up:        'Follow Up',
+    contract_opened:  'Contract Open',
+    won:              'Completed',
+    lost:             'No Deal',
     ignored:          'Ignored',
   }
   return map[s] || s

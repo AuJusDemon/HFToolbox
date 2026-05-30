@@ -1,7 +1,7 @@
 """
-modules/merchant/__init__.py — Merchant HQ module registration.
+modules/merchant/__init__.py — Seller HQ module registration.
 
-Seller operations layer: offers, leads, deals, customers, promotion, reports.
+Seller operations layer: sales threads, replies, contracts, bumps, people.
 Reads only from local DB tables already populated by existing crawlers/schedulers.
 Zero HF API calls from this module.
 """
@@ -13,8 +13,8 @@ from modules.merchant.router import router as merchant_router
 register(
     ModuleMeta(
         id="merchant",
-        name="Merchant HQ",
-        description="Seller operations: offer performance, lead pipeline, deals, and customer history.",
+        name="Seller HQ",
+        description="Sales threads, replies, contracts, bumps, and repeat buyers in one seller view.",
         icon="MCH",
         category="market",
         api_cost="low",

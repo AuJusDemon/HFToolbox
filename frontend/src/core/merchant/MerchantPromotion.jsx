@@ -96,7 +96,7 @@ export default function MerchantPromotion() {
   }, [])
 
   if (loading) return <div className="empty"><div className="spin" /></div>
-  if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Failed to load promotion data</div>
+  if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Failed to load bump data</div>
 
   const { offers = [], waste_warnings = [], total_bumps = 0, total_skips = 0 } = data
   const visible = tab === 'waste' ? waste_warnings : offers
@@ -107,7 +107,7 @@ export default function MerchantPromotion() {
         {[
           { l:'TOTAL BUMPS',  v: total_bumps },
           { l:'TOTAL SKIPS',  v: total_skips },
-          { l:'WASTE OFFERS', v: waste_warnings.length, c:'var(--red)' },
+          { l:'BUMP WASTE', v: waste_warnings.length, c:'var(--red)' },
         ].map(({l,v,c}) => (
           <div key={l} style={{background:'var(--s1)', padding:'7px 14px', flex:1, minWidth:80, textAlign:'center'}}>
             <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)'}}>{l}</div>
@@ -121,13 +121,13 @@ export default function MerchantPromotion() {
           All ({offers.length})
         </button>
         <button className={`tab${tab==='waste'?' on':''}`} onClick={() => setTab('waste')}>
-          Waste Warnings ({waste_warnings.length})
+          Bump Waste ({waste_warnings.length})
         </button>
       </div>
 
       {visible.length === 0
         ? <div className="empty" style={{color:'var(--dim)'}}>
-            {tab === 'waste' ? 'No waste warnings — promotion spend looks efficient.' : 'No promoted offers.'}
+            {tab === 'waste' ? 'No bump waste showing right now.' : 'No bumped threads.'}
           </div>
         : visible.map(o => <OfferRow key={o.tid} offer={o} />)
       }

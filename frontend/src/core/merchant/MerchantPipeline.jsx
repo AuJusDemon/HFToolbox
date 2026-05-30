@@ -43,7 +43,7 @@ function LeadCard({ lead, onStageChange }) {
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontSize: 10, color: sc, fontFamily: 'var(--mono)' }}>{stageLabel(lead.stage)}</div>
           <div style={{ fontSize: 9, color: lead.sla_breached ? 'var(--red)' : 'var(--dim)', fontFamily: 'var(--mono)' }}>
-            {relTime(lead.latest_dateline || lead.dateline)}{lead.sla_breached ? ' SLA' : ''}
+            {relTime(lead.latest_dateline || lead.dateline)}{lead.sla_breached ? ' LATE' : ''}
           </div>
         </div>
       </div>
@@ -152,7 +152,7 @@ export default function MerchantPipeline() {
   useEffect(load, [])
 
   if (loading) return <div className="empty"><div className="spin" /></div>
-  if (!data)   return <div className="empty" style={{ color: 'var(--red)' }}>Failed to load pipeline</div>
+  if (!data)   return <div className="empty" style={{ color: 'var(--red)' }}>Failed to load replies</div>
 
   const { leads = [], summary = {}, sla_hours = 24 } = data
   const stages = ['new', 'qualified', 'follow_up', 'contract_opened', 'won', 'lost', 'ignored']
@@ -163,8 +163,8 @@ export default function MerchantPipeline() {
       {/* Summary bar */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
         {[
-          { label: 'TOTAL',     val: summary.total ?? 0 },
-          { label: 'SLA BREACH', val: summary.sla_breaches ?? 0, color: 'var(--red)' },
+          { label: 'OPEN REPLIES', val: summary.total ?? 0 },
+          { label: 'LATE REPLY',   val: summary.sla_breaches ?? 0, color: 'var(--red)' },
         ].concat(
           Object.entries(summary.by_stage || {}).map(([s, c]) => ({
             label: stageLabel(s).toUpperCase(), val: c, color: stageColor(s),
@@ -195,7 +195,7 @@ export default function MerchantPipeline() {
       </div>
 
       {visibleLeads.length === 0
-        ? <div className="empty" style={{ color: 'var(--dim)' }}>No leads in this stage.</div>
+        ? <div className="empty" style={{ color: 'var(--dim)' }}>No replies in this stage.</div>
         : visibleLeads.map(lead => (
           <LeadCard
             key={`${lead.from_uid}_${lead.tid}`}
@@ -207,8 +207,8 @@ export default function MerchantPipeline() {
 
       {leads.length === 0 && (
         <div className="empty" style={{ color: 'var(--dim)' }}>
-          <div>No leads tracked yet.</div>
-          <div style={{ fontSize: 11, marginTop: 6 }}>Track marketplace threads in Posting to start seeing leads here.</div>
+          <div>No replies tracked yet.</div>
+          <div style={{ fontSize: 11, marginTop: 6 }}>Track marketplace threads in Posting to start seeing replies here.</div>
         </div>
       )}
     </div>

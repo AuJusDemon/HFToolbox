@@ -112,11 +112,15 @@ def reply_stats_from_queue(replies: list) -> dict:
 def bump_stats_from_log(bump_logs: list) -> dict:
     """
     Group bump log entries by tid.
-    Returns: {tid: {bump_count, skip_count, latest_bump_at}}
+    Returns: {tid: {bump_count, skip_count, latest_bump_at, bumps_7d, bumps_30d}}
     """
     from collections import defaultdict
+    now        = int(time.time())
+    cutoff_7d  = now - 7  * 86400
+    cutoff_30d = now - 30 * 86400
     result: dict[str, dict] = defaultdict(lambda: {
         'bump_count': 0, 'skip_count': 0, 'latest_bump_at': 0,
+        'bumps_7d': 0, 'bumps_30d': 0,
     })
     for entry in bump_logs:
         tid = str(entry.get('tid') or '')
@@ -126,6 +130,10 @@ def bump_stats_from_log(bump_logs: list) -> dict:
         ts = int(entry.get('ts') or 0)
         if action == 'bumped':
             result[tid]['bump_count'] += 1
+            if ts >= cutoff_7d:
+                result[tid]['bumps_7d'] += 1
+            if ts >= cutoff_30d:
+                result[tid]['bumps_30d'] += 1
             if ts > result[tid]['latest_bump_at']:
                 result[tid]['latest_bump_at'] = ts
         elif action in ('skipped', 'skip'):
@@ -134,17 +142,18 @@ def bump_stats_from_log(bump_logs: list) -> dict:
 
 
 def bump_waste_score(bump_count: int, unread_replies: int, completed_contracts: int,
-                     window_days: int = 7) -> int:
+                     bumps_30d: int | None = None) -> int:
     """
     0-100 score: higher = more wasteful promotion spend.
-    Fully bumped with zero results = 100. Proportional otherwise.
+    Uses bumps_30d when provided to avoid penalizing old active threads.
     """
-    if bump_count == 0:
+    effective = bumps_30d if bumps_30d is not None else bump_count
+    if effective == 0:
         return 0
     results = unread_replies + (completed_contracts * 3)
     if results == 0:
-        return min(100, 40 + bump_count * 2)
-    ratio = bump_count / max(results, 1)
+        return min(100, 40 + effective * 2)
+    ratio = effective / max(results, 1)
     return min(100, int(ratio * 15))
 
 
@@ -260,7 +269,7 @@ def overview_action_queue(
     items = []
     if sla_breaches:
         items.append({'type': 'sla_breach', 'count': sla_breaches,
-                      'label': f'{sla_breaches} lead{"s" if sla_breaches>1 else ""} past reply SLA',
+                      'label': f'{sla_breaches} late repl{"ies" if sla_breaches>1 else "y"}',
                       'severity': 'high'})
     if awaiting_contracts:
         items.append({'type': 'awaiting_approval', 'count': awaiting_contracts,
@@ -268,11 +277,11 @@ def overview_action_queue(
                       'severity': 'high'})
     if unread_replies:
         items.append({'type': 'unread_replies', 'count': unread_replies,
-                      'label': f'{unread_replies} unread lead{"s" if unread_replies>1 else ""}',
+                      'label': f'{unread_replies} unread repl{"ies" if unread_replies>1 else "y"}',
                       'severity': 'medium'})
     if active_contracts:
         items.append({'type': 'active_contracts', 'count': active_contracts,
-                      'label': f'{active_contracts} active deal{"s" if active_contracts>1 else ""} in progress',
+                      'label': f'{active_contracts} active contract{"s" if active_contracts>1 else ""} in progress',
                       'severity': 'medium'})
     if followup_due:
         items.append({'type': 'followup_due', 'count': followup_due,
@@ -280,6 +289,6 @@ def overview_action_queue(
                       'severity': 'medium'})
     if waste_warnings:
         items.append({'type': 'bump_waste', 'count': waste_warnings,
-                      'label': f'{waste_warnings} offer{"s" if waste_warnings>1 else ""} wasting promotion spend',
+                      'label': f'{waste_warnings} bumped thread{"s" if waste_warnings>1 else ""} need{"" if waste_warnings>1 else "s"} review',
                       'severity': 'low'})
     return items

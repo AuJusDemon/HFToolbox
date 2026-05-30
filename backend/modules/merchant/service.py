@@ -167,6 +167,19 @@ def _get_lead_metas(uid: str) -> dict[int, dict]:
         return {r['reply_id']: dict(r) for r in rows}
 
 
+def _get_completion_events(uid: str, since: int) -> list[dict]:
+    try:
+        with _db() as conn:
+            rows = conn.execute(
+                "SELECT cid, detected_at FROM contract_status_events "
+                "WHERE uid=? AND to_status='6' AND detected_at >= ?",
+                (uid, since)
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
 def _get_crawl_freshness(uid: str) -> dict:
     """Return last-crawl timestamps from existing crawl state tables."""
     result = {
@@ -271,6 +284,7 @@ def get_overview(uid: str) -> dict:
             bs.get('bump_count', 0),
             rs.get('unread_replies', 0),
             cs.get('complete', 0),
+            bumps_30d=bs.get('bumps_30d', 0),
         )
         if w >= 60:
             waste_warnings += 1
@@ -284,33 +298,43 @@ def get_overview(uid: str) -> dict:
         followup_due=followup_due,
     )
 
-    # Today/this week counts (UTC midnight)
     today_start = now - (now % 86400)
     week_start  = now - 7 * 86400
-    completed_today = sum(
-        1 for c in contracts
-        if str(c.get('status_n','')) in STATUS_COMPLETE
-        and int(c.get('dateline') or 0) >= today_start
-    )
-    completed_week = sum(
-        1 for c in contracts
-        if str(c.get('status_n','')) in STATUS_COMPLETE
-        and int(c.get('dateline') or 0) >= week_start
-    )
     new_leads_today = sum(
         1 for r in replies
         if int(r.get('dateline') or 0) >= today_start
     )
 
-    # 7-day completed deal counts (oldest → newest, index 6 = today)
-    daily_completions = []
-    for day_offset in range(6, -1, -1):
-        ds = today_start - day_offset * 86400
-        daily_completions.append(sum(
+    completion_events = _get_completion_events(uid, week_start - 86400)
+    if completion_events:
+        completed_today = sum(1 for e in completion_events if e['detected_at'] >= today_start)
+        completed_week  = sum(1 for e in completion_events if e['detected_at'] >= week_start)
+        daily_completions = []
+        for day_offset in range(6, -1, -1):
+            ds = today_start - day_offset * 86400
+            daily_completions.append(sum(
+                1 for e in completion_events
+                if ds <= e['detected_at'] < ds + 86400
+            ))
+    else:
+        completed_today = sum(
             1 for c in contracts
-            if str(c.get('status_n','')) in STATUS_COMPLETE
-            and ds <= int(c.get('dateline') or 0) < ds + 86400
-        ))
+            if str(c.get('status_n', '')) in STATUS_COMPLETE
+            and int(c.get('dateline') or 0) >= today_start
+        )
+        completed_week = sum(
+            1 for c in contracts
+            if str(c.get('status_n', '')) in STATUS_COMPLETE
+            and int(c.get('dateline') or 0) >= week_start
+        )
+        daily_completions = []
+        for day_offset in range(6, -1, -1):
+            ds = today_start - day_offset * 86400
+            daily_completions.append(sum(
+                1 for c in contracts
+                if str(c.get('status_n', '')) in STATUS_COMPLETE
+                and ds <= int(c.get('dateline') or 0) < ds + 86400
+            ))
 
     # Top problems
     problems = []
@@ -449,6 +473,7 @@ def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health')
             bs.get('bump_count', 0),
             rs.get('unread_replies', 0),
             cs.get('complete', 0),
+            bumps_30d=bs.get('bumps_30d', 0),
         )
 
         result.append({
@@ -503,7 +528,8 @@ def get_offer_detail(uid: str, tid: str) -> dict | None:
     rs = reply_stats_from_queue(replies).get(tid, {})
     bs = bump_stats_from_log(bump_log).get(tid, {})
     health = offer_health(thread, cs, rs, bs, goals.get('reply_sla_hours', 24))
-    waste  = bump_waste_score(bs.get('bump_count',0), rs.get('unread_replies',0), cs.get('complete',0))
+    waste  = bump_waste_score(bs.get('bump_count',0), rs.get('unread_replies',0), cs.get('complete',0),
+                              bumps_30d=bs.get('bumps_30d', 0))
 
     # Enrich counterparty names
     buyer_uids = list({counterparty_uid(c, uid) for c in contracts if counterparty_uid(c, uid)})
@@ -710,8 +736,11 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
     return result
 
 
-def get_customers(uid: str) -> list[dict]:
+def get_customers(uid: str, seller_only: bool = True) -> list[dict]:
     contracts = _get_contracts(uid)
+    if seller_only:
+        own_tids = {str(t.get('tid', '')) for t in _get_my_threads(uid)} - {''}
+        contracts = [c for c in contracts if str(c.get('tid', '')) in own_tids]
     cstats = customer_stats(contracts, uid)
 
     all_cp_uids = list(cstats.keys())

@@ -9,13 +9,13 @@ import MerchantPromotion from './merchant/MerchantPromotion.jsx'
 import MerchantReports   from './merchant/MerchantReports.jsx'
 
 const TABS = [
-  { id:'overview',   label:'Overview'   },
-  { id:'offers',     label:'Offers'     },
-  { id:'pipeline',   label:'Pipeline'   },
-  { id:'deals',      label:'Deals'      },
-  { id:'customers',  label:'Customers'  },
-  { id:'promotion',  label:'Promotion'  },
-  { id:'reports',    label:'Reports'    },
+  { id:'overview',   label:'Overview'      },
+  { id:'offers',     label:'Sales Threads' },
+  { id:'pipeline',   label:'Replies'       },
+  { id:'deals',      label:'Contracts'     },
+  { id:'customers',  label:'People'        },
+  { id:'promotion',  label:'Bumps'         },
+  { id:'reports',    label:'Recap'         },
 ]
 
 function FreshnessBadge() {
@@ -64,7 +64,7 @@ export default function MerchantPage() {
           fontFamily:'var(--mono)', fontSize:15, color:'var(--acc)',
           letterSpacing:'.06em', margin:0, textTransform:'uppercase',
         }}>
-          Merchant HQ
+          Seller HQ
         </h2>
         <FreshnessBadge />
       </div>
