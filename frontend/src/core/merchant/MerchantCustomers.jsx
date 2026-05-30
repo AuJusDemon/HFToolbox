@@ -115,7 +115,7 @@ function CustomerDetail({ cpUid, onBack }) {
   }
 
   if (loading) return <div className="empty"><div className="spin" /></div>
-  if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Person not found</div>
+  if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Buyer not found</div>
 
   return (
     <div>
@@ -264,7 +264,7 @@ export default function MerchantCustomers() {
     <div>
       <div style={{display:'flex', gap:6, marginBottom:10, alignItems:'center', flexWrap:'wrap'}}>
         {[
-          { val: true,  label: 'My People' },
+          { val: true,  label: 'My Buyers' },
           { val: false, label: 'All Counterparties' },
         ].map(f => (
           <button key={String(f.val)}
@@ -286,7 +286,7 @@ export default function MerchantCustomers() {
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : filtered.length === 0
-          ? <div className="empty" style={{color:'var(--dim)'}}>No people found.</div>
+          ? <div className="empty" style={{color:'var(--dim)'}}>No buyers found.</div>
           : (
             <div className="mhq-card-list">
               {filtered.map(c => (

@@ -13,7 +13,7 @@ const TABS = [
   { id:'offers',     label:'Sales Threads' },
   { id:'pipeline',   label:'Replies'       },
   { id:'deals',      label:'Contracts'     },
-  { id:'customers',  label:'People'        },
+  { id:'customers',  label:'Buyers'        },
   { id:'promotion',  label:'Bumps'         },
   { id:'reports',    label:'Recap'         },
 ]

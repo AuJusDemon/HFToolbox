@@ -74,7 +74,7 @@ async def merchant_customer_detail(cp_uid: str, request: Request):
     from modules.merchant.service import get_customer_detail
     detail = await asyncio.to_thread(get_customer_detail, uid, cp_uid)
     if not detail:
-        raise HTTPException(404, "Person not found")
+        raise HTTPException(404, "Buyer not found")
     return detail
 
 

@@ -263,11 +263,11 @@ export default function MerchantOverview({ setTab }) {
         <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
           <div className="card-head">
             <span>Repeat Buyers</span>
-            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('customers')}>All People</button>
+            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('customers')}>All Buyers</button>
           </div>
           <div className="card-body" style={{ padding: '8px 10px' }}>
             {top_customers.length === 0
-              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No people on your threads yet.</div>
+              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No buyers on your threads yet.</div>
               : top_customers.map(c => <BuyerRow key={c.uid} c={c} setTab={setTab} />)
             }
           </div>
