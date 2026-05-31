@@ -163,7 +163,7 @@ export default function MerchantPipeline() {
       {/* Summary bar */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
         {[
-          { label: 'OPEN REPLIES', val: summary.total ?? 0 },
+          { label: 'OPEN REPLIES', val: summary.open ?? 0 },
           { label: 'LATE REPLY',   val: summary.sla_breaches ?? 0, color: 'var(--red)' },
         ].concat(
           Object.entries(summary.by_stage || {}).map(([s, c]) => ({

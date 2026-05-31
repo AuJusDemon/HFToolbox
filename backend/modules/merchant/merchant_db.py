@@ -9,6 +9,7 @@ Only stores UX/workflow data that doesn't exist anywhere else:
   - contract_status_events: crawler-detected contract status transitions (with timestamp)
 """
 
+import secrets
 import time
 from _db_compat import _db
 
@@ -102,6 +103,19 @@ def init_merchant_db() -> None:
                 detected_at  BIGINT       NOT NULL,
                 PRIMARY KEY (uid, cid, to_status),
                 INDEX idx_cse_uid_ts (uid, detected_at)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS merchant_pm_templates (
+                uid         VARCHAR(64)  NOT NULL,
+                template_id VARCHAR(64)  NOT NULL,
+                name        VARCHAR(120) NOT NULL,
+                subject     TEXT,
+                body        TEXT,
+                created_at  BIGINT       NOT NULL DEFAULT 0,
+                updated_at  BIGINT       NOT NULL DEFAULT 0,
+                PRIMARY KEY (uid, template_id),
+                INDEX idx_mpt_uid (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
         for _col in [
@@ -371,3 +385,69 @@ def record_contract_status_event(uid: str, cid: str,
             )
     except Exception:
         pass  # Never break the crawl
+
+
+# ── PM Templates ───────────────────────────────────────────────────────────────
+
+def list_pm_templates(uid: str) -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM merchant_pm_templates WHERE uid=? ORDER BY name ASC",
+            (uid,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_pm_template(uid: str, name: str, subject: str, body: str) -> dict:
+    template_id = secrets.token_hex(8)
+    now = int(time.time())
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO merchant_pm_templates
+               (uid, template_id, name, subject, body, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (uid, template_id, name, subject, body, now, now)
+        )
+    return {
+        'uid': uid,
+        'template_id': template_id,
+        'name': name,
+        'subject': subject,
+        'body': body,
+        'created_at': now,
+        'updated_at': now,
+    }
+
+
+def update_pm_template(uid: str, template_id: str,
+                       name: str | None = None,
+                       subject: str | None = None,
+                       body: str | None = None) -> bool:
+    allowed = {'name', 'subject', 'body'}
+    updates = {}
+    if name is not None:
+        updates['name'] = name
+    if subject is not None:
+        updates['subject'] = subject
+    if body is not None:
+        updates['body'] = body
+    if not updates:
+        return False
+    updates['updated_at'] = int(time.time())
+    set_clause = ', '.join(f"{k}=?" for k in updates if k in allowed | {'updated_at'})
+    values = list(updates.values()) + [uid, template_id]
+    with _db() as conn:
+        cur = conn.execute(
+            f"UPDATE merchant_pm_templates SET {set_clause} WHERE uid=? AND template_id=?",
+            values
+        )
+        return cur.rowcount > 0
+
+
+def delete_pm_template(uid: str, template_id: str) -> bool:
+    with _db() as conn:
+        cur = conn.execute(
+            "DELETE FROM merchant_pm_templates WHERE uid=? AND template_id=?",
+            (uid, template_id)
+        )
+        return cur.rowcount > 0

@@ -85,6 +85,16 @@ async def merchant_promotion(request: Request):
     return await asyncio.to_thread(get_promotion, uid)
 
 
+@router.get("/promotion/{tid}")
+async def merchant_promotion_detail(tid: str, request: Request):
+    uid = _uid(request)
+    from modules.merchant.service import get_promotion_detail
+    detail = await asyncio.to_thread(get_promotion_detail, uid, tid)
+    if not detail:
+        raise HTTPException(404, "Thread not found")
+    return detail
+
+
 @router.get("/reports/weekly")
 async def merchant_weekly_report(request: Request, week: int = 0):
     uid = _uid(request)
@@ -186,3 +196,78 @@ async def patch_goals(body: GoalsPatch, request: Request):
         body.weekly_new_lead_goal       if body.weekly_new_lead_goal       is not None else current.get('weekly_new_lead_goal', 0),
     )
     return {"ok": True}
+
+
+# ── PM Templates ───────────────────────────────────────────────────────────────
+
+_NAME_MAX    = 120
+_SUBJECT_MAX = 250
+_BODY_MAX    = 10_000
+
+
+class PMTemplateCreate(BaseModel):
+    name:    str
+    subject: Optional[str] = ''
+    body:    Optional[str] = ''
+
+
+class PMTemplatePatch(BaseModel):
+    name:    Optional[str] = None
+    subject: Optional[str] = None
+    body:    Optional[str] = None
+
+
+@router.get("/pm-templates")
+async def list_pm_templates(request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import list_pm_templates as _list
+    return await asyncio.to_thread(_list, uid)
+
+
+@router.post("/pm-templates", status_code=201)
+async def create_pm_template(body: PMTemplateCreate, request: Request):
+    uid = _uid(request)
+    name    = (body.name    or '').strip()
+    subject = (body.subject or '').strip()
+    pm_body = (body.body    or '').strip()
+    if not name:
+        raise HTTPException(400, "name is required")
+    if len(name) > _NAME_MAX:
+        raise HTTPException(400, f"name exceeds {_NAME_MAX} characters")
+    if len(subject) > _SUBJECT_MAX:
+        raise HTTPException(400, f"subject exceeds {_SUBJECT_MAX} characters")
+    if len(pm_body) > _BODY_MAX:
+        raise HTTPException(400, f"body exceeds {_BODY_MAX} characters")
+    from modules.merchant.merchant_db import create_pm_template as _create
+    return await asyncio.to_thread(_create, uid, name, subject, pm_body)
+
+
+@router.patch("/pm-templates/{template_id}")
+async def update_pm_template(template_id: str, body: PMTemplatePatch, request: Request):
+    uid = _uid(request)
+    name    = body.name.strip()    if body.name    is not None else None
+    subject = body.subject.strip() if body.subject is not None else None
+    pm_body = body.body.strip()    if body.body    is not None else None
+    if name is not None:
+        if not name:
+            raise HTTPException(400, "name cannot be empty")
+        if len(name) > _NAME_MAX:
+            raise HTTPException(400, f"name exceeds {_NAME_MAX} characters")
+    if subject is not None and len(subject) > _SUBJECT_MAX:
+        raise HTTPException(400, f"subject exceeds {_SUBJECT_MAX} characters")
+    if pm_body is not None and len(pm_body) > _BODY_MAX:
+        raise HTTPException(400, f"body exceeds {_BODY_MAX} characters")
+    from modules.merchant.merchant_db import update_pm_template as _update
+    updated = await asyncio.to_thread(_update, uid, template_id, name, subject, pm_body)
+    if not updated:
+        raise HTTPException(404, "Template not found")
+    return {"ok": True}
+
+
+@router.delete("/pm-templates/{template_id}", status_code=204)
+async def delete_pm_template(template_id: str, request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import delete_pm_template as _delete
+    deleted = await asyncio.to_thread(_delete, uid, template_id)
+    if not deleted:
+        raise HTTPException(404, "Template not found")

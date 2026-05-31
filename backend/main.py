@@ -447,7 +447,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
     # The reply poller drains _reply_check_queue — never polls stale/old threads.
     try:
         from modules.posting.posting_db import add_my_thread, update_thread_last_checked, get_all_tracked_threads
-        from modules.posting import _reply_check_queue, _reply_check_titles, _reply_check_numreplies, STANLEY_UID
+        from modules.posting import _reply_check_queue, _reply_check_titles, _reply_check_numreplies, _reply_check_seed_tids, STANLEY_UID
         raw_threads = (data1 or {}).get("threads", [])
         if isinstance(raw_threads, dict): raw_threads = [raw_threads]
 
@@ -458,6 +458,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
         needs_check:    set[str]        = set()
         titles_map:     dict[str, str]  = {}
         numreplies_map: dict[str, int]  = {}
+        seed_tids_uid:  set[str]        = set()
 
         for th in (raw_threads or []):
             t_tid        = str(th.get("tid") or "")
@@ -489,6 +490,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                     await asyncio.to_thread(update_thread_last_checked, uid, t_tid, "0", t_lastpost)
                 except Exception:
                     pass
+                seed_tids_uid.add(t_tid)
 
             # If we or Stanley posted last — advance cursor, no reply to queue
             if t_lastposter in (uid, STANLEY_UID):
@@ -505,12 +507,15 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             needs_check.add(t_tid)
             titles_map[t_tid]     = t_subject
             numreplies_map[t_tid] = t_numreplies
+            log.info("Crawl: reply-check flagged uid=%s tid=%s numreplies=%d", uid, t_tid, t_numreplies)
 
         if needs_check:
             # Merge into existing queue — do NOT overwrite, prior unflushed flags must survive
             _reply_check_queue.setdefault(uid, set()).update(needs_check)
             _reply_check_titles.setdefault(uid, {}).update(titles_map)
             _reply_check_numreplies.setdefault(uid, {}).update(numreplies_map)
+            if seed_tids_uid:
+                _reply_check_seed_tids.setdefault(uid, set()).update(seed_tids_uid)
             log.debug("Crawl: flagged %d thread(s) for reply check uid=%s", len(needs_check), uid)
 
             # Fire the reply poll immediately — don't wait for the separate 5-min timer.
