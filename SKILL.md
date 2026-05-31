@@ -159,8 +159,9 @@ Rules:
 - All HF values arrive as strings; cast explicitly.
 - Use `int(float(x))` for bytes amounts.
 - Single result can be a dict, multiple results are lists; normalize both.
-- `posts._uid` is oldest-first. `threads._uid` page 1 is newest/most recently active.
-- Handle `None` from `client.read()` / `client.write()`.
+- `posts._uid` and `posts._tid` are paginated oldest-first; fetch the last page for recent activity.
+- `threads._uid` page 1 is newest/most recently active.
+- Handle transient HF 503s and `None` from `client.read()` / `client.write()` without deleting trusted local state.
 
 See `HF_API_REFERENCE.md` for endpoint details, fields, batching examples, and known API limitations.
 
