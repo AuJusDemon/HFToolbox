@@ -49,35 +49,36 @@ def _auth(request: Request):
 
 async def _do_status_fetch(uid: str, token: str) -> dict | None:
     """
-    Fetch sigmarket status: 3 parallel reads (market listing + seller orders + buyer orders).
-    Returns parsed result dict, or None on API failure.
+    Fetch sigmarket status: 3 sequential reads (market listing + seller orders + buyer orders).
+    Sequential to avoid concurrent session rotation on the shared proxy when reads time out.
+    Returns parsed result dict, or None if all three reads fail.
+    Partial success (some reads return None) still produces a shaped result.
     Called via hf_service.get_or_fetch — never call directly from routes.
     """
-    from HFClient import HFClient, AuthExpired
+    from HFClient import HFClient
     hf      = HFClient(token)
     uid_int = int(uid)
-    try:
-        data1, data2, data3 = await asyncio.gather(
-            hf.read({"sigmarket": {
-                "_type": "market", "_uid": [uid_int], "_page": 1, "_perpage": 1,
-                "uid": True, "price": True, "duration": True, "active": True,
-                "sig": True, "ppd": True, "dateadded": True,
-            }}),
-            hf.read({"sigmarket": {
-                "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
-                "smid": True, "active": True, "startdate": True, "enddate": True,
-                "price": True, "duration": True,
-                "buyer": {"uid": True, "username": True},
-            }}),
-            hf.read({"sigmarket": {
-                "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
-                "smid": True, "active": True, "startdate": True, "enddate": True,
-                "price": True, "duration": True,
-                "seller": {"uid": True, "username": True},
-            }}),
-        )
-    except AuthExpired:
-        raise _AuthExpired()
+
+    # AuthExpired propagates naturally through hf_service to the route handler
+    data1 = await hf.read({"sigmarket": {
+        "_type": "market", "_uid": [uid_int], "_page": 1, "_perpage": 1,
+        "uid": True, "price": True, "duration": True, "active": True,
+        "sig": True, "ppd": True, "dateadded": True,
+    }})
+
+    data2 = await hf.read({"sigmarket": {
+        "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
+        "smid": True, "active": True, "startdate": True, "enddate": True,
+        "price": True, "duration": True,
+        "buyer": {"uid": True, "username": True},
+    }})
+
+    data3 = await hf.read({"sigmarket": {
+        "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
+        "smid": True, "active": True, "startdate": True, "enddate": True,
+        "price": True, "duration": True,
+        "seller": {"uid": True, "username": True},
+    }})
 
     listing_raw       = (data1 or {}).get("sigmarket")
     seller_orders_raw = (data2 or {}).get("sigmarket", [])
@@ -147,6 +148,7 @@ async def get_status(request: Request):
             fetch_fn      = lambda: _do_status_fetch(uid, token),
             uid           = uid,
             force         = force,
+            fetch_timeout = 45,
         )
     except _AuthExpired:
         request.session.clear()

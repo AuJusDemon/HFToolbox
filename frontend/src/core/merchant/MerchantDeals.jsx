@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { api } from '../api.js'
-import { contractStageLabel, contractStageColor, contractTerms, relTime } from './merchantFormat.js'
+import { contractStageLabel, contractStageColor, bucketLabel, contractTerms, relTime } from './merchantFormat.js'
 
 const STAGES = [
   { val: null,                       label: 'All' },
@@ -490,7 +490,7 @@ function DealCard({ deal, onFollowUp, onAction, acting, confirmCard, setConfirmC
           marginLeft: 'auto', flexShrink: 0,
           ...(isDisputed ? { fontWeight: 700 } : {}),
         }}>
-          {contractStageLabel(deal.stage)}{isDisputed ? ' !' : ''}
+          {deal.stage === 'problem' ? bucketLabel(deal.bucket) : contractStageLabel(deal.stage)}{isDisputed ? ' !' : ''}
         </span>
       </div>
 

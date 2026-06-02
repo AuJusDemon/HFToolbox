@@ -183,9 +183,14 @@ async def _acquire_and_fetch(
             await asyncio.wait_for(event.wait(), timeout=25)
         except asyncio.TimeoutError:
             log.warning("in-flight wait timed out key=%s", cache_key)
-        # sync DB call — must use to_thread
-        data = await asyncio.to_thread(cache.get_fresh, cache_key)
-        return data, False
+        # Try usable cache first (fresh or stale-window), then any expired entry
+        data, is_stale = await asyncio.to_thread(cache.get_usable, cache_key)
+        if data is None:
+            data = await asyncio.to_thread(cache.get_any, cache_key)
+            if data is not None:
+                return data, True
+            return None, False
+        return data, is_stale
 
     # We are the creator — do the actual fetch
     t0 = time.time()
@@ -219,6 +224,10 @@ async def _acquire_and_fetch(
         await asyncio.to_thread(cache.log_call, uid, "read", resource_type,
                                 "", ms, False, -1, cache_key, "miss_error")
         log.warning("live fetch failed key=%s ms=%d: %s", cache_key, ms, e)
+        emergency = await asyncio.to_thread(cache.get_any, cache_key)
+        if emergency:
+            log.warning("fetch error key=%s — serving expired cache", cache_key)
+            return emergency, True
         return None, False
     finally:
         event.set()

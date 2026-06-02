@@ -249,9 +249,24 @@ async def _request(
 
     except AuthExpired:
         raise
-    except (requests.exceptions.Timeout,
-            requests.exceptions.ProxyError,
+    except requests.exceptions.Timeout:
+        # Retry once on the same sticky session before rotating — a single timeout
+        # is often transient slowness, not a block. Rotating on attempt 0 causes
+        # rapid session churn when multiple concurrent reads all time out together.
+        if attempt > 0:
+            _rotate_session("ReadTimeout")
+            _cb_fail()
+        if attempt < max_retries:
+            delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+            log.warning("Proxy ReadTimeout (attempt %d/%d) — retrying in %ds",
+                        attempt + 1, max_retries, delay)
+            await asyncio.sleep(delay)
+            return await _request(token, route, body, attempt + 1, max_retries)
+        log.warning("Proxy ReadTimeout — all %d retries exhausted", max_retries)
+        return None
+    except (requests.exceptions.ProxyError,
             requests.exceptions.ConnectionError) as e:
+        # ProxyError/ConnectionError are stronger block signals — rotate immediately
         _rotate_session(f"{type(e).__name__}")
         _cb_fail()
         if attempt < max_retries:
