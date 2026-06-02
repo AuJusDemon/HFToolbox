@@ -701,6 +701,14 @@ def init_contracts_history():
             conn.execute("ALTER TABLE contracts_history ADD COLUMN brating TEXT DEFAULT ''")
         except Exception:
             pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN istatus VARCHAR(4) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN ostatus VARCHAR(4) DEFAULT ''")
+        except Exception:
+            pass
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
@@ -713,8 +721,9 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                 conn.execute("""
                     INSERT INTO contracts_history
                         (uid,cid,status_n,type_n,inituid,otheruid,
-                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,dateline,tid,brating)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,
+                         dateline,tid,brating,istatus,ostatus)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(uid,cid) DO UPDATE SET
                         status_n=excluded.status_n,
                         dateline=excluded.dateline,
@@ -727,7 +736,9 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                         iproduct=excluded.iproduct,
                         oproduct=excluded.oproduct,
                         tid=excluded.tid,
-                        brating=excluded.brating
+                        brating=excluded.brating,
+                        istatus=excluded.istatus,
+                        ostatus=excluded.ostatus
                 """, (
                     uid, str(c.get("cid","")),
                     str(c.get("status","")), str(c.get("type","")),
@@ -738,6 +749,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     int(c.get("dateline") or 0),
                     e(c.get("tid","")),
                     e(c.get("brating","")),
+                    e(c.get("istatus","")),
+                    e(c.get("ostatus","")),
                 ))
                 count += 1
             except Exception:
@@ -769,22 +782,28 @@ def get_contracts_history(uid: str, limit: int = 10, offset: int = 0,
                    ORDER BY {order} LIMIT ? OFFSET ?""",
                 (uid, limit, offset)
             ).fetchall()
-        d = lambda v: v
-        return [{
-            "uid":       r["uid"],
-            "cid":       r["cid"],
-            "status_n":  r["status_n"],
-            "type_n":    r["type_n"],
-            "dateline":  r["dateline"],
-            "inituid":   d(r["inituid"]),
-            "otheruid":  d(r["otheruid"]),
-            "iprice":    d(r["iprice"]),
-            "icurrency": d(r["icurrency"]),
-            "oprice":    d(r["oprice"]),
-            "ocurrency": d(r["ocurrency"]),
-            "iproduct":  d(r["iproduct"]),
-            "oproduct":  d(r["oproduct"]),
-        } for r in rows]
+        def _row(r):
+            d = {
+                "uid":       r["uid"],
+                "cid":       r["cid"],
+                "status_n":  r["status_n"],
+                "type_n":    r["type_n"],
+                "dateline":  r["dateline"],
+                "inituid":   r["inituid"],
+                "otheruid":  r["otheruid"],
+                "iprice":    r["iprice"],
+                "icurrency": r["icurrency"],
+                "oprice":    r["oprice"],
+                "ocurrency": r["ocurrency"],
+                "iproduct":  r["iproduct"],
+                "oproduct":  r["oproduct"],
+            }
+            try: d["istatus"] = r["istatus"] or ""
+            except Exception: d["istatus"] = ""
+            try: d["ostatus"] = r["ostatus"] or ""
+            except Exception: d["ostatus"] = ""
+            return d
+        return [_row(r) for r in rows]
 
 
 
@@ -816,11 +835,11 @@ def get_contracts_with_empty_tid(uid: str) -> bool:
     return row is not None
 
 def get_open_contract_cids(uid: str) -> list:
-    """Return CIDs of contracts still in an open state (Awaiting=1, Active=5).
+    """Return CIDs of contracts still in an open state (Awaiting=0/1, Active=5).
     These get re-checked every crawl cycle to catch status changes."""
     with _db() as conn:
         rows = conn.execute(
-            "SELECT cid FROM contracts_history WHERE uid=? AND status_n IN ('1','5')",
+            "SELECT cid FROM contracts_history WHERE uid=? AND status_n IN ('0','1','5')",
             (uid,)
         ).fetchall()
     return [str(r["cid"]) for r in rows]

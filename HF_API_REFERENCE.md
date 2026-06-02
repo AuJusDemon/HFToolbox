@@ -258,6 +258,7 @@ Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`,
 
 | Value | Label |
 |---|---|
+| `"0"` | Awaiting Approval (pending) — live API returned this for an incoming awaiting-approval contract; `istatus`/`ostatus` carry the per-party approval flags |
 | `"1"` | Awaiting Approval |
 | `"2"` | Cancelled |
 | `"3"` | Unknown (likely middleman escrow) |

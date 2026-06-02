@@ -9,23 +9,27 @@ import time
 
 # ── Contract status codes ──────────────────────────────────────────────────────
 # Confirmed from HF API + empirical DB data:
+#   0=awaiting approval (live API returned this for an incoming pending contract;
+#     treat identically to 1 — use istatus/ostatus for per-party approval state)
 #   1=awaiting approval (but HF shows "Expired" if dateline > 90 days old)
 #   2=cancelled, 3=unknown/voided, 4=cancelled (HF website confirms),
 #   5=active deal, 6=complete, 7=disputed, 8=expired
-STATUS_ACTIVE      = {'1', '5'}
+STATUS_ACTIVE      = {'0', '1', '5'}
 STATUS_COMPLETE    = {'6'}
 STATUS_LOST        = {'2', '3', '4', '7', '8'}
-STATUS_AWAITING    = {'1'}
+STATUS_AWAITING    = {'0', '1'}
 STATUS_FULFILLMENT = {'5'}
 STATUS_DISPUTE     = {'7'}
 
-_AGE_EXPIRED_S = 90 * 86400  # HF stops updating status 1 after ~90 days → "Expired"
+_AGE_EXPIRED_S = 90 * 86400  # HF stops updating status 0/1 after ~90 days → "Expired"
+
+_PENDING = frozenset(('0', '1'))
 
 
 def contract_bucket(status_n: str, dateline: int = 0) -> str:
     s = str(status_n or '')
     now = int(time.time())
-    if s == '1':
+    if s in _PENDING:
         if dateline and (now - int(dateline)) > _AGE_EXPIRED_S:
             return 'expired'
         return 'awaiting_approval'
@@ -35,6 +39,39 @@ def contract_bucket(status_n: str, dateline: int = 0) -> str:
     if s == '7':  return 'disputed'
     if s == '8':  return 'expired'
     return 'other'
+
+
+def classify_contract_stage(
+    status_n: str,
+    dateline: int,
+    inituid: str,
+    otheruid: str,
+    my_uid: str,
+    completed_side: bool,
+    now: int,
+    istatus: str = '',
+    ostatus: str = '',
+) -> str:
+    """Map contract fields to a Seller HQ queue stage string."""
+    s = str(status_n or '')
+    if s in _PENDING:
+        if dateline and (now - int(dateline)) > _AGE_EXPIRED_S:
+            return 'problem'
+        is_init  = (str(inituid)  == str(my_uid))
+        is_other = (str(otheruid) == str(my_uid))
+        my_flag    = istatus if is_init else (ostatus if is_other else '')
+        their_flag = ostatus if is_init else (istatus if is_other else '')
+        if my_flag == '0':
+            return 'needs_review'
+        if their_flag == '0':
+            return 'waiting_on_approval'
+        # Fallback for rows ingested before istatus/ostatus were stored
+        return 'needs_review' if is_other else 'waiting_on_approval'
+    if s == '5':
+        return 'waiting_on_counterparty' if completed_side else 'active'
+    if s == '6':
+        return 'completed'
+    return 'problem'
 
 
 def counterparty_uid(contract: dict, my_uid: str) -> str:
@@ -63,13 +100,13 @@ def offer_stats_from_contracts(contracts: list, my_uid: str) -> dict:
         dl = int(c.get('dateline') or 0)
         r = result[tid]
         r['total'] += 1
-        # Treat stale status-1 as expired (HF stops updating after ~90 days)
-        s_is_old_awaiting = (s == '1' and dl and (now - dl) > _AGE_EXPIRED_S)
+        # Treat stale pending (status 0/1) as expired — HF stops updating after ~90 days
+        s_is_old_awaiting = (s in _PENDING and dl and (now - dl) > _AGE_EXPIRED_S)
         if s in STATUS_COMPLETE:
             r['complete'] += 1
         elif s in STATUS_FULFILLMENT:
             r['active'] += 1
-        elif s == '1' and not s_is_old_awaiting:
+        elif s in _PENDING and not s_is_old_awaiting:
             r['awaiting'] += 1
         if s in STATUS_DISPUTE:     r['disputed'] += 1
         if s in STATUS_LOST or s_is_old_awaiting:

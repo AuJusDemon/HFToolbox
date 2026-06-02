@@ -129,6 +129,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
         "contracts": {
             "_uid": [uid_int], "_page": c_page_check, "_perpage": 30,
             "cid": True, "status": True, "type": True,
+            "istatus": True, "ostatus": True,
             "inituid": True, "otheruid": True,
             "iprice": True, "icurrency": True,
             "oprice": True, "ocurrency": True,
@@ -153,6 +154,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
         call2_ask["contracts"] = {
             "_uid": [uid_int], "_page": c_page2, "_perpage": 30,
             "cid": True, "status": True, "type": True,
+            "istatus": True, "ostatus": True,
             "inituid": True, "otheruid": True,
             "iprice": True, "icurrency": True,
             "oprice": True, "ocurrency": True,
@@ -262,8 +264,8 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
 
         if c_done:
             try:
-                _STATUS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
-                           "6":"Complete","7":"Disputed","8":"Expired"}
+                _STATUS = {"0":"Awaiting Approval","1":"Awaiting Approval","2":"Cancelled",
+                           "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
                 _TYPE   = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
                 import time as _tnow
                 _fe     = (os.environ.get("FRONTEND_URL") or "https://hftoolbox.com").rstrip("/")
@@ -356,6 +358,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                     r = await asyncio.wait_for(client.read({"contracts": {
                         "_cid": batch,
                         "cid": True, "status": True, "type": True,
+                        "istatus": True, "ostatus": True,
                         "inituid": True, "otheruid": True,
                         "iprice": True, "icurrency": True,
                         "oprice": True, "ocurrency": True,
@@ -378,7 +381,8 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                         await asyncio.to_thread(db.upsert_contracts, uid, updated)
                         log.info("Contracts re-check uid=%s updated %d open contracts", uid, len(updated))
                         try:
-                            _RC_STATUS = {"1":"Awaiting Approval","2":"Cancelled","5":"Active Deal",
+                            _RC_STATUS = {"0":"Awaiting Approval","1":"Awaiting Approval",
+                                          "2":"Cancelled","5":"Active Deal",
                                           "6":"Complete","7":"Disputed","8":"Expired"}
                             _fe_rc = (os.environ.get("FRONTEND_URL") or "https://hftoolbox.com").rstrip("/")
                             _rc_cp_uids = list({
@@ -590,7 +594,8 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
 
     # ── Free bonus: refresh contracts dash cache from page-1 batch ───────────
     if c_batch1:
-        STATUS  = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
+        STATUS  = {"0":"Awaiting Approval","1":"Awaiting Approval","2":"Cancelled",
+                   "3":"Unknown","4":"Cancelled",
                    "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
         TYPE_MAP = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
         cached_contracts = []
@@ -603,6 +608,8 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                 "type":      TYPE_MAP.get(str(c.get("type") or ""), str(c.get("type") or "--")),
                 "inituid":   str(c.get("inituid") or ""),
                 "otheruid":  str(c.get("otheruid") or ""),
+                "istatus":   str(c.get("istatus") or ""),
+                "ostatus":   str(c.get("ostatus") or ""),
                 "iprice":    str(c.get("iprice") or "0"),
                 "icurrency": str(c.get("icurrency") or ""),
                 "oprice":    str(c.get("oprice") or "0"),
@@ -1700,7 +1707,8 @@ async def dash_contracts(request: Request, force: bool = False):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
     STATUS = {
-        "1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
+        "0":"Awaiting Approval","1":"Awaiting Approval","2":"Cancelled",
+        "3":"Unknown","4":"Cancelled",
         "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"
     }
 

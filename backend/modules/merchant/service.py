@@ -21,6 +21,7 @@ from modules.merchant.metrics import (
     pipeline_summary,
     overview_action_queue,
     contract_bucket,
+    classify_contract_stage,
     counterparty_uid,
     STATUS_ACTIVE,
     STATUS_COMPLETE,
@@ -28,6 +29,7 @@ from modules.merchant.metrics import (
     STATUS_LOST,
     STATUS_FULFILLMENT,
     _AGE_EXPIRED_S,
+    _PENDING,
 )
 from modules.merchant.merchant_db import (
     get_all_offer_meta,
@@ -247,14 +249,14 @@ def get_overview(uid: str) -> dict:
 
     def _old_awaiting(c: dict) -> bool:
         dl = int(c.get('dateline') or 0)
-        return str(c.get('status_n','')) == '1' and dl and (now - dl) > _AGE_EXPIRED_S
+        return str(c.get('status_n', '')) in _PENDING and dl and (now - dl) > _AGE_EXPIRED_S
 
     unread_replies   = [r for r in replies if r.get('status') == 'unread']
     active_contracts = [c for c in contracts
-                        if str(c.get('status_n','')) in STATUS_FULFILLMENT
-                        or (str(c.get('status_n','')) == '1' and not _old_awaiting(c))]
+                        if str(c.get('status_n', '')) in STATUS_FULFILLMENT
+                        or (str(c.get('status_n', '')) in _PENDING and not _old_awaiting(c))]
     awaiting         = [c for c in contracts
-                        if str(c.get('status_n','')) == '1' and not _old_awaiting(c)]
+                        if str(c.get('status_n', '')) in _PENDING and not _old_awaiting(c)]
 
     # SLA breaches: unread leads older than sla_hours with stage not yet resolved
     sla_breaches = 0
@@ -734,22 +736,12 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
         wf       = workflows.get(cid, {})
         completed_side_at = wf.get('completed_side_at')
 
-        # Map to queue stage
-        if status_n == '1':
-            if dateline and (now - dateline) > _AGE_EXPIRED_S:
-                stage = 'problem'
-            elif otheruid == uid:
-                # Current user is the counterparty - we need to approve
-                stage = 'needs_review'
-            else:
-                stage = 'waiting_on_approval'
-        elif status_n == '5':
-            stage = 'waiting_on_counterparty' if completed_side_at else 'active'
-        elif status_n == '6':
-            stage = 'completed'
-        else:
-            # status 2,3,4,7,8 or unknown
-            stage = 'problem'
+        stage = classify_contract_stage(
+            status_n, dateline, inituid, otheruid, uid,
+            bool(completed_side_at), now,
+            str(c.get('istatus', '') or ''),
+            str(c.get('ostatus', '') or ''),
+        )
 
         bucket = contract_bucket(status_n, dateline)
         if bucket_filter and bucket != bucket_filter:

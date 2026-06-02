@@ -431,26 +431,26 @@ function DealCard({ deal, onFollowUp, onAction, acting, confirmCard, setConfirmC
         return <>
           <Btn cls="btn-acc" disabled={isActing} onClick={() => handleConfirm('complete')}>Complete</Btn>
           <Btn onClick={() => onFollowUp(deal)}>Follow Up</Btn>
-          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          <IntLink href={localUrl}>Open Contract</IntLink>
           {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
           {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
         </>
       case 'waiting_on_counterparty':
         return <>
           <Btn onClick={() => onFollowUp(deal)}>Follow Up</Btn>
-          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          <IntLink href={localUrl}>Open Contract</IntLink>
           {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
           {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
         </>
       case 'completed':
         return <>
-          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          <IntLink href={localUrl}>Open Contract</IntLink>
           {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
           {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
         </>
       case 'problem':
         return <>
-          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          <IntLink href={localUrl}>Open Contract</IntLink>
           <ExtLink href={hfUrl}>View on HF</ExtLink>
           {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
           {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
