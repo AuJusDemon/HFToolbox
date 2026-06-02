@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { api } from '../api.js'
-import { bucketLabel, bucketColor, contractTerms, relTime } from './merchantFormat.js'
+import { contractStageLabel, contractStageColor, contractTerms, relTime } from './merchantFormat.js'
 
-const BUCKETS = [
-  { val: null,                 label: 'All' },
-  { val: 'awaiting_approval',  label: 'Awaiting Approval' },
-  { val: 'active_fulfillment', label: 'Active' },
-  { val: 'completed',          label: 'Completed' },
-  { val: 'cancelled',          label: 'Cancelled' },
-  { val: 'disputed',           label: 'Disputed' },
-  { val: 'expired',            label: 'Expired' },
+const STAGES = [
+  { val: null,                       label: 'All' },
+  { val: 'needs_review',             label: 'Needs Review' },
+  { val: 'waiting_on_approval',      label: 'Waiting on Approval' },
+  { val: 'active',                   label: 'Active' },
+  { val: 'waiting_on_counterparty',  label: 'Waiting on Counterparty' },
+  { val: 'completed',                label: 'Completed' },
+  { val: 'problem',                  label: 'Problem' },
 ]
 
 function interpolate(text, contract) {
@@ -64,14 +64,14 @@ function ModalHeader({ title, onClose }) {
 
 // ── PM Templates Modal ────────────────────────────────────────────────────────
 function PMTemplatesModal({ templates, onClose, onRefresh }) {
-  const [selected, setSelected]       = useState(null)
-  const [name, setName]               = useState('')
-  const [subject, setSubject]         = useState('')
-  const [body, setBody]               = useState('')
-  const [saving, setSaving]           = useState(false)
-  const [deleting, setDeleting]       = useState(false)
+  const [selected, setSelected]           = useState(null)
+  const [name, setName]                   = useState('')
+  const [subject, setSubject]             = useState('')
+  const [body, setBody]                   = useState('')
+  const [saving, setSaving]               = useState(false)
+  const [deleting, setDeleting]           = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [error, setError]             = useState('')
+  const [error, setError]                 = useState('')
 
   const isNew = selected === '__new__'
 
@@ -123,7 +123,6 @@ function PMTemplatesModal({ templates, onClose, onRefresh }) {
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
         <ModalHeader title="PM Templates" onClose={onClose} />
 
-        {/* Template pill list */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
           {templates.map(t => (
             <button
@@ -143,7 +142,6 @@ function PMTemplatesModal({ templates, onClose, onRefresh }) {
           </button>
         </div>
 
-        {/* Edit form */}
         {selected && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {error && (
@@ -213,13 +211,17 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
       }&subject=${encodeURIComponent(renderedSubject)}`
     : null
 
+  const convoUrl = contract.counterparty_uid
+    ? `https://hackforums.net/convo.php?id=${contract.counterparty_uid}`
+    : null
+
   const copyText = (text, key) => {
     navigator.clipboard.writeText(text)
       .then(() => { setCopied(key); setTimeout(() => setCopied(''), 2000) })
       .catch(() => {})
   }
 
-  const bc      = bucketColor(contract.bucket)
+  const sc      = contractStageColor(contract.stage)
   const product = contract.iproduct || contract.oproduct || '—'
 
   return (
@@ -227,10 +229,9 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
       <div style={{ maxWidth: 480, margin: '0 auto' }}>
         <ModalHeader title="Follow Up" onClose={onClose} />
 
-        {/* Contract context */}
         <div style={{
           background: 'var(--s1)', padding: '8px 10px', marginBottom: 12,
-          borderLeft: `3px solid ${bc}`, fontSize: 11, fontFamily: 'var(--mono)',
+          borderLeft: `3px solid ${sc}`, fontSize: 11, fontFamily: 'var(--mono)',
         }}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
             <span style={{ color: 'var(--acc)' }}>#{contract.cid}</span>
@@ -240,7 +241,7 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
             {contract.counterparty_uid && (
               <span style={{ color: 'var(--dim)' }}>UID {contract.counterparty_uid}</span>
             )}
-            <span style={{ color: bc, marginLeft: 'auto' }}>{bucketLabel(contract.bucket)}</span>
+            <span style={{ color: sc, marginLeft: 'auto' }}>{contractStageLabel(contract.stage)}</span>
           </div>
           {product !== '—' && (
             <div style={{
@@ -260,7 +261,6 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
           )}
         </div>
 
-        {/* Template selector */}
         {templates.length === 0 ? (
           <div style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 12 }}>
             No PM templates saved.{' '}
@@ -288,7 +288,6 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
           </div>
         )}
 
-        {/* Rendered fields (shown only after template is selected) */}
         {template && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
             <div>
@@ -320,7 +319,6 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
           </div>
         )}
 
-        {/* Action buttons */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {pmUrl && template ? (
             <a
@@ -333,6 +331,16 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
             </a>
           ) : (
             <button className="btn btn-sm" disabled>Open PM</button>
+          )}
+          {convoUrl && (
+            <a
+              href={convoUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn btn-sm"
+            >
+              Open Convo
+            </a>
           )}
           {template && (
             <>
@@ -347,7 +355,7 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
         </div>
         {!contract.counterparty_uid && (
           <div style={{ fontSize: 10, color: 'var(--red)', fontFamily: 'var(--mono)', marginTop: 6 }}>
-            Counterparty UID missing — cannot open PM.
+            Counterparty UID missing - cannot open PM or Convo.
           </div>
         )}
       </div>
@@ -356,68 +364,180 @@ function FollowUpModal({ contract, templates, onClose, onOpenTemplates }) {
 }
 
 // ── Contract card ─────────────────────────────────────────────────────────────
-function DealCard({ deal, onFollowUp }) {
-  const bc    = bucketColor(deal.bucket)
-  const terms = contractTerms(deal)
-  const product = deal.iproduct || deal.oproduct || '—'
+function DealCard({ deal, onFollowUp, onAction, acting, confirmCard, setConfirmCard }) {
+  const sc         = contractStageColor(deal.stage)
+  const terms      = contractTerms(deal)
+  const product    = deal.iproduct || deal.oproduct || '—'
+  const isDisputed = deal.status_n === '7'
+  const isActing   = acting === deal.cid
+  const isConfirming = confirmCard && confirmCard.cid === deal.cid
+
+  const pmUrl    = deal.counterparty_uid
+    ? `https://hackforums.net/private.php?action=send&uid=${deal.counterparty_uid}`
+    : null
+  const convoUrl = deal.counterparty_uid
+    ? `https://hackforums.net/convo.php?id=${deal.counterparty_uid}`
+    : null
+  const hfUrl    = `https://hackforums.net/contracts.php?action=view&cid=${deal.cid}`
+  const localUrl = `/dashboard/contracts/${deal.cid}`
+
+  const handleConfirm = (action) => {
+    setConfirmCard({ cid: deal.cid, action })
+  }
+
+  const confirmAndAct = () => {
+    if (!confirmCard) return
+    onAction(deal.cid, confirmCard.action)
+  }
+
+  const Btn = ({ children, cls = '', disabled: dis = false, onClick }) => (
+    <button
+      className={`btn btn-sm${cls ? ' ' + cls : ''}`}
+      disabled={dis}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+
+  const ExtLink = ({ href, children, cls = '' }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" className={`btn btn-sm${cls ? ' ' + cls : ''}`}>
+      {children}
+    </a>
+  )
+
+  const IntLink = ({ href, children }) => (
+    <a href={href} className="btn btn-sm">{children}</a>
+  )
+
+  const renderButtons = () => {
+    switch (deal.stage) {
+      case 'needs_review':
+        return <>
+          <Btn cls="btn-acc" disabled={isActing} onClick={() => handleConfirm('approve')}>Approve</Btn>
+          <Btn cls="btn-danger" disabled={isActing} onClick={() => handleConfirm('deny')}>Deny</Btn>
+          <IntLink href={localUrl}>Review</IntLink>
+          {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
+          {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
+        </>
+      case 'waiting_on_approval':
+        return <>
+          <Btn onClick={() => onFollowUp(deal)}>Follow Up</Btn>
+          <IntLink href={localUrl}>Review</IntLink>
+          {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
+          {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
+        </>
+      case 'active':
+        return <>
+          <Btn cls="btn-acc" disabled={isActing} onClick={() => handleConfirm('complete')}>Complete</Btn>
+          <Btn onClick={() => onFollowUp(deal)}>Follow Up</Btn>
+          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
+          {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
+        </>
+      case 'waiting_on_counterparty':
+        return <>
+          <Btn onClick={() => onFollowUp(deal)}>Follow Up</Btn>
+          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
+          {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
+        </>
+      case 'completed':
+        return <>
+          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
+          {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
+        </>
+      case 'problem':
+        return <>
+          <ExtLink href={hfUrl}>Open Contract</ExtLink>
+          <ExtLink href={hfUrl}>View on HF</ExtLink>
+          {pmUrl    && <ExtLink href={pmUrl}>PM</ExtLink>}
+          {convoUrl && <ExtLink href={convoUrl}>Convo</ExtLink>}
+        </>
+      default:
+        return null
+    }
+  }
+
+  const borderColor = isDisputed ? 'var(--red)' : sc
+
   return (
     <div style={{
-      background: 'var(--s1)', padding: '11px 14px', marginBottom: 4,
-      display: 'flex', alignItems: 'center', gap: 12,
-      borderLeft: `3px solid ${bc}`,
+      background:  isDisputed ? 'rgba(255,71,87,.03)' : 'var(--s1)',
+      padding:     '11px 14px',
+      marginBottom: 4,
+      borderLeft:  `3px solid ${borderColor}`,
     }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 3 }}>
-          <a
-            href={`/dashboard/contracts/${deal.cid}`}
-            style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--acc)' }}
-          >
-            #{deal.cid}
-          </a>
-          <span style={{ fontSize: 12, color: 'var(--text)' }}>
-            {deal.counterparty_username || deal.counterparty_uid || '?'}
+      {/* Header row */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', marginBottom: 3, flexWrap: 'wrap' }}>
+        <a
+          href={localUrl}
+          style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--acc)', flexShrink: 0 }}
+        >
+          #{deal.cid}
+        </a>
+        <span style={{ fontSize: 12, color: 'var(--text)' }}>
+          {deal.counterparty_username || `UID ${deal.counterparty_uid}` || '?'}
+        </span>
+        {deal.counterparty_username && deal.counterparty_uid && (
+          <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
+            UID {deal.counterparty_uid}
           </span>
-          <span style={{
-            fontSize: 9, fontFamily: 'var(--mono)', color: bc,
-            marginLeft: 'auto', flexShrink: 0,
-          }}>
-            {bucketLabel(deal.bucket)}
-          </span>
-        </div>
+        )}
+        <span style={{
+          fontSize: 9, fontFamily: 'var(--mono)', color: borderColor,
+          marginLeft: 'auto', flexShrink: 0,
+          ...(isDisputed ? { fontWeight: 700 } : {}),
+        }}>
+          {contractStageLabel(deal.stage)}{isDisputed ? ' !' : ''}
+        </span>
+      </div>
 
+      {/* Product */}
+      {product !== '—' && (
         <div style={{
           fontSize: 11, color: 'var(--sub)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          marginBottom: 3,
         }}>
           {product.length > 60 ? product.slice(0, 57) + '…' : product}
         </div>
+      )}
 
-        <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-          {terms !== 'terms not recorded' && (
-            <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{terms}</span>
-          )}
-          {deal.thread_title && (
-            <span style={{
-              fontSize: 10, color: 'var(--dim)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
-            }}>
-              {deal.thread_title.slice(0, 50)}
-            </span>
-          )}
-          <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)', flexShrink: 0 }}>
-            {relTime(deal.dateline)}
+      {/* Meta row */}
+      <div style={{ display: 'flex', gap: 10, marginBottom: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        {terms !== 'terms not recorded' && (
+          <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{terms}</span>
+        )}
+        {deal.thread_title && (
+          <span style={{
+            fontSize: 10, color: 'var(--dim)',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+          }}>
+            {deal.thread_title.slice(0, 50)}
           </span>
-        </div>
+        )}
+        <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)', flexShrink: 0 }}>
+          {relTime(deal.dateline)}
+        </span>
       </div>
 
-      {(deal.bucket === 'active_fulfillment' || deal.bucket === 'awaiting_approval') && (
-        <button
-          className="btn btn-sm"
-          style={{ flexShrink: 0 }}
-          onClick={() => onFollowUp(deal)}
-        >
-          Follow Up
-        </button>
+      {/* Action area */}
+      {isConfirming ? (
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: 'var(--yellow)', fontFamily: 'var(--mono)' }}>
+            Confirm {confirmCard.action} contract #{deal.cid}?
+          </span>
+          <button className="btn btn-sm btn-acc" disabled={isActing} onClick={confirmAndAct}>
+            {isActing ? '…' : 'Confirm'}
+          </button>
+          <button className="btn btn-sm" onClick={() => setConfirmCard(null)}>Cancel</button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {renderButtons()}
+        </div>
       )}
     </div>
   )
@@ -425,51 +545,79 @@ function DealCard({ deal, onFollowUp }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function MerchantDeals() {
-  const [allDeals, setAllDeals]             = useState([])
-  const [loading, setLoading]               = useState(true)
-  const [bucket, setBucket]                 = useState(null)
-  const [templates, setTemplates]           = useState([])
+  const [allDeals, setAllDeals]                     = useState([])
+  const [loading, setLoading]                       = useState(true)
+  const [stage, setStage]                           = useState(null)
+  const [templates, setTemplates]                   = useState([])
   const [showTemplatesModal, setShowTemplatesModal] = useState(false)
   const [followUpContract, setFollowUpContract]     = useState(null)
+  const [confirmCard, setConfirmCard]               = useState(null)
+  const [acting, setActing]                         = useState(null)
+  const [actionResult, setActionResult]             = useState(null)
 
-  const fetchTemplates = () => {
-    api.get('/api/merchant/pm-templates')
-      .then(d => setTemplates(Array.isArray(d) ? d : []))
-      .catch(() => {})
-  }
-
-  useEffect(() => {
+  const fetchDeals = useCallback(() => {
     setLoading(true)
     api.get('/api/merchant/deals')
       .then(d => { setAllDeals(Array.isArray(d) ? d : []); setLoading(false) })
       .catch(() => setLoading(false))
+  }, [])
+
+  const fetchTemplates = useCallback(() => {
+    api.get('/api/merchant/pm-templates')
+      .then(d => setTemplates(Array.isArray(d) ? d : []))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    fetchDeals()
     fetchTemplates()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchDeals, fetchTemplates])
 
   const counts = allDeals.reduce((acc, d) => {
-    acc[d.bucket] = (acc[d.bucket] || 0) + 1
+    acc[d.stage] = (acc[d.stage] || 0) + 1
     return acc
   }, {})
 
-  const visible = bucket ? allDeals.filter(d => d.bucket === bucket) : allDeals
+  const visible = stage ? allDeals.filter(d => d.stage === stage) : allDeals
+
+  const handleAction = useCallback(async (cid, action) => {
+    setActing(cid)
+    setActionResult(null)
+    try {
+      const res = await api.post(`/api/contracts/${cid}/action`, { action })
+      if (!res) {
+        setActionResult({ cid, ok: false, message: 'No response from server - action may not have completed.' })
+      } else {
+        if (action === 'complete') {
+          await api.post(`/api/merchant/contracts/${cid}/complete-side`, {})
+        }
+        setActionResult({ cid, ok: true, message: `${action} successful.` })
+        setTimeout(() => {
+          setActionResult(null)
+          fetchDeals()
+        }, 1200)
+      }
+    } catch (e) {
+      setActionResult({ cid, ok: false, message: e.message || 'Unknown error - check HF directly.' })
+    }
+    setActing(null)
+    setConfirmCard(null)
+  }, [fetchDeals])
 
   return (
     <div>
-      {/* Controls row: bucket filter tabs + PM Templates button */}
-      <div style={{
-        display: 'flex', gap: 4, marginBottom: 12,
-        flexWrap: 'wrap', alignItems: 'center',
-      }}>
+      {/* Stage filter tabs + PM Templates button */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ display: 'flex', gap: 4, overflowX: 'auto', whiteSpace: 'nowrap', flex: 1 }}>
-          {BUCKETS.map(b => {
-            const cnt = b.val ? counts[b.val] ?? 0 : allDeals.length
+          {STAGES.map(s => {
+            const cnt = s.val ? counts[s.val] ?? 0 : allDeals.length
             return (
               <button
-                key={b.val || 'all'}
-                className={`tab${bucket === b.val ? ' on' : ''}`}
-                onClick={() => setBucket(b.val)}
+                key={s.val || 'all'}
+                className={`tab${stage === s.val ? ' on' : ''}`}
+                onClick={() => setStage(s.val)}
               >
-                {b.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
+                {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
               </button>
             )
           })}
@@ -483,13 +631,33 @@ export default function MerchantDeals() {
         </button>
       </div>
 
-      {/* Contract list */}
+      {/* Action result banner */}
+      {actionResult && (
+        <div style={{
+          padding: '8px 12px', fontSize: 11, marginBottom: 8, fontFamily: 'var(--mono)',
+          background: actionResult.ok ? 'rgba(0,212,180,.06)' : 'rgba(255,71,87,.06)',
+          border: `1px solid ${actionResult.ok ? 'rgba(0,212,180,.2)' : 'rgba(255,71,87,.2)'}`,
+          color: actionResult.ok ? 'var(--acc)' : 'var(--red)',
+        }}>
+          {actionResult.message}
+        </div>
+      )}
+
+      {/* Contract queue */}
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : visible.length === 0
           ? <div className="empty" style={{ color: 'var(--dim)' }}>No contracts found.</div>
           : visible.map(d => (
-              <DealCard key={d.cid} deal={d} onFollowUp={setFollowUpContract} />
+              <DealCard
+                key={d.cid}
+                deal={d}
+                onFollowUp={setFollowUpContract}
+                onAction={handleAction}
+                acting={acting}
+                confirmCard={confirmCard && confirmCard.cid === d.cid ? confirmCard : null}
+                setConfirmCard={setConfirmCard}
+              />
             ))
       }
 

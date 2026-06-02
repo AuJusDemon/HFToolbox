@@ -38,6 +38,28 @@ export function bucketColor(bucket) {
   return 'var(--sub)'
 }
 
+export function contractStageLabel(stage) {
+  const map = {
+    needs_review:            'Needs Review',
+    waiting_on_approval:     'Waiting on Approval',
+    active:                  'Active',
+    waiting_on_counterparty: 'Waiting on Counterparty',
+    completed:               'Completed',
+    problem:                 'Problem',
+  }
+  return map[stage] || stage || '—'
+}
+
+export function contractStageColor(stage) {
+  if (stage === 'needs_review')            return 'var(--yellow)'
+  if (stage === 'waiting_on_approval')     return 'var(--yellow)'
+  if (stage === 'active')                  return 'var(--acc)'
+  if (stage === 'waiting_on_counterparty') return 'var(--acc)'
+  if (stage === 'completed')               return 'var(--green)'
+  if (stage === 'problem')                 return 'var(--red)'
+  return 'var(--sub)'
+}
+
 export function healthLabel(h) {
   const map = {
     needs_attention: 'Needs Reply',

@@ -34,6 +34,7 @@ from modules.merchant.merchant_db import (
     get_customer_meta,
     get_goals,
     get_all_lead_group_metas,
+    get_all_contract_workflows,
 )
 
 
@@ -703,17 +704,18 @@ def get_pipeline(uid: str) -> dict:
 
 
 def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
+    now       = int(time.time())
     contracts = _get_contracts(uid)
     buyer_uids = list({counterparty_uid(c, uid) for c in contracts if counterparty_uid(c, uid)})
     names = _get_usernames(buyer_uids)
+    workflows = get_all_contract_workflows(uid)
 
-    # tid -> title from my_threads
+    # tid -> title from my_threads + tid_titles cache
     with _db() as conn:
         tid_rows = conn.execute(
             "SELECT tid, title FROM my_threads WHERE uid=?", (uid,)
         ).fetchall()
     tid_titles: dict[str, str] = {str(r['tid']): r['title'] for r in tid_rows}
-    # Also check tid_titles cache table
     with _db() as conn:
         try:
             title_rows = conn.execute("SELECT tid, title FROM tid_titles").fetchall()
@@ -724,29 +726,57 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
 
     result = []
     for c in contracts:
-        bucket = contract_bucket(str(c.get('status_n', '')), int(c.get('dateline') or 0))
+        status_n = str(c.get('status_n', ''))
+        dateline = int(c.get('dateline') or 0)
+        cid      = str(c.get('cid', ''))
+        inituid  = str(c.get('inituid', '') or '')
+        otheruid = str(c.get('otheruid', '') or '')
+        wf       = workflows.get(cid, {})
+        completed_side_at = wf.get('completed_side_at')
+
+        # Map to queue stage
+        if status_n == '1':
+            if dateline and (now - dateline) > _AGE_EXPIRED_S:
+                stage = 'problem'
+            elif otheruid == uid:
+                # Current user is the counterparty - we need to approve
+                stage = 'needs_review'
+            else:
+                stage = 'waiting_on_approval'
+        elif status_n == '5':
+            stage = 'waiting_on_counterparty' if completed_side_at else 'active'
+        elif status_n == '6':
+            stage = 'completed'
+        else:
+            # status 2,3,4,7,8 or unknown
+            stage = 'problem'
+
+        bucket = contract_bucket(status_n, dateline)
         if bucket_filter and bucket != bucket_filter:
             continue
-        cp = counterparty_uid(c, uid)
+
+        cp  = counterparty_uid(c, uid)
         tid = str(c.get('tid', ''))
         result.append({
-            'cid': c.get('cid', ''),
-            'status_n': c.get('status_n', ''),
-            'bucket': bucket,
-            'counterparty_uid': cp,
-            'counterparty_username': names.get(cp, ''),
-            'tid': tid,
-            'thread_title': tid_titles.get(tid, ''),
-            'dateline': c.get('dateline', 0),
-            'iproduct': c.get('iproduct', ''),
-            'oproduct': c.get('oproduct', ''),
-            'iprice': c.get('iprice', ''),
-            'icurrency': c.get('icurrency', ''),
-            'oprice': c.get('oprice', ''),
-            'ocurrency': c.get('ocurrency', ''),
-            'brating': c.get('brating', ''),
-            'inituid': c.get('inituid', ''),
-            'otheruid': c.get('otheruid', ''),
+            'cid':                    cid,
+            'status_n':               status_n,
+            'bucket':                 bucket,
+            'stage':                  stage,
+            'counterparty_uid':       cp,
+            'counterparty_username':  names.get(cp, ''),
+            'tid':                    tid,
+            'thread_title':           tid_titles.get(tid, ''),
+            'dateline':               c.get('dateline', 0),
+            'iproduct':               c.get('iproduct', ''),
+            'oproduct':               c.get('oproduct', ''),
+            'iprice':                 c.get('iprice', ''),
+            'icurrency':              c.get('icurrency', ''),
+            'oprice':                 c.get('oprice', ''),
+            'ocurrency':              c.get('ocurrency', ''),
+            'brating':                c.get('brating', ''),
+            'inituid':                inituid,
+            'otheruid':               otheruid,
+            'completed_side_at':      completed_side_at,
         })
 
     result.sort(key=lambda x: -(x['dateline'] or 0))

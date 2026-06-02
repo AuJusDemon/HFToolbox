@@ -118,11 +118,23 @@ def init_merchant_db() -> None:
                 INDEX idx_mpt_uid (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS merchant_contract_workflow (
+                uid               VARCHAR(64) NOT NULL,
+                cid               VARCHAR(64) NOT NULL,
+                completed_side_at BIGINT,
+                last_followup_at  BIGINT,
+                updated_at        BIGINT      NOT NULL DEFAULT 0,
+                PRIMARY KEY (uid, cid),
+                INDEX idx_mcw_uid (uid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
         for _col in [
             "ALTER TABLE merchant_goals ADD COLUMN weekly_completed_deal_goal INT NOT NULL DEFAULT 0",
             "ALTER TABLE merchant_goals ADD COLUMN max_stale_offer_days INT NOT NULL DEFAULT 30",
             "ALTER TABLE merchant_goals ADD COLUMN max_bumps_without_lead INT NOT NULL DEFAULT 10",
             "ALTER TABLE merchant_goals ADD COLUMN weekly_new_lead_goal INT NOT NULL DEFAULT 0",
+            "ALTER TABLE merchant_goals ADD COLUMN templates_seeded TINYINT NOT NULL DEFAULT 0",
         ]:
             try:
                 conn.execute(_col)
@@ -451,3 +463,86 @@ def delete_pm_template(uid: str, template_id: str) -> bool:
             (uid, template_id)
         )
         return cur.rowcount > 0
+
+
+# ── Contract workflow (seller-side state) ─────────────────────────────────────
+
+def mark_contract_completed_side(uid: str, cid: str) -> None:
+    now = int(time.time())
+    with _db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO merchant_contract_workflow
+               (uid, cid, updated_at) VALUES (?,?,?)""",
+            (uid, str(cid), now)
+        )
+        conn.execute(
+            """UPDATE merchant_contract_workflow
+               SET completed_side_at=?, updated_at=? WHERE uid=? AND cid=?""",
+            (now, now, uid, str(cid))
+        )
+
+
+def get_all_contract_workflows(uid: str) -> dict:
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT cid, completed_side_at, last_followup_at
+               FROM merchant_contract_workflow WHERE uid=?""",
+            (uid,)
+        ).fetchall()
+        return {str(r['cid']): dict(r) for r in rows}
+
+
+# ── Default PM template seeding ───────────────────────────────────────────────
+
+_DEFAULT_PM_TEMPLATES = [
+    {
+        'name': 'Approval Reminder',
+        'subject': 'Contract #{cid} - Approval Reminder',
+        'body': 'Hey {username}, contract #{cid} is waiting for approval. Please approve it if you want to move forward.',
+    },
+    {
+        'name': 'Active Contract Follow-Up',
+        'subject': 'Contract #{cid} - Follow Up',
+        'body': 'Hey {username}, contract #{cid} is open for {product}. If you still want to continue, please let me know.',
+    },
+    {
+        'name': 'Completed My Side',
+        'subject': 'Contract #{cid} - Completed',
+        'body': 'Hey {username}, I completed my side for contract #{cid}. Please check it when you can.',
+    },
+]
+
+
+def seed_default_pm_templates(uid: str) -> bool:
+    """Seed 3 default templates once per user. Returns True if templates were created."""
+    now = int(time.time())
+    with _db() as conn:
+        goals_row = conn.execute(
+            "SELECT templates_seeded FROM merchant_goals WHERE uid=?", (uid,)
+        ).fetchone()
+        if goals_row and int(goals_row.get('templates_seeded') or 0):
+            return False
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM merchant_pm_templates WHERE uid=?", (uid,)
+        ).fetchone()[0]
+        # Mark seeded regardless - either they already have templates or we create defaults
+        conn.execute(
+            """INSERT OR IGNORE INTO merchant_goals
+               (uid, reply_sla_hours, weekly_bump_budget, weekly_completed_deal_goal,
+                max_stale_offer_days, max_bumps_without_lead, weekly_new_lead_goal)
+               VALUES (?,24,0,0,30,10,0)""",
+            (uid,)
+        )
+        conn.execute(
+            "UPDATE merchant_goals SET templates_seeded=1 WHERE uid=?", (uid,)
+        )
+        if existing:
+            return False
+        for t in _DEFAULT_PM_TEMPLATES:
+            conn.execute(
+                """INSERT INTO merchant_pm_templates
+                   (uid, template_id, name, subject, body, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (uid, secrets.token_hex(8), t['name'], t['subject'], t['body'], now, now)
+            )
+        return True

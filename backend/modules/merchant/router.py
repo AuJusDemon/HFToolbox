@@ -61,6 +61,15 @@ async def merchant_deals(request: Request, bucket: Optional[str] = None):
     return await asyncio.to_thread(get_deals, uid, bucket)
 
 
+@router.post("/contracts/{cid}/complete-side")
+async def merchant_complete_side(cid: str, request: Request):
+    """Record that the seller has completed their side of a contract locally."""
+    uid = _uid(request)
+    from modules.merchant.merchant_db import mark_contract_completed_side
+    await asyncio.to_thread(mark_contract_completed_side, uid, cid)
+    return {"ok": True}
+
+
 @router.get("/customers")
 async def merchant_customers(request: Request, seller_only: bool = True):
     uid = _uid(request)
@@ -220,8 +229,15 @@ class PMTemplatePatch(BaseModel):
 @router.get("/pm-templates")
 async def list_pm_templates(request: Request):
     uid = _uid(request)
-    from modules.merchant.merchant_db import list_pm_templates as _list
-    return await asyncio.to_thread(_list, uid)
+    from modules.merchant.merchant_db import (
+        list_pm_templates as _list,
+        seed_default_pm_templates as _seed,
+    )
+    templates = await asyncio.to_thread(_list, uid)
+    if not templates:
+        await asyncio.to_thread(_seed, uid)
+        templates = await asyncio.to_thread(_list, uid)
+    return templates
 
 
 @router.post("/pm-templates", status_code=201)
