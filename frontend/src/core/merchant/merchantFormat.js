@@ -44,6 +44,7 @@ export function contractStageLabel(stage) {
     waiting_on_approval:     'Waiting on Approval',
     active:                  'Active',
     waiting_on_counterparty: 'Waiting on Counterparty',
+    needs_rating:            'Needs Rating',
     completed:               'Completed',
     problem:                 'Problem',
   }
@@ -55,6 +56,7 @@ export function contractStageColor(stage) {
   if (stage === 'waiting_on_approval')     return 'var(--yellow)'
   if (stage === 'active')                  return 'var(--acc)'
   if (stage === 'waiting_on_counterparty') return 'var(--acc)'
+  if (stage === 'needs_rating')            return 'var(--blue, #4b8cf5)'
   if (stage === 'completed')               return 'var(--green)'
   if (stage === 'problem')                 return 'var(--red)'
   return 'var(--sub)'

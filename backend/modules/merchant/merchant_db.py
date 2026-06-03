@@ -129,6 +129,23 @@ def init_merchant_db() -> None:
                 INDEX idx_mcw_uid (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS merchant_bratings (
+                uid           VARCHAR(64)  NOT NULL,
+                crid          VARCHAR(64)  NOT NULL,
+                contractid    VARCHAR(64)  NOT NULL,
+                fromid        VARCHAR(64)  NOT NULL DEFAULT '',
+                toid          VARCHAR(64)  NOT NULL DEFAULT '',
+                amount        INT          NOT NULL DEFAULT 0,
+                message       TEXT,
+                dateline      BIGINT       NOT NULL DEFAULT 0,
+                from_username VARCHAR(255),
+                created_at    BIGINT       NOT NULL DEFAULT 0,
+                PRIMARY KEY (uid, crid),
+                INDEX idx_mb_uid (uid),
+                INDEX idx_mb_cid (uid, contractid)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
         for _col in [
             "ALTER TABLE merchant_goals ADD COLUMN weekly_completed_deal_goal INT NOT NULL DEFAULT 0",
             "ALTER TABLE merchant_goals ADD COLUMN max_stale_offer_days INT NOT NULL DEFAULT 30",
@@ -546,3 +563,48 @@ def seed_default_pm_templates(uid: str) -> bool:
                 (uid, secrets.token_hex(8), t['name'], t['subject'], t['body'], now, now)
             )
         return True
+
+
+# ── B-rating tracking ─────────────────────────────────────────────────────────
+
+def upsert_bratings(uid: str, ratings: list) -> None:
+    """Store received b-ratings fetched from the HF bratings endpoint."""
+    now = int(time.time())
+    with _db() as conn:
+        for r in ratings:
+            crid = str(r.get('crid', '') or '')
+            if not crid:
+                continue
+            conn.execute(
+                """INSERT OR IGNORE INTO merchant_bratings
+                   (uid, crid, contractid, fromid, toid, amount,
+                    message, dateline, from_username, created_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    uid,
+                    crid,
+                    str(r.get('contractid', '') or ''),
+                    str(r.get('from_uid',    '') or ''),
+                    str(r.get('toid',        '') or ''),
+                    int(r.get('amount', 0)   or 0),
+                    str(r.get('message',     '') or ''),
+                    int(r.get('dateline', 0) or 0),
+                    str(r.get('from_username', '') or ''),
+                    now,
+                )
+            )
+
+
+def get_bratings_by_cid(uid: str) -> dict:
+    """Return {contractid: rating_row} for all received ratings for uid."""
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM merchant_bratings WHERE uid=? ORDER BY dateline DESC",
+            (uid,)
+        ).fetchall()
+    result: dict = {}
+    for r in rows:
+        cid = str(r['contractid'])
+        if cid not in result:
+            result[cid] = dict(r)
+    return result

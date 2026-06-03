@@ -709,6 +709,14 @@ def init_contracts_history():
             conn.execute("ALTER TABLE contracts_history ADD COLUMN ostatus VARCHAR(4) DEFAULT ''")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN iaddress TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN oaddress TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
@@ -722,8 +730,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     INSERT INTO contracts_history
                         (uid,cid,status_n,type_n,inituid,otheruid,
                          iprice,icurrency,oprice,ocurrency,iproduct,oproduct,
-                         dateline,tid,brating,istatus,ostatus)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         dateline,tid,brating,istatus,ostatus,iaddress,oaddress)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(uid,cid) DO UPDATE SET
                         status_n=excluded.status_n,
                         dateline=excluded.dateline,
@@ -738,7 +746,9 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                         tid=excluded.tid,
                         brating=excluded.brating,
                         istatus=excluded.istatus,
-                        ostatus=excluded.ostatus
+                        ostatus=excluded.ostatus,
+                        iaddress=excluded.iaddress,
+                        oaddress=excluded.oaddress
                 """, (
                     uid, str(c.get("cid","")),
                     str(c.get("status","")), str(c.get("type","")),
@@ -751,6 +761,8 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     e(c.get("brating","")),
                     e(c.get("istatus","")),
                     e(c.get("ostatus","")),
+                    e(c.get("iaddress","")),
+                    e(c.get("oaddress","")),
                 ))
                 count += 1
             except Exception:
@@ -802,6 +814,10 @@ def get_contracts_history(uid: str, limit: int = 10, offset: int = 0,
             except Exception: d["istatus"] = ""
             try: d["ostatus"] = r["ostatus"] or ""
             except Exception: d["ostatus"] = ""
+            try: d["iaddress"] = r["iaddress"] or ""
+            except Exception: d["iaddress"] = ""
+            try: d["oaddress"] = r["oaddress"] or ""
+            except Exception: d["oaddress"] = ""
             return d
         return [_row(r) for r in rows]
 

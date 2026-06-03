@@ -134,6 +134,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             "iprice": True, "icurrency": True,
             "oprice": True, "ocurrency": True,
             "iproduct": True, "oproduct": True,
+            "iaddress": True, "oaddress": True,
             "dateline": True, "tid": True, "brating": True,
         },
         "threads": {
@@ -159,6 +160,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             "iprice": True, "icurrency": True,
             "oprice": True, "ocurrency": True,
             "iproduct": True, "oproduct": True,
+            "iaddress": True, "oaddress": True,
             "dateline": True, "tid": True, "brating": True,
         }
     data2 = await asyncio.wait_for(client.read(call2_ask), timeout=35)
@@ -363,6 +365,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                         "iprice": True, "icurrency": True,
                         "oprice": True, "ocurrency": True,
                         "iproduct": True, "oproduct": True,
+                        "iaddress": True, "oaddress": True,
                         "dateline": True, "tid": True, "brating": True,
                     }}), timeout=12)
                 except asyncio.TimeoutError:
@@ -2486,12 +2489,104 @@ async def contract_action(request: Request, cid: int):
             return JSONResponse({"error": "No response from HF"}, status_code=503)
         import hf_service
         hf_service.invalidate_after_write("contract_action", uid=uid, cid=str(cid))
-        return {"ok": True, "response": data}
+
+        # Write-through: force-fetch the updated contract and persist it locally so the
+        # frontend can use refreshed data without waiting for the next crawl cycle.
+        refreshed = None
+        try:
+            fresh = await asyncio.wait_for(client.read({"contracts": {
+                "_cid": [int(cid)],
+                "cid": True, "status": True, "type": True,
+                "istatus": True, "ostatus": True,
+                "inituid": True, "otheruid": True,
+                "iprice": True, "icurrency": True, "iproduct": True,
+                "oprice": True, "ocurrency": True, "oproduct": True,
+                "iaddress": True, "oaddress": True,
+                "dateline": True, "tid": True, "brating": True,
+            }}), timeout=8)
+            if fresh:
+                fresh_list = fresh.get("contracts", [])
+                if isinstance(fresh_list, dict): fresh_list = [fresh_list]
+                if fresh_list:
+                    await asyncio.to_thread(db.upsert_contracts, uid, fresh_list)
+                    refreshed = fresh_list[0]
+        except Exception as e:
+            log.warning("contract action write-through failed cid=%s: %s", cid, e)
+
+        return {"ok": True, "refreshed": refreshed, "response": data}
     except asyncio.TimeoutError:
         return JSONResponse({"error": "HF API timeout"}, status_code=503)
     except Exception as e:
         log.error("contract action error cid=%s action=%s: %s", cid, action, e)
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/api/merchant/ratings/refresh")
+async def merchant_ratings_refresh(request: Request):
+    """Fetch received b-ratings from HF and store locally for Seller HQ Needs Rating detection."""
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    token = await asyncio.to_thread(db.get_token, uid)
+    if not token:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+
+    # 15-minute cache — avoid hammering the API on every Seller HQ load
+    cached = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_refresh", 900)
+    if cached:
+        return {"ok": True, "cached": True, "count": cached.get("count", 0)}
+
+    try:
+        from HFClient import HFClient
+        client  = HFClient(token)
+        uid_int = int(uid)
+        all_ratings: list = []
+        for page in range(1, 4):  # cap at 90 ratings (3 pages × 30)
+            data = await asyncio.wait_for(client.read({"bratings": {
+                "_to": [uid_int], "_page": page, "_perpage": 30,
+                "crid": True, "contractid": True, "fromid": True, "toid": True,
+                "dateline": True, "amount": True, "message": True,
+                "from": {"uid": True, "username": True},
+            }}), timeout=10)
+            if not data:
+                break
+            rows = data.get("bratings", [])
+            if isinstance(rows, dict): rows = [rows]
+            if not rows:
+                break
+            for r in (rows or []):
+                from_user = r.get("from") or {}
+                if isinstance(from_user, list):
+                    from_user = from_user[0] if from_user else {}
+                try:
+                    amt = int(float(r.get("amount") or 0))
+                except (TypeError, ValueError):
+                    amt = 0
+                all_ratings.append({
+                    "crid":          str(r.get("crid")       or ""),
+                    "contractid":    str(r.get("contractid") or ""),
+                    "from_uid":      str(from_user.get("uid") or r.get("fromid") or ""),
+                    "toid":          str(r.get("toid")        or ""),
+                    "amount":        amt,
+                    "message":       str(r.get("message")    or ""),
+                    "dateline":      int(r.get("dateline")   or 0),
+                    "from_username": str(from_user.get("username") or ""),
+                })
+            if len(rows) < 30:
+                break
+
+        if all_ratings:
+            from modules.merchant.merchant_db import upsert_bratings as _upsert
+            await asyncio.to_thread(_upsert, uid, all_ratings)
+
+        await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_refresh",
+                                {"count": len(all_ratings)})
+        return {"ok": True, "count": len(all_ratings)}
+    except asyncio.TimeoutError:
+        return JSONResponse({"error": "HF API timeout"}, status_code=503)
+    except Exception as e:
+        log.warning("merchant ratings refresh failed uid=%s: %s", uid, e)
+        return JSONResponse({"error": str(e)}, status_code=503)
 
 
 @app.get("/api/proxy/uimg/{image_id}")

@@ -37,6 +37,7 @@ from modules.merchant.merchant_db import (
     get_goals,
     get_all_lead_group_metas,
     get_all_contract_workflows,
+    get_bratings_by_cid,
 )
 
 
@@ -711,6 +712,9 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
     buyer_uids = list({counterparty_uid(c, uid) for c in contracts if counterparty_uid(c, uid)})
     names = _get_usernames(buyer_uids)
     workflows = get_all_contract_workflows(uid)
+    # Received b-ratings keyed by contractid. Empty dict means no ratings fetched yet.
+    bratings = get_bratings_by_cid(uid)
+    has_rating_data = bool(bratings)
 
     # tid -> title from my_threads + tid_titles cache
     with _db() as conn:
@@ -742,33 +746,47 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
             str(c.get('istatus', '') or ''),
             str(c.get('ostatus', '') or ''),
         )
+        # needs_rating only when we have proven rating data and this contract has none.
+        # If merchant_bratings is empty (user hasn't refreshed yet), keep as completed
+        # to avoid false positives from unreliable contracts_history.brating alone.
+        if stage == 'completed' and has_rating_data and cid not in bratings:
+            stage = 'needs_rating'
 
         bucket = contract_bucket(status_n, dateline)
         if bucket_filter and bucket != bucket_filter:
             continue
 
-        cp  = counterparty_uid(c, uid)
-        tid = str(c.get('tid', ''))
+        cp      = counterparty_uid(c, uid)
+        tid     = str(c.get('tid', ''))
+        brating = bratings.get(cid)
         result.append({
-            'cid':                    cid,
-            'status_n':               status_n,
-            'bucket':                 bucket,
-            'stage':                  stage,
-            'counterparty_uid':       cp,
-            'counterparty_username':  names.get(cp, ''),
-            'tid':                    tid,
-            'thread_title':           tid_titles.get(tid, ''),
-            'dateline':               c.get('dateline', 0),
-            'iproduct':               c.get('iproduct', ''),
-            'oproduct':               c.get('oproduct', ''),
-            'iprice':                 c.get('iprice', ''),
-            'icurrency':              c.get('icurrency', ''),
-            'oprice':                 c.get('oprice', ''),
-            'ocurrency':              c.get('ocurrency', ''),
-            'brating':                c.get('brating', ''),
-            'inituid':                inituid,
-            'otheruid':               otheruid,
-            'completed_side_at':      completed_side_at,
+            'cid':                            cid,
+            'status_n':                       status_n,
+            'bucket':                         bucket,
+            'stage':                          stage,
+            'counterparty_uid':               cp,
+            'counterparty_username':          names.get(cp, ''),
+            'tid':                            tid,
+            'thread_title':                   tid_titles.get(tid, ''),
+            'dateline':                       c.get('dateline', 0),
+            'iproduct':                       c.get('iproduct', ''),
+            'oproduct':                       c.get('oproduct', ''),
+            'iprice':                         c.get('iprice', ''),
+            'icurrency':                      c.get('icurrency', ''),
+            'oprice':                         c.get('oprice', ''),
+            'ocurrency':                      c.get('ocurrency', ''),
+            'inituid':                        inituid,
+            'otheruid':                       otheruid,
+            'istatus':                        str(c.get('istatus', '') or ''),
+            'ostatus':                        str(c.get('ostatus', '') or ''),
+            'iaddress':                       str(c.get('iaddress', '') or ''),
+            'oaddress':                       str(c.get('oaddress', '') or ''),
+            'completed_side_at':              completed_side_at,
+            'has_received_rating':            bool(brating),
+            'received_rating_amount':         brating.get('amount') if brating else None,
+            'received_rating_from_uid':       brating.get('fromid', '') if brating else '',
+            'received_rating_from_username':  brating.get('from_username', '') if brating else '',
+            'received_rating_message':        (brating.get('message', '') or '')[:200] if brating else '',
         })
 
     result.sort(key=lambda x: -(x['dateline'] or 0))

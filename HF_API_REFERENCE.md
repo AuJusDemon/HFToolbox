@@ -249,9 +249,10 @@ Scope: Contracts Permissions
 | `_cid` [array] | Specific contracts by ID |
 | `_uid` [array] | All contracts you're party to - supports `_page`, `_perpage` |
 
-Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`, `status`, `type`, `istatus`, `ostatus`, `muid`, `inituid`, `otheruid`, `iprice`, `icurrency`, `iproduct`, `oprice`, `ocurrency`, `oproduct`, `terms`, `tid`, `idispute`, `odispute`
+Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`, `status`, `type`, `istatus`, `ostatus`, `muid`, `inituid`, `otheruid`, `iprice`, `icurrency`, `iproduct`, `oprice`, `ocurrency`, `oproduct`, `iaddress`, `oaddress`, `terms`, `tid`, `idispute`, `odispute`
 
 > `idispute`/`odispute` are embedded - dispute info comes free with the contracts call.  
+> `iaddress`/`oaddress` are payment addresses for the initiator and counterparty sides respectively. These fields appear after approval and may contain crypto wallet addresses or other payment identifiers. They are absent or null before the contract is approved. Do not assume `iaddress` is always the counterparty's address - label from the initiator/counterparty perspective.  
 > All contract values are numeric strings.
 
 #### Contract Status Map (confirmed live)
@@ -325,6 +326,10 @@ Scope: Contracts Permissions
 | `_to` [array] | Ratings received by user |
 
 Fields: `crid`, `contractid`, `fromid`, `toid`, `dateline`, `amount`, `message`, `contract` (embedded), `from` (embedded User), `to` (embedded User)
+
+> `amount` is the b-rating value (typically `1` or `-1`) — it is **not** a byte amount despite the numeric field name.  
+> Use `_to:[uid]` to fetch ratings received by a user. This is the reliable source for determining whether a contract has been rated — do not rely on `contracts.brating` alone (the brating field in the contracts list response is not consistently populated via `_uid` pagination).  
+> Match ratings to contracts by `contractid`.
 
 ---
 
@@ -403,7 +408,7 @@ Scope: Contracts Write
 | `new` | Requires `_uid`, `_terms`, `_position`. Optional: `_yourproduct`, `_yourcurrency`, `_youramount`, `_theirproduct`, `_theircurrency`, `_theiramount`, `_tid`, `_muid`, `_timeout`, `_public` |
 | `undo` | Undo a contract you just created |
 | `deny` | Deny as counterparty |
-| `approve` | Approve as counterparty |
+| `approve` | Approve as counterparty (confirmed working) |
 | `cancel` | Request cancellation - both parties must submit |
 | `complete` | Mark your side complete |
 | `middleman_deny` / `middleman_approve` | Middleman actions |

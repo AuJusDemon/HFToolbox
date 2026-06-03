@@ -548,6 +548,7 @@ async def get_contract_detail(cid: int, token: str, force: bool = False) -> tupl
                 "inituid": True, "otheruid": True,
                 "iprice": True, "icurrency": True, "iproduct": True,
                 "oprice": True, "ocurrency": True, "oproduct": True,
+                "iaddress": True, "oaddress": True,
                 "terms": True, "timeout_days": True, "timeout": True,
                 "public": True, "tid": True, "idispute": True, "odispute": True,
             },
