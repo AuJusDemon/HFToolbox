@@ -717,21 +717,53 @@ def init_contracts_history():
             conn.execute("ALTER TABLE contracts_history ADD COLUMN oaddress TEXT DEFAULT ''")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN terms TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN timeout_days VARCHAR(16) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN timeout VARCHAR(64) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN public VARCHAR(4) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN idispute TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN odispute TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
     """Insert/update contracts. Returns count upserted."""
-    e = lambda v: str(v) if v is not None else ""
+    e  = lambda v: str(v) if v is not None else ""
+    ej = lambda v: json.dumps(v) if v and isinstance(v, (dict, list)) else e(v)
+    # CASE WHEN guard: only overwrite if new value is non-empty.
+    # Terms, dispute, and address fields are only returned by _cid detail reads, not
+    # every _uid list page. Prevents crawl list-reads from blanking data already stored
+    # from a write-through or re-check call.
+    _cond = lambda col: f"{col}=CASE WHEN excluded.{col}='' THEN {col} ELSE excluded.{col} END"
     count = 0
     with _db() as conn:
         for c in contracts:
             try:
-                conn.execute("""
+                conn.execute(f"""
                     INSERT INTO contracts_history
                         (uid,cid,status_n,type_n,inituid,otheruid,
                          iprice,icurrency,oprice,ocurrency,iproduct,oproduct,
-                         dateline,tid,brating,istatus,ostatus,iaddress,oaddress)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         dateline,tid,brating,istatus,ostatus,
+                         iaddress,oaddress,
+                         terms,timeout_days,timeout,public,idispute,odispute)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(uid,cid) DO UPDATE SET
                         status_n=excluded.status_n,
                         dateline=excluded.dateline,
@@ -747,8 +779,14 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                         brating=excluded.brating,
                         istatus=excluded.istatus,
                         ostatus=excluded.ostatus,
-                        iaddress=excluded.iaddress,
-                        oaddress=excluded.oaddress
+                        {_cond("iaddress")},
+                        {_cond("oaddress")},
+                        {_cond("terms")},
+                        {_cond("timeout_days")},
+                        {_cond("timeout")},
+                        {_cond("public")},
+                        {_cond("idispute")},
+                        {_cond("odispute")}
                 """, (
                     uid, str(c.get("cid","")),
                     str(c.get("status","")), str(c.get("type","")),
@@ -763,6 +801,12 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     e(c.get("ostatus","")),
                     e(c.get("iaddress","")),
                     e(c.get("oaddress","")),
+                    e(c.get("terms","")),
+                    e(c.get("timeout_days","")),
+                    e(c.get("timeout","")),
+                    e(c.get("public","")),
+                    ej(c.get("idispute","")),
+                    ej(c.get("odispute","")),
                 ))
                 count += 1
             except Exception:
@@ -810,14 +854,10 @@ def get_contracts_history(uid: str, limit: int = 10, offset: int = 0,
                 "iproduct":  r["iproduct"],
                 "oproduct":  r["oproduct"],
             }
-            try: d["istatus"] = r["istatus"] or ""
-            except Exception: d["istatus"] = ""
-            try: d["ostatus"] = r["ostatus"] or ""
-            except Exception: d["ostatus"] = ""
-            try: d["iaddress"] = r["iaddress"] or ""
-            except Exception: d["iaddress"] = ""
-            try: d["oaddress"] = r["oaddress"] or ""
-            except Exception: d["oaddress"] = ""
+            for _col in ("istatus","ostatus","iaddress","oaddress",
+                         "terms","timeout_days","timeout","public","idispute","odispute"):
+                try: d[_col] = r[_col] or ""
+                except Exception: d[_col] = ""
             return d
         return [_row(r) for r in rows]
 

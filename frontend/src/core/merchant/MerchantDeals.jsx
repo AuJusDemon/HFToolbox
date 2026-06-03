@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { api } from '../api.js'
 import useStore from '../../store.js'
 import {
@@ -62,33 +63,47 @@ function reclassifyFromRefreshed(raw, myUid, completedSideAt) {
 
 // ── Overlay ───────────────────────────────────────────────────────────────────
 function Backdrop({ onClose, children, maxWidth = 560 }) {
-  const ref = useRef(null)
+  // Lock body scroll before paint so the page never jumps when the modal opens
+  useLayoutEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+
   useEffect(() => {
     const handler = e => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
   }, [onClose])
-  return (
+
+  // Portal to document.body so the fixed overlay escapes .content's transform:translateY(0)
+  // (the .up animation uses fill-mode:forwards which permanently makes .content a fixed
+  // containing block, clipping any position:fixed child to the content height)
+  return createPortal(
     <div
       style={{
         position: 'fixed', inset: 0, background: 'rgba(0,0,0,.72)',
-        zIndex: 9999, display: 'flex', alignItems: 'flex-start',
-        justifyContent: 'center', padding: '16px 12px', overflowY: 'auto',
+        zIndex: 9999, overflowY: 'auto',
       }}
       onClick={onClose}
     >
-      <div
-        ref={ref}
-        style={{
-          background: 'var(--s2)', border: '1px solid var(--b2)',
-          width: '100%', maxWidth, padding: '16px 18px',
-          marginTop: 8,
-        }}
-        onClick={e => e.stopPropagation()}
-      >
-        {children}
+      <div style={{
+        minHeight: '100%', padding: '16px 12px', boxSizing: 'border-box',
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
+      }}>
+        <div
+          style={{
+            background: 'var(--s2)', border: '1px solid var(--b2)',
+            width: '100%', maxWidth, padding: '16px 18px',
+            marginTop: 8, marginBottom: 16,
+          }}
+          onClick={e => e.stopPropagation()}
+        >
+          {children}
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 
@@ -156,20 +171,13 @@ function ProgressBar({ stage, status_n }) {
 }
 
 // ── Payment info section ──────────────────────────────────────────────────────
-function PaymentInfo({ deal, detail }) {
+function PaymentInfo({ iaddr, oaddr, isPending }) {
   const [copied, setCopied] = useState('')
   const copy = (text, key) => {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(key); setTimeout(() => setCopied(''), 2000)
     }).catch(() => {})
   }
-
-  const s = String(deal.status_n || '')
-  const isPending = s === '0' || s === '1'
-
-  // Prefer detail (live fetch) over deal (crawl data) for payment info
-  const iaddr = detail?.contract?.iaddress || deal.iaddress || ''
-  const oaddr = detail?.contract?.oaddress || deal.oaddress || ''
 
   if (isPending) {
     return (
@@ -236,8 +244,9 @@ function PaymentInfo({ deal, detail }) {
 
 // ── Contract Modal ────────────────────────────────────────────────────────────
 function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpenTemplates }) {
-  const [detail,       setDetail]       = useState(null)
-  const [detailLoading, setDetailLoading] = useState(true)
+  // liveDetail holds data from a manual "Sync from HF" — null until user requests it
+  const [liveDetail,   setLiveDetail]   = useState(null)
+  const [syncing,      setSyncing]      = useState(false)
   const [confirmAction, setConfirmAction] = useState(null)
   const [acting,        setActing]        = useState(null)
   const [actionResult,  setActionResult]  = useState(null)
@@ -246,13 +255,13 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
   const [fuTid,         setFuTid]         = useState('')
   const [fuCopied,      setFuCopied]      = useState('')
 
-  // Fetch full contract detail for terms + live payment info
-  useEffect(() => {
-    setDetailLoading(true)
-    api.get(`/api/contracts/${deal.cid}`)
-      .then(d => { setDetail(d); setDetailLoading(false) })
-      .catch(() => setDetailLoading(false))
-  }, [deal.cid])
+  // Manual sync — spends 1 HF read, only on explicit user request
+  const doSync = () => {
+    setSyncing(true)
+    api.get(`/api/contracts/${deal.cid}?force=true`)
+      .then(d => { setLiveDetail(d); setSyncing(false) })
+      .catch(() => setSyncing(false))
+  }
 
   const hfUrl    = `https://hackforums.net/contracts.php?action=view&cid=${deal.cid}`
   const pmUrl    = deal.counterparty_uid
@@ -262,12 +271,16 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
     ? `https://hackforums.net/convo.php?id=${deal.counterparty_uid}`
     : null
 
-  const sc         = contractStageColor(deal.stage)
-  const product    = deal.iproduct || deal.oproduct || '—'
-  const type       = TYPE_LABEL[detail?.contract?.type || ''] || deal.type_n || '—'
-  const terms      = detail?.contract?.terms || ''
-  const cpName     = deal.counterparty_username || `UID ${deal.counterparty_uid}` || '?'
-  const terms_val  = contractTerms(deal)
+  // Prefer liveDetail (after manual sync) over local deal data
+  const live     = liveDetail?.contract
+  const sc       = contractStageColor(deal.stage)
+  const product  = deal.iproduct || deal.oproduct || '—'
+  const type     = TYPE_LABEL[live?.type || deal.type_n] || '—'
+  const terms    = live?.terms    || deal.terms    || ''
+  const idispute = live?.idispute || deal.idispute || null
+  const odispute = live?.odispute || deal.odispute || null
+  const cpName   = deal.counterparty_username || `UID ${deal.counterparty_uid}` || '?'
+  const terms_val = contractTerms(deal)
 
   const doAction = async (action) => {
     setActing(action)
@@ -354,6 +367,14 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
           Leave Rating on HF
         </a>
       )}
+      <button
+        className="btn btn-sm btn-ghost"
+        style={{ marginLeft: 'auto', fontSize: 10, opacity: .65 }}
+        disabled={syncing}
+        onClick={doSync}
+      >
+        {syncing ? '…' : 'Sync from HF'}
+      </button>
     </div>
   )
 
@@ -429,14 +450,32 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
           <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 6 }}>
             Payment Info
           </div>
-          {detailLoading
-            ? <div style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Loading…</div>
-            : <PaymentInfo deal={deal} detail={detail} />
-          }
+          <PaymentInfo
+            iaddr={live?.iaddress || deal.iaddress || ''}
+            oaddr={live?.oaddress || deal.oaddress || ''}
+            isPending={false}
+          />
         </div>
       )}
 
-      {/* Terms (from live detail) */}
+      {/* Dispute info */}
+      {(idispute || odispute) && (
+        <div style={{ padding: '10px 12px', marginBottom: 12, borderLeft: '3px solid var(--red)', background: 'rgba(255,71,87,.03)' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--red)', marginBottom: 6 }}>Dispute Active</div>
+          {idispute?.claimantnotes && (
+            <div style={{ fontSize: 11, color: 'var(--sub)', lineHeight: 1.5 }}>
+              <span style={{ color: 'var(--dim)' }}>Claimant: </span>{idispute.claimantnotes}
+            </div>
+          )}
+          {idispute?.defendantnotes && (
+            <div style={{ fontSize: 11, color: 'var(--sub)', lineHeight: 1.5, marginTop: 4 }}>
+              <span style={{ color: 'var(--dim)' }}>Defendant: </span>{idispute.defendantnotes}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Terms */}
       {terms && (
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 5 }}>
@@ -809,9 +848,10 @@ export default function MerchantDeals() {
   useEffect(() => {
     fetchDeals()
     fetchTemplates()
-    // Sync received ratings in the background, then re-fetch deals so needs_rating stages update
+    // Sync received ratings in background; only re-fetch deals if server got fresh data
+    // (server caches for 15 min, so this avoids HF calls on every tab open)
     api.post('/api/merchant/ratings/refresh', {})
-      .then(() => fetchDeals())
+      .then(d => { if (d && !d.cached) fetchDeals() })
       .catch(() => {})
   }, [fetchDeals, fetchTemplates])
 

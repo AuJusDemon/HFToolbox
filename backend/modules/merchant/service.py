@@ -9,6 +9,7 @@ No HF API calls. All data comes from tables already populated by:
   - merchant local tables (merchant_leads, merchant_customers, merchant_offers)
 """
 
+import json as _json
 import time
 from _db_compat import _db
 from modules.merchant.metrics import (
@@ -756,11 +757,17 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
         if bucket_filter and bucket != bucket_filter:
             continue
 
+        def _parse_dispute(v):
+            if not v: return None
+            try: return _json.loads(v)
+            except Exception: return None
+
         cp      = counterparty_uid(c, uid)
         tid     = str(c.get('tid', ''))
         brating = bratings.get(cid)
         result.append({
             'cid':                            cid,
+            'type_n':                         str(c.get('type_n', '') or ''),
             'status_n':                       status_n,
             'bucket':                         bucket,
             'stage':                          stage,
@@ -781,6 +788,12 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
             'ostatus':                        str(c.get('ostatus', '') or ''),
             'iaddress':                       str(c.get('iaddress', '') or ''),
             'oaddress':                       str(c.get('oaddress', '') or ''),
+            'terms':                          str(c.get('terms', '') or ''),
+            'timeout_days':                   str(c.get('timeout_days', '') or ''),
+            'timeout':                        str(c.get('timeout', '') or ''),
+            'public':                         str(c.get('public', '') or ''),
+            'idispute':                       _parse_dispute(c.get('idispute', '')),
+            'odispute':                       _parse_dispute(c.get('odispute', '')),
             'completed_side_at':              completed_side_at,
             'has_received_rating':            bool(brating),
             'received_rating_amount':         brating.get('amount') if brating else None,

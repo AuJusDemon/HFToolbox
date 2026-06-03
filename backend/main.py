@@ -135,6 +135,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             "oprice": True, "ocurrency": True,
             "iproduct": True, "oproduct": True,
             "iaddress": True, "oaddress": True,
+            "timeout_days": True, "timeout": True, "public": True,
             "dateline": True, "tid": True, "brating": True,
         },
         "threads": {
@@ -161,6 +162,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
             "oprice": True, "ocurrency": True,
             "iproduct": True, "oproduct": True,
             "iaddress": True, "oaddress": True,
+            "timeout_days": True, "timeout": True, "public": True,
             "dateline": True, "tid": True, "brating": True,
         }
     data2 = await asyncio.wait_for(client.read(call2_ask), timeout=35)
@@ -366,6 +368,8 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                         "oprice": True, "ocurrency": True,
                         "iproduct": True, "oproduct": True,
                         "iaddress": True, "oaddress": True,
+                        "terms": True, "timeout_days": True, "timeout": True,
+                        "public": True, "idispute": True, "odispute": True,
                         "dateline": True, "tid": True, "brating": True,
                     }}), timeout=12)
                 except asyncio.TimeoutError:
@@ -2502,6 +2506,8 @@ async def contract_action(request: Request, cid: int):
                 "iprice": True, "icurrency": True, "iproduct": True,
                 "oprice": True, "ocurrency": True, "oproduct": True,
                 "iaddress": True, "oaddress": True,
+                "terms": True, "timeout_days": True, "timeout": True,
+                "public": True, "idispute": True, "odispute": True,
                 "dateline": True, "tid": True, "brating": True,
             }}), timeout=8)
             if fresh:
