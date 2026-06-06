@@ -11,7 +11,7 @@ const ago = ts => {
   return `${Math.floor(d/86400)}d ago`
 }
 
-const STATUS = { '1':'Awaiting Approval','2':'Cancelled','3':'In Escrow','4':'In Escrow',
+const STATUS = { '1':'Awaiting Approval','2':'Cancelled','3':'Cancelled','4':'Cancelled',
                  '5':'Active Deal','6':'Complete','7':'Disputed','8':'Expired' }
 const STATUS_COLOR = {
   'Active Deal':'var(--acc)', 'Complete':'var(--sub)', 'Awaiting Approval':'var(--yellow)',

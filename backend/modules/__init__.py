@@ -86,3 +86,5 @@ _metadata_only(
     category="community",
     api_cost="low",
 )
+
+import modules.merchant  # noqa — registers Merchant HQ

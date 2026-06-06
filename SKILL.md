@@ -278,3 +278,4 @@ For reusable HF resources, prefer `hf_service.get_or_fetch()` with a stable cach
 - User-facing write endpoints should invalidate or refresh affected caches.
 - Prefer local DB/cache reads over extra HF API calls.
 - Do not reintroduce contract-template creation code; the live app does not ship it.
+- Contract approval state requires both `status` and `istatus`/`ostatus`. The API can return `status="0"` for a pending contract (treat the same as `status="1"`). Use `istatus` (initiator's approval flag) and `ostatus` (other party's flag) to determine which party still needs to act; do not rely on `status` alone.

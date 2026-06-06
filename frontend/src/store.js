@@ -141,8 +141,9 @@ const useStore = create((set, get) => ({
   },
 
   // ── Sigmarket status (your listing + orders) ───────────────────────────────
-  sigmarketStatus:   null,
-  sigmarketStatusAt: 0,
+  sigmarketStatus:      null,
+  sigmarketStatusAt:    0,
+  sigmarketStatusError: null,
 
   fetchSigmarketStatus: async (force = false) => {
     const { sigmarketStatus, sigmarketStatusAt } = get()
@@ -151,8 +152,10 @@ const useStore = create((set, get) => ({
     try {
       const url = '/api/sigmarket/status' + (force ? '?force=true' : '')
       const data = await api.get(url)
-      if (data) set({ sigmarketStatus: data, sigmarketStatusAt: Date.now() / 1000 })
-    } catch { /* non-fatal */ }
+      if (data) set({ sigmarketStatus: data, sigmarketStatusAt: Date.now() / 1000, sigmarketStatusError: null })
+    } catch (e) {
+      set({ sigmarketStatusError: e?.message || 'Failed to load status' })
+    }
   },
 
   invalidateSigmarketStatus: () => set({ sigmarketStatusAt: 0 }),

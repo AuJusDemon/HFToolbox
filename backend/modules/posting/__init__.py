@@ -14,6 +14,7 @@ Reply queue auto-dismiss logic:
 """
 
 import asyncio
+import math
 import re
 import logging
 import time
@@ -167,8 +168,10 @@ async def fire_due_threads() -> None:
 _reply_check_queue:       dict[str, set[str]]       = {}
 # Thread titles for queued tids
 _reply_check_titles:      dict[str, dict[str, str]] = {}  # uid -> {tid -> title}
-# numreplies hint for queued tids — used to calculate which page to fetch
+# numreplies hint for queued tids - used to calculate which page to fetch
 _reply_check_numreplies:  dict[str, dict[str, int]] = {}  # uid -> {tid -> numreplies}
+# tids that were first discovered this crawl cycle - seed cursor without queuing replies
+_reply_check_seed_tids:   dict[str, set[str]]       = {}  # uid -> {tid}
 
 STANLEY_UID = "1337"
 
@@ -198,6 +201,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
         tids       = _reply_check_queue.pop(uid, set())
         titles     = _reply_check_titles.pop(uid, {})
         numreplies = _reply_check_numreplies.pop(uid, {})
+        seed_tids  = _reply_check_seed_tids.pop(uid, set())
         if not tids:
             continue
 
@@ -218,39 +222,18 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             tracked  = tid_map.get(tid_str, {})
             last_pid = tracked.get("last_pid")
 
-            seed_only = not last_pid or last_pid == "0"
             if not last_pid:
                 last_pid = "0"
-
-            thread_title = titles.get(tid_str, tracked.get("title", ""))
             last_pid_int = int(last_pid)
 
-            # ── Calculate which page(s) to fetch ────────────────────────────
-            # numreplies is not returned by the HF API (confirmed absent from
-            # both _uid and _tid thread endpoints), so we use firstpost PID
-            # instead.  Since thread posts have sequential global PIDs:
-            #   thread_position ≈ last_pid - firstpost
-            #   page_of_last_pid = thread_position // 30 + 1
-            # We fetch that page plus the next two as a forward buffer.
-            # If firstpost is unknown (0 or missing), fall back to pages 1-3
-            # which covers threads up to 90 posts.
-            import math as _math
-            firstpost_pid = int(tracked.get("firstpost") or 0)
-            if last_pid_int == 0:
-                pages_to_fetch = [1, 2]   # first time: grab first two pages
-            elif firstpost_pid > 0:
-                # Estimated 0-indexed position of last_pid within the thread.
-                # Subtract 1 so we land one page before in case of PID gaps from deletions.
-                pos = max(0, last_pid_int - firstpost_pid - 1)
-                start_page = pos // 30 + 1
-                pages_to_fetch = list(dict.fromkeys([
-                    max(1, start_page),
-                    start_page + 1,
-                    start_page + 2,
-                ]))
-            else:
-                # firstpost not yet stored — conservative fallback covering ≤90 posts
-                pages_to_fetch = [1, 2, 3]
+            # seed_only: true only for threads first discovered this crawl cycle.
+            # Existing tracked threads with last_pid=0 due to stale cursors are NOT seed.
+            seed_only    = tid_str in seed_tids
+            thread_title = titles.get(tid_str, tracked.get("title", ""))
+
+            nr = numreplies.get(tid_str, 0)
+            last_page = max(1, math.ceil((nr + 1) / 30))
+            pages_to_fetch = list(dict.fromkeys([max(1, last_page - 1), last_page]))
 
             try:
                 collected_posts: list = []
@@ -274,6 +257,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                     collected_posts.extend(page_raw or [])
 
                 if not collected_posts:
+                    log.info("Reply poll: uid=%s tid=%s nr=%d pages=%s - no posts returned",
+                             uid, tid_str, nr, pages_to_fetch)
                     continue
 
                 # Dedupe by pid (pages can overlap at boundaries)
@@ -294,13 +279,15 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                         continue  # our own post or Stanley bump
                     new_posts.append(p)
 
-                # Only advance the cursor if we actually found content newer than
-                # last_pid, OR we had a known firstpost and can confirm we fetched
-                # the correct pages. Without this guard, fetching the wrong page and
-                # finding nothing would advance last_checked past the real reply
-                # timestamp, causing the crawl to permanently skip the thread.
-                if int(max_pid) > last_pid_int or firstpost_pid > 0:
+                cursor_advanced = int(max_pid) > last_pid_int
+                if cursor_advanced:
                     tid_max_pid[tid_str] = max_pid
+
+                log.info(
+                    "Reply poll: uid=%s tid=%s nr=%d pages=%s collected=%d new=%d seed=%s cursor_adv=%s",
+                    uid, tid_str, nr, pages_to_fetch, len(collected_posts), len(new_posts),
+                    seed_only, cursor_advanced,
+                )
 
                 if not seed_only:
                     for p in new_posts:
@@ -343,6 +330,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             if not _strip_bb(clean).strip():
                 continue
             preview = _strip_bb(clean)[:200]
+            log.info("Reply poll: uid=%s tid=%s inserting pid=%s from_uid=%s",
+                     uid, tid_str, pid_str, post_uid)
             await asyncio.to_thread(
                 upsert_reply, uid, tid_str, pid_str, thread_title,
                 post_uid, post_username, post_date, preview, post_message,

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, throttledInterval } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 const ago = ts => {
@@ -212,8 +213,8 @@ function BytesOverview() {
       />
       <div style={{display:'flex',gap:5,padding:'6px 13px',borderBottom:'1px solid var(--b1)',minWidth:0}}
            onClick={e => e.stopPropagation()}>
-        <input className="inp" placeholder="UID" value={toUid}
-          onChange={e => setToUid(e.target.value)}
+        <input className="inp" placeholder="UID or URL" value={toUid}
+          onChange={e => setToUid(parseHfId(e.target.value, 'uid'))}
           style={{flex:'1 1 0',minWidth:0,fontSize:11,padding:'3px 7px'}} />
         <input className="inp" placeholder="Amt" value={amount}
           onChange={e => setAmount(e.target.value)}
@@ -358,23 +359,13 @@ function ContractsOverview() {
 
 // ── USER LOOKUP ───────────────────────────────────────────────────────────────
 function UserLookup() {
-  const nav      = useNavigate()
-  const [uid,    setUid]  = useState('')
-  const [loading,setLd]   = useState(false)
-  const [err,    setErr]  = useState(null)
+  const nav     = useNavigate()
+  const [uid,   setUid] = useState('')
 
-  const lookup = async () => {
+  const lookup = () => {
     const id = uid.trim()
-    if (!id) return
-    setLd(true); setErr(null)
-    try {
-      // Quick validate the UID exists before navigating
-      await api.get(`/api/dash/user/${id}`)
-      nav(`/dashboard/user/${id}`)
-    } catch {
-      setErr('Not found')
-      setLd(false)
-    }
+    if (!id || !/^\d+$/.test(id)) return
+    nav(`/dashboard/user/${id}`)
   }
 
   return (
@@ -386,15 +377,14 @@ function UserLookup() {
       <div className="card-body">
         <div style={{display:'flex',gap:5}}>
           <input
-            className="inp" placeholder="UID…" value={uid}
-            onChange={e => setUid(e.target.value)}
+            className="inp" placeholder="UID or profile URL…" value={uid}
+            onChange={e => setUid(parseHfId(e.target.value, 'uid'))}
             onKeyDown={e => e.key==='Enter' && lookup()}
             style={{flex:1}}
           />
-          <button className="btn btn-acc" onClick={lookup} disabled={loading||!uid}>
-            {loading ? <span className="spin"/> : 'Go'}
+          <button className="btn btn-acc" onClick={lookup} disabled={!uid}>
+            Go
           </button>
-          {err && <span style={{fontSize:11,color:'var(--red)',alignSelf:'center'}}>{err}</span>}
         </div>
         <div style={{fontSize:11,color:'var(--dim)',marginTop:6}}>
           Enter a UID to view their full profile, recent posts, and threads.
@@ -502,6 +492,77 @@ function SigmarketOverview() {
 }
 
 
+// ── MERCHANT HQ CARD ──────────────────────────────────────────────────────────
+function MerchantHQCard() {
+  const nav = useNavigate()
+  const [data, setData] = useState(null)
+
+  const load = useCallback(() => {
+    api.get('/api/merchant/overview').then(d => { if (d) setData(d) }).catch(() => {})
+  }, [])
+
+  useEffect(() => { load() }, [load])
+  const throttle = useStore(s => s.throttle)
+  usePolling(load, throttledInterval(120000, throttle))
+
+  const actionCount = data?.action_queue?.length ?? 0
+  const slaBreaches = data?.pipeline?.sla_breaches ?? 0
+  const activeDone  = data?.today?.active_contracts ?? 0
+  const weekDone    = data?.week?.completed_deals ?? 0
+  const pipeTotal   = data?.pipeline?.total ?? 0
+
+  return (
+    <div className="card" style={{cursor:'pointer'}} onClick={() => nav('/dashboard/merchant')}>
+      <CardHeader
+        icon="MCH" title="Seller HQ" to="/dashboard/merchant"
+        badge={
+          slaBreaches > 0 ? `${slaBreaches} LATE REPL${slaBreaches > 1 ? 'IES' : 'Y'}`
+          : actionCount > 0 ? `${actionCount} ACTION${actionCount > 1 ? 'S' : ''}`
+          : null
+        }
+        badgeColor={slaBreaches > 0 ? 'var(--red)' : 'var(--yellow)'}
+      />
+      <div className="card-body">
+        {!data ? (
+          <div style={{fontSize:11, color:'var(--sub)', fontStyle:'italic'}}>Loading...</div>
+        ) : (
+          <div style={{display:'flex', gap:16, flexWrap:'wrap'}}>
+            {[
+              { l:'ACTIVE CONTRACTS', v: activeDone, c: activeDone  > 0 ? 'var(--yellow)' : 'var(--dim)' },
+              { l:'OPEN REPLIES',    v: pipeTotal,  c: pipeTotal   > 0 ? 'var(--acc)'    : 'var(--dim)' },
+              { l:'LATE REPLIES',    v: slaBreaches, c: slaBreaches > 0 ? 'var(--red)'   : 'var(--green)' },
+              { l:'DONE THIS WEEK', v: weekDone,   c: weekDone    > 0 ? 'var(--green)'  : 'var(--dim)' },
+            ].map(({ l, v, c }) => (
+              <div key={l}>
+                <div style={{fontSize:9, color:'var(--dim)', fontFamily:'var(--mono)', marginBottom:2}}>{l}</div>
+                <div style={{fontSize:20, fontFamily:'var(--mono)', fontWeight:700, color: c, lineHeight:1.1}}>{v}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        {data?.action_queue?.length > 0 && (
+          <div style={{marginTop:10, paddingTop:8, borderTop:'1px solid var(--b1)'}}>
+            {data.action_queue.slice(0, 3).map((item, i) => (
+              <div key={i} style={{
+                display:'flex', gap:8, alignItems:'center',
+                padding:'4px 0', borderBottom:'1px solid rgba(21,30,46,.4)',
+              }}>
+                <span style={{
+                  fontSize:11, fontFamily:'var(--mono)', fontWeight:700,
+                  color: item.severity === 'high' ? 'var(--red)' : item.severity === 'medium' ? 'var(--yellow)' : 'var(--sub)',
+                  minWidth:18,
+                }}>{item.count}</span>
+                <span style={{fontSize:11, color:'var(--text)'}}>{item.label}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
 function DashGrid({ children }) {
   // Filter out false/null/undefined children — only count what actually renders
   const real = Array.isArray(children) ? children.filter(Boolean) : [children].filter(Boolean)
@@ -525,6 +586,7 @@ export default function Dashboard() {
   const showBytes     = isEnabled('bytes')
   const showContracts = isEnabled('contracts')
   const showSigmarket = isEnabled('sigmarket')
+  const showMerchant  = isEnabled('merchant')
 
   return (
     <>
@@ -534,7 +596,10 @@ export default function Dashboard() {
         {showContracts && <ContractsOverview />}
       </DashGrid>
       <DashGrid>
+        {showMerchant  && <MerchantHQCard />}
         {showSigmarket && <SigmarketOverview />}
+      </DashGrid>
+      <DashGrid>
         <UserLookup />
       </DashGrid>
     </>

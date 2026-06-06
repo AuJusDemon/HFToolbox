@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
 import { api } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 // Load award.css immediately when this module loads — must be ready before picker opens
@@ -1579,9 +1580,8 @@ function BBEditor({ value, onChange, userGroups }) {
             {
               gid: '68', name: 'Brotherhood',
               items: [
-                { label: 'Banner',  action: () => insert('[align=center][img]https://i.ibb.co/C33BJJJg/header4.gif[/img][/align]') },
-                { label: 'Div 1',   action: () => insert('[align=center][img]https://i.ibb.co/bpzTMYh/divider3.gif[/img][/align]') },
-                { label: 'Div 2',   action: () => insert('[align=center][img]https://i.ibb.co/N2NSzmv9/divider.gif[/img][/align]') },
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.ibb.co/bMzMMVFj/6.gif[/img][/align]') },
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.ibb.co/spsYJf77/2-2.gif[/img][/align]') },
                 { label: '[css]',   action: () => wrap('[css=68]','[/css]') },
               ]
             },
@@ -2662,6 +2662,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   const [logLoading,     setLogLoading]     = useState(false)
   const [expandedDiff,   setExpandedDiff]   = useState(null)
   const [rollbackLoading,setRollbackLoading]= useState(null)
+  const [rollbackPending,setRollbackPending]= useState(null)
 
   // ── Scheduling (existing) ─────────────────────────────────────────────────
   const [scheduling, setScheduling] = useState(null)
@@ -2943,7 +2944,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   }
 
   const doRollback = async (draft, logId) => {
-    if (!window.confirm('Restore this version? Current content will be replaced.')) return
+    setRollbackPending(null)
     setRollbackLoading(logId)
     try {
       const res = await api.post(`/api/posting/drafts/${draft.id}/rollback/${logId}`)
@@ -3217,9 +3218,9 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                       </div>
                     ))}
                     <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
-                      <input className="inp" placeholder="HF UID (numbers)" value={addCollabUid}
-                        style={{ width: 140, fontSize: 11 }}
-                        onChange={e => { setAddCollabUid(e.target.value); setAddCollabErr(null) }}
+                      <input className="inp" placeholder="UID or profile URL" value={addCollabUid}
+                        style={{ width: 160, fontSize: 11 }}
+                        onChange={e => { setAddCollabUid(parseHfId(e.target.value,'uid')); setAddCollabErr(null) }}
                         onKeyDown={e => e.key === 'Enter' && addCollab(d.id)} />
                       <button className="btn btn-acc" style={{ fontSize: 11 }}
                         disabled={addCollabLoading || !addCollabUid.trim()}
@@ -3277,10 +3278,21 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                               onClick={() => setExpandedDiff(expandedDiff === entry.id ? null : entry.id)}>
                               {expandedDiff === entry.id ? 'Hide diff' : 'Diff'}
                             </button>
-                            {isOwner && (
+                            {isOwner && rollbackPending === entry.id ? (
+                              <>
+                                <button className="btn btn-acc" style={{ fontSize: 9, padding: '1px 7px' }}
+                                  onClick={() => doRollback(d, entry.id)}>
+                                  Confirm
+                                </button>
+                                <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 7px' }}
+                                  onClick={() => setRollbackPending(null)}>
+                                  Cancel
+                                </button>
+                              </>
+                            ) : isOwner && (
                               <button className="btn btn-ghost" style={{ fontSize: 9, padding: '1px 7px' }}
                                 disabled={rollbackLoading === entry.id}
-                                onClick={() => doRollback(d, entry.id)}>
+                                onClick={() => setRollbackPending(entry.id)}>
                                 {rollbackLoading === entry.id ? '…' : 'Restore'}
                               </button>
                             )}

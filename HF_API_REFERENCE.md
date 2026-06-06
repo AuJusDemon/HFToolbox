@@ -385,15 +385,17 @@ Scope: Contracts Permissions
 | `_cid` [array] | Specific contracts by ID |
 | `_uid` [array] | All contracts you're party to - supports `_page`, `_perpage` |
 
-Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`, `status`, `type`, `istatus`, `ostatus`, `muid`, `inituid`, `otheruid`, `iprice`, `icurrency`, `iproduct`, `oprice`, `ocurrency`, `oproduct`, `terms`, `tid`, `idispute`, `odispute`
+Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`, `status`, `type`, `istatus`, `ostatus`, `muid`, `inituid`, `otheruid`, `iprice`, `icurrency`, `iproduct`, `oprice`, `ocurrency`, `oproduct`, `iaddress`, `oaddress`, `terms`, `tid`, `idispute`, `odispute`
 
 > `idispute`/`odispute` are embedded - dispute info comes free with the contracts call.  
+> `iaddress`/`oaddress` are payment addresses for the initiator and counterparty sides respectively. These fields appear after approval and may contain crypto wallet addresses or other payment identifiers. They are absent or null before the contract is approved. Do not assume `iaddress` is always the counterparty's address - label from the initiator/counterparty perspective.
 > All contract values are numeric strings.
 
 #### Contract Status Map (confirmed live)
 
 | Value | Label |
 |---|---|
+| `"0"` | Awaiting Approval (pending) — live API returned this for an incoming awaiting-approval contract; `istatus`/`ostatus` carry the per-party approval flags |
 | `"1"` | Awaiting Approval |
 | `"2"` | Cancelled |
 | `"3"` | Unknown (likely middleman escrow) |
@@ -460,6 +462,15 @@ Scope: Contracts Permissions
 | `_to` [array] | Ratings received by user |
 
 Fields: `crid`, `contractid`, `fromid`, `toid`, `dateline`, `amount`, `message`, `contract` (embedded), `from` (embedded User), `to` (embedded User)
+
+> **Read-only.** There is no write API for b-ratings. Ratings must be submitted on the HF contract page directly.
+> `amount` is the b-rating value (typically `1` or `-1`) — it is **not** a byte amount.
+> `_to:[uid]` returns ratings **received** by uid (`fromid` = counterparty, `toid` = uid). Use this to display what ratings have been left for a user.
+> `_from:[uid]` returns ratings **left by** uid (`fromid` = uid, `toid` = counterparty). Use this to determine whether the current user has rated a contract.
+> `_cid:[cid]` returns all ratings for a specific contract regardless of direction.
+> **Needs Rating logic must use `_from`**, not `_to`. A completed contract shows "Needs Rating" only when no row with `fromid == my_uid` exists for that `contractid`. Checking received ratings (`_to`) tells you whether the counterparty has rated you, which is a different question.
+> Match ratings to contracts by `contractid`.
+> **Warning: requesting embedded `from: {uid, username}` or `to: {uid, username}` inside a paginated `_to`/`_from` call fails** with `"Users - Maximum of 30 users allowed."` API error. Use flat fields only (`fromid`, `toid`). If usernames are needed, resolve them separately via `uid_usernames` cache — do not request embedded user objects in brating calls.
 
 ---
 
@@ -541,7 +552,7 @@ All actions except `new` require `_cid`.
 | `new` | `_uid`, `_terms`, `_position` | `_yourproduct`, `_yourcurrency`, `_youramount`, `_theirproduct`, `_theircurrency`, `_theiramount`, `_tid`, `_muid`, `_timeout` (default 14d), `_public`=`"yes"`, `_address` | Creates contract |
 | `undo` | `_cid` | | Undo a contract you just created |
 | `deny` | `_cid` | | Deny as counterparty |
-| `approve` | `_cid` | `_address` | Approve as counterparty |
+| `approve` | `_cid` | `_address` | Approve as counterparty. Confirmed working. |
 | `cancel` | `_cid` | | Request cancellation - both parties must submit |
 | `complete` | `_cid` | `_address` (txn ID) | Mark your side complete |
 | `middleman_deny` | `_cid` | | Middleman rejects the contract |

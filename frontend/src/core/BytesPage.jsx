@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 const ago = ts => {
@@ -327,7 +328,7 @@ function SendVault({ onDone }) {
         <div>
           <div style={{fontSize:10,color:'var(--sub)',textTransform:'uppercase',letterSpacing:'.08em',fontFamily:'var(--mono)',marginBottom:8,fontWeight:600}}>Send Bytes</div>
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            <input className="inp" placeholder="Recipient UID" value={sf.to_uid} onChange={e=>setSf(f=>({...f,to_uid:e.target.value}))}/>
+            <input className="inp" placeholder="Recipient UID or URL" value={sf.to_uid} onChange={e=>setSf(f=>({...f,to_uid:parseHfId(e.target.value,'uid')}))}/>
             <input className="inp" placeholder="Amount" type="number" min="1" value={sf.amount} onChange={e=>setSf(f=>({...f,amount:e.target.value}))}/>
             <input className="inp" placeholder="Reason (optional)" value={sf.reason} onChange={e=>setSf(f=>({...f,reason:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&send()}/>
             <button className="btn btn-acc" onClick={send} disabled={sd||!sf.to_uid||!sf.amount}>{sd?<span className="spin"/>:'Send →'}</button>

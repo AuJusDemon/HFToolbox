@@ -300,7 +300,7 @@ export default function UserPage() {
                           </div>
                         )}
                         {r.amount !== 0 && (
-                          <div style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--sub)',marginTop:2}}>{fmt(r.amount)} bytes</div>
+                          <div style={{fontSize:9,fontFamily:'var(--mono)',color:'var(--sub)',marginTop:2}}>B-rating: {fmt(r.amount)}</div>
                         )}
                       </div>
                       <div style={{fontSize:12,color:'var(--text)',lineHeight:1.5,wordBreak:'break-word'}}>

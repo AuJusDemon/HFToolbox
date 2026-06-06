@@ -86,15 +86,17 @@ def init_db() -> None:
 def upsert_user(uid: str, username: str, token: str, avatar: str = "", groups: list[str] = []) -> None:
     token = crypto.encrypt_token(token)
     import time as _t
+    now = int(_t.time())
     with _db() as conn:
         conn.execute("""
-            INSERT INTO users (uid, username, token, avatar, `groups`, last_seen)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO users (uid, username, token, avatar, `groups`, last_seen, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 username=VALUES(username), token=VALUES(token),
                 avatar=VALUES(avatar), `groups`=VALUES(`groups`),
-                last_seen=VALUES(last_seen)
-        """, (uid, username, token, avatar, json.dumps(groups), int(_t.time())))
+                last_seen=VALUES(last_seen),
+                created_at=IF(created_at=0, VALUES(created_at), created_at)
+        """, (uid, username, token, avatar, json.dumps(groups), now, now))
 
 
 def get_user(uid: str) -> dict | None:
@@ -699,20 +701,69 @@ def init_contracts_history():
             conn.execute("ALTER TABLE contracts_history ADD COLUMN brating TEXT DEFAULT ''")
         except Exception:
             pass  # Column already exists
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN istatus VARCHAR(4) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN ostatus VARCHAR(4) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN iaddress TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN oaddress TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN terms TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN timeout_days VARCHAR(16) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN timeout VARCHAR(64) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN public VARCHAR(4) DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN idispute TEXT DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE contracts_history ADD COLUMN odispute TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def upsert_contracts(uid: str, contracts: list) -> int:
     """Insert/update contracts. Returns count upserted."""
-    e = lambda v: str(v) if v is not None else ""
+    e  = lambda v: str(v) if v is not None else ""
+    ej = lambda v: json.dumps(v) if v and isinstance(v, (dict, list)) else e(v)
+    # CASE WHEN guard: only overwrite if new value is non-empty.
+    # Terms, dispute, and address fields are only returned by _cid detail reads, not
+    # every _uid list page. Prevents crawl list-reads from blanking data already stored
+    # from a write-through or re-check call.
+    _cond = lambda col: f"{col}=CASE WHEN excluded.{col}='' THEN {col} ELSE excluded.{col} END"
     count = 0
     with _db() as conn:
         for c in contracts:
             try:
-                conn.execute("""
+                conn.execute(f"""
                     INSERT INTO contracts_history
                         (uid,cid,status_n,type_n,inituid,otheruid,
-                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,dateline,tid,brating)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         iprice,icurrency,oprice,ocurrency,iproduct,oproduct,
+                         dateline,tid,brating,istatus,ostatus,
+                         iaddress,oaddress,
+                         terms,timeout_days,timeout,public,idispute,odispute)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(uid,cid) DO UPDATE SET
                         status_n=excluded.status_n,
                         dateline=excluded.dateline,
@@ -725,7 +776,17 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                         iproduct=excluded.iproduct,
                         oproduct=excluded.oproduct,
                         tid=excluded.tid,
-                        brating=excluded.brating
+                        brating=excluded.brating,
+                        istatus=excluded.istatus,
+                        ostatus=excluded.ostatus,
+                        {_cond("iaddress")},
+                        {_cond("oaddress")},
+                        {_cond("terms")},
+                        {_cond("timeout_days")},
+                        {_cond("timeout")},
+                        {_cond("public")},
+                        {_cond("idispute")},
+                        {_cond("odispute")}
                 """, (
                     uid, str(c.get("cid","")),
                     str(c.get("status","")), str(c.get("type","")),
@@ -736,6 +797,16 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     int(c.get("dateline") or 0),
                     e(c.get("tid","")),
                     e(c.get("brating","")),
+                    e(c.get("istatus","")),
+                    e(c.get("ostatus","")),
+                    e(c.get("iaddress","")),
+                    e(c.get("oaddress","")),
+                    e(c.get("terms","")),
+                    e(c.get("timeout_days","")),
+                    e(c.get("timeout","")),
+                    e(c.get("public","")),
+                    ej(c.get("idispute","")),
+                    ej(c.get("odispute","")),
                 ))
                 count += 1
             except Exception:
@@ -767,22 +838,28 @@ def get_contracts_history(uid: str, limit: int = 10, offset: int = 0,
                    ORDER BY {order} LIMIT ? OFFSET ?""",
                 (uid, limit, offset)
             ).fetchall()
-        d = lambda v: v
-        return [{
-            "uid":       r["uid"],
-            "cid":       r["cid"],
-            "status_n":  r["status_n"],
-            "type_n":    r["type_n"],
-            "dateline":  r["dateline"],
-            "inituid":   d(r["inituid"]),
-            "otheruid":  d(r["otheruid"]),
-            "iprice":    d(r["iprice"]),
-            "icurrency": d(r["icurrency"]),
-            "oprice":    d(r["oprice"]),
-            "ocurrency": d(r["ocurrency"]),
-            "iproduct":  d(r["iproduct"]),
-            "oproduct":  d(r["oproduct"]),
-        } for r in rows]
+        def _row(r):
+            d = {
+                "uid":       r["uid"],
+                "cid":       r["cid"],
+                "status_n":  r["status_n"],
+                "type_n":    r["type_n"],
+                "dateline":  r["dateline"],
+                "inituid":   r["inituid"],
+                "otheruid":  r["otheruid"],
+                "iprice":    r["iprice"],
+                "icurrency": r["icurrency"],
+                "oprice":    r["oprice"],
+                "ocurrency": r["ocurrency"],
+                "iproduct":  r["iproduct"],
+                "oproduct":  r["oproduct"],
+            }
+            for _col in ("istatus","ostatus","iaddress","oaddress",
+                         "terms","timeout_days","timeout","public","idispute","odispute"):
+                try: d[_col] = r[_col] or ""
+                except Exception: d[_col] = ""
+            return d
+        return [_row(r) for r in rows]
 
 
 
@@ -814,11 +891,11 @@ def get_contracts_with_empty_tid(uid: str) -> bool:
     return row is not None
 
 def get_open_contract_cids(uid: str) -> list:
-    """Return CIDs of contracts still in an open state (Awaiting=1, Active=5).
+    """Return CIDs of contracts still in an open state (Awaiting=0/1, Active=5).
     These get re-checked every crawl cycle to catch status changes."""
     with _db() as conn:
         rows = conn.execute(
-            "SELECT cid FROM contracts_history WHERE uid=? AND status_n IN ('1','5')",
+            "SELECT cid FROM contracts_history WHERE uid=? AND status_n IN ('0','1','5')",
             (uid,)
         ).fetchall()
     return [str(r["cid"]) for r in rows]
@@ -984,9 +1061,17 @@ def get_contracts_preview(uid: str, status_n: str | None = None,
 
     counts    = {r["status_n"]: r["cnt"] for r in status_rows}
     complete  = counts.get("6", 0)
-    cancelled = counts.get("2", 0)
+    cancelled = sum(counts.get(s, 0) for s in ("2", "3", "4"))
     non_canc  = total - cancelled
     comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    # Merge rows that share the same display label (e.g. status 2 and 4 both → "Cancelled")
+    _sm: dict = {}
+    for r in status_rows:
+        lbl = STATUS_MAP.get(str(r["status_n"]), "Unknown")
+        _sm[lbl] = _sm.get(lbl, 0) + r["cnt"]
+    by_status_merged = [{"label": lbl, "count": cnt}
+                        for lbl, cnt in sorted(_sm.items(), key=lambda x: -x[1])]
 
     def _val(r):
         ip, ic = r.get("iprice","0") or "0", r.get("icurrency","other") or "other"
@@ -1047,7 +1132,7 @@ def get_contracts_preview(uid: str, status_n: str | None = None,
         "comp_rate":   comp_rate,
         "date_min":    date_row["mn"] if date_row else None,
         "date_max":    date_row["mx"] if date_row else None,
-        "by_status":   [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in status_rows],
+        "by_status":   by_status_merged,
         "by_type":     [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in type_rows],
         "rows":        rows,
         "with_thread": with_thread,
@@ -1181,16 +1266,23 @@ def get_contracts_analytics(uid: str, status_n: str | None = None,
 
     counts = {r["status_n"]: r["cnt"] for r in by_status_rows}
     complete  = counts.get("6", 0)
-    cancelled = counts.get("2", 0)
+    cancelled = sum(counts.get(s, 0) for s in ("2", "3", "4"))
     non_canc  = total - cancelled
     comp_rate = round(complete / non_canc * 100) if non_canc > 0 else 0
+
+    _sm2: dict = {}
+    for r in by_status_rows:
+        lbl = STATUS_MAP.get(str(r["status_n"]), "Unknown")
+        _sm2[lbl] = _sm2.get(lbl, 0) + r["cnt"]
+    by_status_merged2 = [{"label": lbl, "count": cnt}
+                         for lbl, cnt in sorted(_sm2.items(), key=lambda x: -x[1])]
 
     return {
         "total":     total,
         "comp_rate": comp_rate,
         "date_min":  date_row["mn"] if date_row else None,
         "date_max":  date_row["mx"] if date_row else None,
-        "by_status": [{"label": STATUS_MAP.get(str(r["status_n"]),"Unknown"), "count": r["cnt"]} for r in by_status_rows],
+        "by_status": by_status_merged2,
         "by_type":   [{"label": TYPE_MAP.get(str(r["type_n"]),"--"),           "count": r["cnt"]} for r in by_type_rows],
         "top_counterparties": [{"uid": r["cp"], "count": r["cnt"]} for r in cp_rows if r["cp"]],
         "monthly":   [{"month": r["month"], "count": r["cnt"]} for r in monthly_rows],

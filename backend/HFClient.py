@@ -53,7 +53,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-HF_TIMEOUT = (4, 8)   # (connect, read) — fast fail, keeps threads from hanging
+HF_TIMEOUT = (5, 12)  # (connect, read) — slightly more generous for slow proxies
 
 # ── Proxy config from environment ─────────────────────────────────────────────
 # Primary proxy — rotating residential recommended
@@ -128,7 +128,7 @@ def _rotate_session(reason: str = "") -> None:
 _cb_lock       = threading.Lock()
 _cb_fails      = 0
 _cb_open_since = 0.0
-CB_THRESHOLD   = 5
+CB_THRESHOLD   = 3     # open sooner so proxy2 gets used before the whole pool is flagged
 CB_RESET_AFTER = 45.0
 
 
@@ -191,9 +191,10 @@ def _sync_call(token: str, url: str, form_data: dict, proxies: dict) -> requests
 
 # ── Concurrency limiter ────────────────────────────────────────────────────────
 _hf_sem         = asyncio.Semaphore(6)
-_MAX_RETRIES    = 2
-_CF_MAX_RETRIES = 1
-_RETRY_DELAYS   = [1, 3]
+_MAX_RETRIES    = 4               # 5 total attempts before giving up
+_CF_MAX_RETRIES = 2
+_RETRY_DELAYS   = [1, 2, 4, 8]   # backoff for Timeout/ConnectionError
+_CF_RETRY_DELAYS = [4, 8, 16, 30] # longer backoff for CF 403 blocks
 
 
 async def _request(
@@ -235,8 +236,12 @@ async def _request(
             _rotate_session(f"HTTP {resp.status_code}")
             _cb_fail()
             if attempt < max_retries:
-                await asyncio.sleep(1)
+                delay = _CF_RETRY_DELAYS[min(attempt, len(_CF_RETRY_DELAYS) - 1)]
+                log.warning("CF/proxy block HTTP %d (attempt %d/%d) — retrying in %ds",
+                            resp.status_code, attempt + 1, max_retries, delay)
+                await asyncio.sleep(delay)
                 return await _request(token, route, body, attempt + 1, max_retries)
+            log.warning("HTTP %d — all %d retries exhausted", resp.status_code, max_retries)
             return None
 
         log.warning("HF HTTP %d (route=%s)", resp.status_code, route)
@@ -244,9 +249,24 @@ async def _request(
 
     except AuthExpired:
         raise
-    except (requests.exceptions.Timeout,
-            requests.exceptions.ProxyError,
+    except requests.exceptions.Timeout:
+        # Retry once on the same sticky session before rotating — a single timeout
+        # is often transient slowness, not a block. Rotating on attempt 0 causes
+        # rapid session churn when multiple concurrent reads all time out together.
+        if attempt > 0:
+            _rotate_session("ReadTimeout")
+            _cb_fail()
+        if attempt < max_retries:
+            delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+            log.warning("Proxy ReadTimeout (attempt %d/%d) — retrying in %ds",
+                        attempt + 1, max_retries, delay)
+            await asyncio.sleep(delay)
+            return await _request(token, route, body, attempt + 1, max_retries)
+        log.warning("Proxy ReadTimeout — all %d retries exhausted", max_retries)
+        return None
+    except (requests.exceptions.ProxyError,
             requests.exceptions.ConnectionError) as e:
+        # ProxyError/ConnectionError are stronger block signals — rotate immediately
         _rotate_session(f"{type(e).__name__}")
         _cb_fail()
         if attempt < max_retries:

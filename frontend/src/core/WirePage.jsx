@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { api } from './api.js'
+import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 
 // Module-level cache for resolved mentions — persists across renders, never fetches same UID twice
@@ -1118,7 +1119,7 @@ function CuratorRoster({ me, refreshKey }) {
         )
       })}
       <div style={{marginTop:12,display:'flex',gap:8,alignItems:'flex-start',flexWrap:'wrap'}}>
-        <input className="inp" style={{width:120}} placeholder="UID" value={addUid} onChange={e=>setAddUid(e.target.value)}/>
+        <input className="inp" style={{width:150}} placeholder="UID or profile URL" value={addUid} onChange={e=>setAddUid(parseHfId(e.target.value,'uid'))}/>
         {me.is_admin && (
           <select className="inp" value={addRole} onChange={e=>setAddRole(e.target.value)}>
             <option value="curator">CURATOR</option>

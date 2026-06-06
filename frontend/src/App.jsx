@@ -19,6 +19,7 @@ const _preloadUser      = import('./core/UserPage.jsx')
 const _preloadPosting   = import('./core/PostingPage.jsx')
 const _preloadSigmarket = import('./core/SigmarketPage.jsx')
 const _preloadWire      = import('./core/WirePage.jsx')
+const _preloadMerchant  = import('./core/MerchantPage.jsx')
 
 const ContractsPage      = lazy(() => _preloadContracts)
 const BumperPage         = lazy(() => _preloadBumper)
@@ -28,6 +29,7 @@ const UserPage           = lazy(() => _preloadUser)
 const PostingPage        = lazy(() => _preloadPosting)
 const SigmarketPage      = lazy(() => _preloadSigmarket)
 const WirePage           = lazy(() => _preloadWire)
+const MerchantPage       = lazy(() => _preloadMerchant)
 
 function RequireAuth({ children }) {
   const { user, authLoading } = useStore()
@@ -92,6 +94,7 @@ export default function App() {
           <Route path="posting"        element={<Suspense fallback={<Spin/>}><PostingPage /></Suspense>} />
           <Route path="sigmarket"      element={<Suspense fallback={<Spin/>}><SigmarketPage /></Suspense>} />
           <Route path="wire"           element={<Suspense fallback={<Spin/>}><WirePage /></Suspense>} />
+          <Route path="merchant"       element={<Suspense fallback={<Spin/>}><MerchantPage /></Suspense>} />
           {extraRoutes}
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

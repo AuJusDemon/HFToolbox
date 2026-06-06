@@ -449,6 +449,7 @@ export default function Shell() {
             <NavLink to="/dashboard/posting"   label="Posting" badge={replyCount} />
             <NavLink to="/dashboard/sigmarket"  label="Sig Market" />
             <NavLink to="/dashboard/wire" label="The Wire" />
+            <NavLink to="/dashboard/merchant" label="Seller HQ" />
 
             <div className="sb-nav-lbl" style={{marginTop:4}}>system</div>
             <NavLink to="/dashboard/settings"  label="Settings" />
@@ -548,8 +549,9 @@ function MobileNav() {
     { to:'/dashboard/bumper',    label:'BUMPER'   },
     { to:'/dashboard/posting',   label:'POST'     },
     { to:'/dashboard/sigmarket', label:'SIG MKT'  },
-    { to:'/dashboard/wire', label:'WIRE' },
-    { to:'/dashboard/settings',  label:'SETTINGS' },
+    { to:'/dashboard/wire',     label:'WIRE'     },
+    { to:'/dashboard/merchant', label:'SELL'     },
+    { to:'/dashboard/settings', label:'SETTINGS' },
   ]
   return (
     <nav className="mob-nav">

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../../core/api.js'
+import { parseHfId } from '../../core/utils.js'
 
 function formatCountdown(seconds) {
   if (seconds === null || seconds === undefined) return '--'
@@ -113,9 +114,9 @@ function AddJobForm({ onAdded }) {
       <div className="row" style={{ gap: 10, flexWrap: 'wrap' }}>
         <input
           className="input"
-          placeholder="Thread ID (TID)"
+          placeholder="Thread ID or URL"
           value={tid}
-          onChange={e => setTid(e.target.value)}
+          onChange={e => setTid(parseHfId(e.target.value, 'tid'))}
           onKeyDown={e => e.key === 'Enter' && add()}
           style={{ maxWidth: 180 }}
         />
