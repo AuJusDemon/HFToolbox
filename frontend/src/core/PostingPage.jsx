@@ -1580,9 +1580,8 @@ function BBEditor({ value, onChange, userGroups }) {
             {
               gid: '68', name: 'Brotherhood',
               items: [
-                { label: 'Banner',  action: () => insert('[align=center][img]https://i.ibb.co/C33BJJJg/header4.gif[/img][/align]') },
-                { label: 'Div 1',   action: () => insert('[align=center][img]https://i.ibb.co/bpzTMYh/divider3.gif[/img][/align]') },
-                { label: 'Div 2',   action: () => insert('[align=center][img]https://i.ibb.co/N2NSzmv9/divider.gif[/img][/align]') },
+                { label: 'Banner',  action: () => insert('[align=center][img]https://i.ibb.co/bMzMMVFj/6.gif[/img][/align]') },
+                { label: 'Divider', action: () => insert('[align=center][img]https://i.ibb.co/spsYJf77/2-2.gif[/img][/align]') },
                 { label: '[css]',   action: () => wrap('[css=68]','[/css]') },
               ]
             },

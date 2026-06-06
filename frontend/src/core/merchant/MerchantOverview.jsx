@@ -1,159 +1,288 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import {
-  severityColor, stageLabel, stageColor,
-  bucketLabel, bucketColor, relTime,
+  contractStageLabel, contractStageColor,
+  healthLabel, healthColor,
+  relTime,
 } from './merchantFormat.js'
 
-const ACTION_TAB = {
-  sla_breach:        'pipeline',
-  awaiting_approval: 'deals',
-  unread_replies:    'pipeline',
-  active_contracts:  'deals',
-  followup_due:      'pipeline',
-  bump_waste:        'promotion',
-}
-
-// ── Stat chip (clickable, compact) ──────────────────────────────────────────
-function Chip({ label, value, color, tab, setTab }) {
-  return (
-    <button
-      className="btn"
-      style={{ flex: '1 1 0', minWidth: 80, textAlign: 'left', padding: '7px 10px', display: 'block' }}
-      onClick={() => setTab(tab)}
-    >
-      <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 1 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color: color || 'var(--sub)', fontFamily: 'var(--mono)', lineHeight: 1.1 }}>{value}</div>
-    </button>
-  )
-}
-
-// ── Action item row (clickable) ──────────────────────────────────────────────
-function ActionRow({ item, setTab }) {
-  const tab = ACTION_TAB[item.type]
+// ── Stat tile ─────────────────────────────────────────────────────────────────
+function StatTile({ label, value, sub, color, onClick }) {
   return (
     <button
       className="btn"
       style={{
-        display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-        padding: '7px 10px', marginBottom: 3, textAlign: 'left',
-        borderLeft: `3px solid ${severityColor(item.severity)}`,
+        flex: '1 1 0', minWidth: 90, textAlign: 'left',
+        padding: '10px 12px', display: 'block',
+        borderLeft: `2px solid ${color || 'var(--b3)'}`,
       }}
-      onClick={() => tab && setTab(tab)}
+      onClick={onClick}
     >
-      <span style={{ fontSize: 13, fontFamily: 'var(--mono)', color: severityColor(item.severity), minWidth: 22, fontWeight: 700 }}>
-        {item.count}
-      </span>
-      <span style={{ fontSize: 11, color: 'var(--text)', flex: 1 }}>{item.label}</span>
-      {tab && <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', flexShrink: 0 }}>{tab} →</span>}
+      <div style={{ fontSize: 8, color: 'var(--dim)', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 26, fontWeight: 700, color: color || 'var(--text)', fontFamily: 'var(--mono)', lineHeight: 1 }}>
+        {value ?? 0}
+      </div>
+      {sub && (
+        <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginTop: 3 }}>{sub}</div>
+      )}
     </button>
   )
 }
 
-// ── Pipeline stage bar ───────────────────────────────────────────────────────
-function PipelineBar({ byStage }) {
-  const ACTIVE = ['new', 'qualified', 'follow_up', 'contract_opened']
-  const total = ACTIVE.reduce((s, k) => s + (byStage[k] || 0), 0)
-  if (!total) return null
+// ── Contract pipeline bar ─────────────────────────────────────────────────────
+// Primary (actionable) stages only — terminal states shown separately below
+const PIPELINE_STAGES = [
+  { key: 'needs_review',            label: 'Needs Review' },
+  { key: 'in_progress',             label: 'In Progress'  },
+  { key: 'waiting_on_counterparty', label: 'Waiting'      },
+  { key: 'needs_rating',            label: 'Needs Rating' },
+  { key: 'completed',               label: 'Completed'    },
+]
+
+function pipelineStageColor(key) {
+  if (key === 'in_progress') return 'var(--acc)'
+  return contractStageColor(key)
+}
+
+function ContractPipeline({ stageCounts, onGoToDeals }) {
+  const counts = {
+    ...stageCounts,
+    in_progress: (stageCounts.waiting_on_approval || 0) + (stageCounts.active || 0),
+  }
+
+  const pipelineTotal = PIPELINE_STAGES.reduce((s, st) => s + (counts[st.key] || 0), 0)
+  const disputed  = stageCounts.disputed  || 0
+  const cancelled = stageCounts.cancelled || 0
+  const expired   = stageCounts.expired   || 0
+  const problem   = stageCounts.problem   || 0
+
+  if (!pipelineTotal && !disputed && !cancelled && !expired && !problem) {
+    return <div style={{ fontSize: 12, color: 'var(--dim)' }}>No contract data yet.</div>
+  }
+
+  const hasTerminal = disputed > 0 || cancelled > 0 || expired > 0 || problem > 0
+
   return (
-    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--b2)' }}>
-      <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 5 }}>REPLIES BY STATUS</div>
-      <div style={{ display: 'flex', height: 6, overflow: 'hidden', gap: 1 }}>
-        {ACTIVE.map(s => {
-          const cnt = byStage[s] || 0
-          if (!cnt) return null
-          return (
-            <div key={s}
-              style={{ width: `${(cnt / total * 100).toFixed(1)}%`, background: stageColor(s), minWidth: 4 }}
-              title={`${stageLabel(s)}: ${cnt}`}
-            />
-          )
-        })}
-      </div>
-      <div style={{ display: 'flex', gap: 10, marginTop: 5, flexWrap: 'wrap' }}>
-        {ACTIVE.filter(s => byStage[s]).map(s => (
-          <span key={s} style={{ fontSize: 9, color: stageColor(s), fontFamily: 'var(--mono)' }}>
-            {stageLabel(s)} {byStage[s]}
-          </span>
-        ))}
-      </div>
+    <div>
+      {/* Proportional bar — actionable stages only */}
+      {pipelineTotal > 0 && (
+        <>
+          <div style={{ display: 'flex', height: 6, gap: 1, overflow: 'hidden', marginBottom: 10 }}>
+            {PIPELINE_STAGES.map(({ key, label }) => {
+              const cnt = counts[key] || 0
+              if (!cnt) return null
+              const color = pipelineStageColor(key)
+              return (
+                <div
+                  key={key}
+                  style={{ width: `${(cnt / pipelineTotal * 100).toFixed(1)}%`, background: color, minWidth: 4, cursor: 'pointer' }}
+                  title={`${label}: ${cnt}`}
+                  onClick={() => onGoToDeals(key)}
+                />
+              )
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: hasTerminal ? 10 : 0 }}>
+            {PIPELINE_STAGES.map(({ key, label }) => {
+              const cnt = counts[key] || 0
+              const color = pipelineStageColor(key)
+              return (
+                <button
+                  key={key}
+                  className="btn"
+                  style={{ padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5 }}
+                  onClick={() => onGoToDeals(key)}
+                >
+                  <span style={{ width: 7, height: 7, background: cnt ? color : 'var(--b3)', display: 'inline-block', flexShrink: 0 }} />
+                  <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{label}</span>
+                  <span style={{ fontSize: 13, fontWeight: 700, color: cnt ? color : 'var(--b3)', fontFamily: 'var(--mono)' }}>{cnt}</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Terminal states — disputed prominent (red), cancelled/expired muted */}
+      {hasTerminal && (
+        <div style={{
+          display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+          borderTop: pipelineTotal > 0 ? '1px solid var(--b2)' : undefined,
+          paddingTop: pipelineTotal > 0 ? 8 : 0,
+        }}>
+          {disputed > 0 && (
+            <button
+              className="btn"
+              style={{ padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5 }}
+              onClick={() => onGoToDeals('disputed')}
+            >
+              <span style={{ width: 7, height: 7, background: 'var(--red)', display: 'inline-block', flexShrink: 0 }} />
+              <span style={{ fontSize: 9, color: 'var(--red)', fontFamily: 'var(--mono)', fontWeight: 700 }}>DISPUTED</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--red)', fontFamily: 'var(--mono)' }}>{disputed}</span>
+            </button>
+          )}
+          {cancelled > 0 && (
+            <button
+              className="btn"
+              style={{ padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6 }}
+              onClick={() => onGoToDeals('cancelled')}
+            >
+              <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Cancelled</span>
+              <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{cancelled}</span>
+            </button>
+          )}
+          {expired > 0 && (
+            <button
+              className="btn"
+              style={{ padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6 }}
+              onClick={() => onGoToDeals('expired')}
+            >
+              <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Expired</span>
+              <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{expired}</span>
+            </button>
+          )}
+          {problem > 0 && (
+            <button
+              className="btn"
+              style={{ padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6 }}
+              onClick={() => onGoToDeals('problem')}
+            >
+              <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Other</span>
+              <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{problem}</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
 
-// ── Recent contract row ──────────────────────────────────────────────────────
-function RecentRow({ c }) {
-  const name = c.cp_username || (c.cp_uid ? `UID ${c.cp_uid}` : '?')
+// ── Action queue row ──────────────────────────────────────────────────────────
+function ActionItem({ type, cid, cpUsername, cpUid, product, dateline }) {
+  const name  = cpUsername || (cpUid ? `UID ${cpUid}` : '?')
+  const color = type === 'needs_review' ? 'var(--yellow)' : 'var(--blue)'
+  const badge = type === 'needs_review' ? 'REVIEW' : 'RATE'
+
   return (
     <div style={{
-      display: 'flex', gap: 8, alignItems: 'center',
-      padding: '5px 0', borderBottom: '1px solid var(--b2)',
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '7px 0', borderBottom: '1px solid var(--b2)',
     }}>
-      <a href={`/dashboard/contracts/${c.cid}`}
-         style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--acc)', flexShrink: 0 }}>
-        #{c.cid}
-      </a>
-      <span style={{ fontSize: 11, color: 'var(--sub)', flexShrink: 0, fontFamily: 'var(--mono)' }}>{name}</span>
       <span style={{
-        fontSize: 10, color: 'var(--dim)', flex: 1, minWidth: 0,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{c.product || '—'}</span>
-      <span style={{ fontSize: 9, fontFamily: 'var(--mono)', color: bucketColor(c.bucket), flexShrink: 0 }}>
-        {bucketLabel(c.bucket)}
+        fontSize: 8, fontFamily: 'var(--mono)', color,
+        padding: '1px 5px', border: `1px solid ${color}`,
+        background: `${color}1a`, flexShrink: 0, letterSpacing: '.04em',
+      }}>
+        {badge}
       </span>
+      <a
+        href={`/dashboard/contracts/${cid}`}
+        style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--acc)', flexShrink: 0, textDecoration: 'none' }}
+      >
+        #{cid}
+      </a>
+      <span style={{ fontSize: 11, color: 'var(--sub)', flexShrink: 0, fontFamily: 'var(--mono)' }}>
+        {name}
+      </span>
+      {product && (
+        <span style={{ fontSize: 10, color: 'var(--dim)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {product}
+        </span>
+      )}
       <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', flexShrink: 0 }}>
-        {relTime(c.dateline)}
+        {relTime(dateline)}
       </span>
+      {type === 'needs_review' ? (
+        <a
+          href={`/dashboard/contracts/${cid}`}
+          style={{ fontSize: 9, color: 'var(--yellow)', fontFamily: 'var(--mono)', flexShrink: 0, textDecoration: 'none', whiteSpace: 'nowrap' }}
+        >
+          Open →
+        </a>
+      ) : (
+        <a
+          href={`https://hackforums.net/contracts.php?action=view&cid=${cid}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ fontSize: 9, color: 'var(--blue)', fontFamily: 'var(--mono)', flexShrink: 0, textDecoration: 'none', whiteSpace: 'nowrap' }}
+        >
+          Rate on HF →
+        </a>
+      )}
     </div>
   )
 }
 
-// ── Top buyer row ────────────────────────────────────────────────────────────
-function BuyerRow({ c, setTab }) {
+// ── Rating bucket ─────────────────────────────────────────────────────────────
+function RatingBucket({ label, count, color }) {
+  return (
+    <div style={{
+      flex: 1, padding: '8px 10px',
+      background: 'var(--bg)', border: '1px solid var(--b2)',
+      borderLeft: `2px solid ${color}`,
+    }}>
+      <div style={{ fontSize: 8, color: 'var(--dim)', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', color }}>{count}</div>
+    </div>
+  )
+}
+
+// ── Thread health row ─────────────────────────────────────────────────────────
+function ThreadHealthRow({ t, setTab }) {
+  const color = healthColor(t.health)
   return (
     <button
       className="btn"
       style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '6px 8px', marginBottom: 3, textAlign: 'left' }}
-      onClick={() => setTab('customers')}
+      onClick={() => setTab('offers')}
     >
       <span style={{
-        fontSize: 12, fontFamily: 'var(--mono)', color: 'var(--text)',
-        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        fontSize: 8, fontFamily: 'var(--mono)', color,
+        padding: '1px 5px', border: `1px solid ${color}`,
+        background: `${color}1a`, flexShrink: 0, letterSpacing: '.04em',
       }}>
-        {c.username || `UID ${c.uid}`}
+        {healthLabel(t.health).toUpperCase()}
       </span>
-      {c.is_repeat && (
-        <span style={{ fontSize: 9, color: 'var(--green)', fontFamily: 'var(--mono)', flexShrink: 0 }}>REPEAT</span>
+      <span style={{ fontSize: 11, color: 'var(--text)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {t.title || `TID ${t.tid}`}
+      </span>
+      {t.unread_replies > 0 && (
+        <span style={{ fontSize: 9, color: 'var(--yellow)', fontFamily: 'var(--mono)', flexShrink: 0 }}>
+          {t.unread_replies} unread
+        </span>
       )}
-      <span style={{ fontSize: 14, fontFamily: 'var(--mono)', color: 'var(--green)', flexShrink: 0, fontWeight: 700 }}>
-        {c.complete}
-      </span>
-      {c.active > 0 && (
-        <span style={{ fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--yellow)', flexShrink: 0 }}>+{c.active}</span>
+      {t.contracts_complete > 0 && (
+        <span style={{ fontSize: 9, color: 'var(--green)', fontFamily: 'var(--mono)', flexShrink: 0 }}>
+          {t.contracts_complete} done
+        </span>
       )}
     </button>
   )
 }
 
-// ── 7-day bar chart ──────────────────────────────────────────────────────────
+// ── 7-day bar chart ───────────────────────────────────────────────────────────
 function WeekChart({ dailyDone }) {
   if (!dailyDone || dailyDone.length < 7) return null
-  const max = Math.max(...dailyDone, 1)
-  const total = dailyDone.reduce((a, b) => a + b, 0)
+  const max    = Math.max(...dailyDone, 1)
+  const total  = dailyDone.reduce((a, b) => a + b, 0)
   const labels = ['6d', '5d', '4d', '3d', '2d', 'Yest', 'Today']
 
   return (
     <div>
       <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 8 }}>
-        COMPLETED CONTRACTS — LAST 7 DAYS
+        COMPLETED — LAST 7 DAYS
         <span style={{ marginLeft: 10, color: 'var(--green)' }}>{total} total</span>
       </div>
-      <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 72 }}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'flex-end', height: 64 }}>
         {dailyDone.map((count, i) => {
           const isToday = i === 6
-          const barH = count === 0 ? 2 : Math.max((count / max) * 58, 6)
+          const barH = count === 0 ? 2 : Math.max((count / max) * 50, 6)
           return (
-            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, height: '100%', justifyContent: 'flex-end' }}>
+            <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, height: '100%', justifyContent: 'flex-end' }}>
               {count > 0 && (
                 <span style={{ fontSize: 9, color: isToday ? 'var(--green)' : 'var(--acc)', fontFamily: 'var(--mono)', fontWeight: 700 }}>
                   {count}
@@ -168,25 +297,59 @@ function WeekChart({ dailyDone }) {
           )
         })}
       </div>
-      <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
         {labels.map((l, i) => (
-          <div key={i} style={{ flex: 1, textAlign: 'center', fontSize: 8, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
-            {l}
-          </div>
+          <div key={i} style={{ flex: 1, textAlign: 'center', fontSize: 8, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{l}</div>
         ))}
       </div>
     </div>
   )
 }
 
-// ── Main component ───────────────────────────────────────────────────────────
-export default function MerchantOverview({ setTab }) {
-  const [data, setData] = useState(null)
+// ── Recent movement row ───────────────────────────────────────────────────────
+function MovementRow({ c }) {
+  const name  = c.cp_username || (c.cp_uid ? `UID ${c.cp_uid}` : '?')
+  const color = contractStageColor(c.stage)
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: '5px 0', borderBottom: '1px solid var(--b2)',
+    }}>
+      <a
+        href={`/dashboard/contracts/${c.cid}`}
+        style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--acc)', flexShrink: 0, textDecoration: 'none' }}
+      >
+        #{c.cid}
+      </a>
+      <span style={{ fontSize: 11, color: 'var(--sub)', flexShrink: 0, fontFamily: 'var(--mono)', minWidth: 80, maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {name}
+      </span>
+      <span style={{ fontSize: 10, color: 'var(--dim)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {c.product || '—'}
+      </span>
+      <span style={{
+        fontSize: 8, fontFamily: 'var(--mono)', color,
+        padding: '1px 5px', border: `1px solid ${color}`,
+        background: `${color}1a`, flexShrink: 0, whiteSpace: 'nowrap',
+      }}>
+        {contractStageLabel(c.stage).toUpperCase()}
+      </span>
+      <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', flexShrink: 0, whiteSpace: 'nowrap' }}>
+        {relTime(c.dateline)}
+      </span>
+    </div>
+  )
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
+export default function MerchantOverview({ setTab, onGoToDeals }) {
+  const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     api.get('/api/merchant/overview')
-      .then(d => { setData(d); setLoading(false) })
+      .then(d  => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }, [])
 
@@ -194,95 +357,237 @@ export default function MerchantOverview({ setTab }) {
   if (!data)   return <div className="empty" style={{ color: 'var(--red)' }}>Failed to load overview</div>
 
   const {
-    action_queue      = [],
-    today             = {},
-    week              = {},
-    totals            = {},
-    pipeline          = {},
-    recent_contracts  = [],
-    top_customers     = [],
-    daily_completions = [],
+    today                     = {},
+    week                      = {},
+    pipeline                  = {},
+    recent_contracts          = [],
+    top_customers             = [],
+    daily_completions         = [],
+    contract_stage_counts     = {},
+    rating_summary            = {},
+    needs_review_items        = [],
+    needs_rating_items        = [],
+    thread_health             = [],
+    needs_action              = 0,
+    active_pipeline           = 0,
+    threads_needing_attention = 0,
   } = data
 
+  const pipelineTotal = pipeline.total        ?? 0
   const slaBreaches   = pipeline.sla_breaches ?? 0
-  const pipelineTotal = pipeline.total ?? 0
+  const needsMine     = rating_summary.needs_mine     ?? 0
+  const waitingTheirs = rating_summary.waiting_theirs ?? 0
+  const bothRated     = rating_summary.both_rated     ?? 0
+
+  // Needs Review first (urgent — waiting for my approval), then Needs Rating
+  const queueItems = [
+    ...needs_review_items.map(r => ({ ...r, type: 'needs_review' })),
+    ...needs_rating_items.map(r => ({ ...r, type: 'needs_rating' })),
+  ]
+
+  const queueOverflow = needs_action - queueItems.length
+
+  // Fallback if onGoToDeals not provided (shouldn't happen but defensive)
+  const goToDeals = onGoToDeals || ((s) => setTab('deals'))
 
   return (
     <div>
 
-      {/* Stat strip */}
+      {/* Stat row */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        <Chip label="ACTIVE CONTRACTS" value={today.active_contracts ?? 0} color="var(--yellow)" tab="deals"    setTab={setTab} />
-        <Chip label="OPEN REPLIES"     value={pipelineTotal}               color="var(--acc)"    tab="pipeline" setTab={setTab} />
-        <Chip label="LATE REPLIES"     value={slaBreaches}
-          color={slaBreaches > 0 ? 'var(--red)' : 'var(--green)'}
-          tab="pipeline" setTab={setTab} />
-        <Chip label="COMPLETED THIS WEEK" value={week.completed_deals ?? 0} color="var(--green)" tab="deals"   setTab={setTab} />
-        <Chip label="TOTAL CONTRACTS"  value={totals.total_contracts ?? 0}    tab="deals"   setTab={setTab} />
-        <Chip label="COMPLETED"        value={totals.completed_contracts ?? 0} color="var(--green)" tab="deals" setTab={setTab} />
-        <Chip label="SALES THREADS"    value={totals.tracked_offers ?? 0}     tab="offers"  setTab={setTab} />
+        <StatTile
+          label="Needs Action"
+          value={needs_action}
+          sub={needs_action > 0 ? 'contracts + replies' : 'all clear'}
+          color={needs_action > 0 ? 'var(--red)' : 'var(--green)'}
+          onClick={() => goToDeals('needs_review')}
+        />
+        <StatTile
+          label="Active Pipeline"
+          value={active_pipeline}
+          sub="contracts in motion"
+          color={active_pipeline > 0 ? 'var(--yellow)' : 'var(--dim)'}
+          onClick={() => goToDeals('in_progress')}
+        />
+        <StatTile
+          label="Done This Week"
+          value={week.completed_deals ?? 0}
+          color="var(--green)"
+          onClick={() => goToDeals('completed')}
+        />
+        <StatTile
+          label="Open Replies"
+          value={pipelineTotal}
+          sub={slaBreaches > 0 ? `${slaBreaches} past SLA` : undefined}
+          color={slaBreaches > 0 ? 'var(--red)' : pipelineTotal > 0 ? 'var(--acc)' : 'var(--dim)'}
+          onClick={() => setTab('pipeline')}
+        />
+        <StatTile
+          label="Ratings Due"
+          value={needsMine}
+          sub="leave b-rating"
+          color={needsMine > 0 ? 'var(--blue)' : 'var(--dim)'}
+          onClick={() => goToDeals('needs_rating')}
+        />
+        <StatTile
+          label="Thread Health"
+          value={threads_needing_attention}
+          sub={threads_needing_attention === 1 ? 'thread needs reply' : 'threads need reply'}
+          color={threads_needing_attention > 0 ? 'var(--yellow)' : 'var(--dim)'}
+          onClick={() => setTab('offers')}
+        />
       </div>
 
-      {/* Row 1: Needs Attention | Recent Activity */}
+      {/* Contract pipeline */}
+      <div className="card" style={{ marginBottom: 12 }}>
+        <div className="card-head">
+          <span className="card-title">Contract Pipeline</span>
+          <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => goToDeals(null)}>
+            All Contracts
+          </button>
+        </div>
+        <div className="card-body" style={{ padding: '10px 12px' }}>
+          <ContractPipeline stageCounts={contract_stage_counts} onGoToDeals={goToDeals} />
+        </div>
+      </div>
+
+      {/* Row: Action queue + Weekly chart */}
       <div className="mhq-overview-row">
 
-        <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
+        <div className="card">
           <div className="card-head">
-            <span>Needs Attention</span>
-            {action_queue.length === 0 && (
-              <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)' }}>all clear</span>
+            <span className="card-title">Action Queue</span>
+            {queueItems.length > 0
+              ? <span className="badge badge-yel">{queueItems.length}</span>
+              : <span style={{ fontSize: 10, color: 'var(--green)', fontFamily: 'var(--mono)' }}>all clear</span>
+            }
+          </div>
+          <div className="card-body" style={{ padding: '8px 12px' }}>
+            {queueItems.length === 0 && slaBreaches === 0
+              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No urgent contracts.</div>
+              : queueItems.map(item => (
+                  <ActionItem
+                    key={`${item.type}-${item.cid}`}
+                    type={item.type}
+                    cid={item.cid}
+                    cpUsername={item.cp_username}
+                    cpUid={item.cp_uid}
+                    product={item.product}
+                    dateline={item.dateline}
+                  />
+                ))
+            }
+            {slaBreaches > 0 && (
+              <button
+                className="btn"
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '7px 0', marginTop: queueItems.length > 0 ? 6 : 0, borderTop: queueItems.length > 0 ? '1px solid var(--b2)' : undefined }}
+                onClick={() => setTab('pipeline')}
+              >
+                <span style={{ fontSize: 11, color: 'var(--red)', fontFamily: 'var(--mono)' }}>
+                  {slaBreaches} repl{slaBreaches !== 1 ? 'ies' : 'y'} past SLA — View Replies →
+                </span>
+              </button>
+            )}
+            {queueOverflow > 0 && (
+              <button
+                className="btn"
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '6px 0', marginTop: 4, fontSize: 10, color: 'var(--dim)' }}
+                onClick={() => goToDeals(null)}
+              >
+                +{queueOverflow} more — View All Contracts →
+              </button>
             )}
           </div>
-          <div className="card-body" style={{ padding: '8px 10px' }}>
-            {action_queue.length === 0
-              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>Nothing urgent right now.</div>
-              : action_queue.map((item, i) => <ActionRow key={i} item={item} setTab={setTab} />)
-            }
-            <PipelineBar byStage={pipeline.by_stage || {}} />
-          </div>
         </div>
 
-        <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
+        <div className="card">
           <div className="card-head">
-            <span>Recent Contracts</span>
-            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('deals')}>All Contracts</button>
+            <span className="card-title">Weekly Completions</span>
           </div>
-          <div className="card-body" style={{ padding: '8px 10px' }}>
-            {recent_contracts.length === 0
-              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No contract history yet.</div>
-              : recent_contracts.map(c => <RecentRow key={c.cid} c={c} />)
-            }
-          </div>
-        </div>
-
-      </div>
-
-      {/* Row 2: Top Buyers | 7-day chart */}
-      <div className="mhq-overview-row" style={{ marginBottom: 0 }}>
-
-        <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
-          <div className="card-head">
-            <span>Repeat Buyers</span>
-            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('customers')}>All Buyers</button>
-          </div>
-          <div className="card-body" style={{ padding: '8px 10px' }}>
-            {top_customers.length === 0
-              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No buyers on your threads yet.</div>
-              : top_customers.map(c => <BuyerRow key={c.uid} c={c} setTab={setTab} />)
-            }
-          </div>
-        </div>
-
-        <div className="card" style={{ flex: '1 1 0', minWidth: 0 }}>
-          <div className="card-head">Weekly Recap</div>
-          <div className="card-body" style={{ padding: '8px 10px' }}>
+          <div className="card-body" style={{ padding: '10px 12px' }}>
             <WeekChart dailyDone={daily_completions} />
-            {daily_completions.every(n => n === 0) && (
+            {(!daily_completions.length || daily_completions.every(n => n === 0)) && (
               <div style={{ color: 'var(--dim)', fontSize: 12 }}>No completed contracts in the last 7 days.</div>
             )}
           </div>
         </div>
 
+      </div>
+
+      {/* Row: Rating status + Thread health */}
+      <div className="mhq-overview-row">
+
+        <div className="card">
+          <div className="card-head">
+            <span className="card-title">Rating Status</span>
+          </div>
+          <div className="card-body" style={{ padding: '10px 12px' }}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: needsMine > 0 ? 14 : 0 }}>
+              <RatingBucket label="Needs My Rating"  count={needsMine}     color={needsMine     > 0 ? 'var(--blue)'   : 'var(--dim)'} />
+              <RatingBucket label="Waiting on Them"  count={waitingTheirs} color={waitingTheirs > 0 ? 'var(--yellow)' : 'var(--dim)'} />
+              <RatingBucket label="Both Rated"       count={bothRated}     color={bothRated     > 0 ? 'var(--green)'  : 'var(--dim)'} />
+            </div>
+            {needsMine > 0 && needs_rating_items.length > 0 && (
+              <>
+                <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 6, letterSpacing: '.08em' }}>PENDING RATINGS</div>
+                {needs_rating_items.map(r => {
+                  const name = r.cp_username || (r.cp_uid ? `UID ${r.cp_uid}` : '?')
+                  return (
+                    <div key={r.cid} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: '1px solid var(--b2)' }}>
+                      <span style={{ fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--acc)', flexShrink: 0 }}>#{r.cid}</span>
+                      <span style={{ fontSize: 11, color: 'var(--sub)', flexShrink: 0, fontFamily: 'var(--mono)' }}>{name}</span>
+                      {r.product && (
+                        <span style={{ fontSize: 10, color: 'var(--dim)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {r.product}
+                        </span>
+                      )}
+                      <a
+                        href={`https://hackforums.net/contracts.php?action=view&cid=${r.cid}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ fontSize: 9, color: 'var(--blue)', fontFamily: 'var(--mono)', flexShrink: 0, textDecoration: 'none', whiteSpace: 'nowrap' }}
+                      >
+                        Leave Rating →
+                      </a>
+                    </div>
+                  )
+                })}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-head">
+            <span className="card-title">Sales Thread Health</span>
+            <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => setTab('offers')}>
+              All Threads
+            </button>
+          </div>
+          <div className="card-body" style={{ padding: '8px 10px' }}>
+            {thread_health.length === 0
+              ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No marketplace threads yet.</div>
+              : thread_health.map(t => <ThreadHealthRow key={t.tid} t={t} setTab={setTab} />)
+            }
+          </div>
+        </div>
+
+      </div>
+
+      {/* Recent contracts */}
+      <div className="card">
+        <div className="card-head">
+          <span className="card-title">Recent Contracts</span>
+          <button className="btn" style={{ fontSize: 9, padding: '2px 8px' }} onClick={() => goToDeals(null)}>
+            All Contracts
+          </button>
+        </div>
+        <div className="card-body" style={{ padding: '8px 12px' }}>
+          {recent_contracts.length === 0
+            ? <div style={{ color: 'var(--dim)', fontSize: 12 }}>No contract history yet.</div>
+            : recent_contracts.map(c => <MovementRow key={c.cid} c={c} />)
+          }
+        </div>
       </div>
 
     </div>

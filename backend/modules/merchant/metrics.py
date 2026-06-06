@@ -56,7 +56,7 @@ def classify_contract_stage(
     s = str(status_n or '')
     if s in _PENDING:
         if dateline and (now - int(dateline)) > _AGE_EXPIRED_S:
-            return 'problem'
+            return 'expired'
         is_init  = (str(inituid)  == str(my_uid))
         is_other = (str(otheruid) == str(my_uid))
         my_flag    = istatus if is_init else (ostatus if is_other else '')
@@ -71,6 +71,12 @@ def classify_contract_stage(
         return 'waiting_on_counterparty' if completed_side else 'active'
     if s == '6':
         return 'completed'
+    if s in ('2', '3', '4'):
+        return 'cancelled'
+    if s == '7':
+        return 'disputed'
+    if s == '8':
+        return 'expired'
     return 'problem'
 
 

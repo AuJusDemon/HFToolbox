@@ -298,6 +298,78 @@ def get_overview(uid: str) -> dict:
         if w >= 60:
             waste_warnings += 1
 
+    # ── Contract stage pipeline (mirrors Contracts tab classify logic) ──────────
+    workflows       = get_all_contract_workflows(uid)
+    sent_cids       = get_sent_brating_cids(uid)
+    bratings_by_cid = get_bratings_by_cid(uid)
+
+    contract_stage_counts: dict[str, int] = {}
+    _needs_review_raw: list[dict] = []
+    _needs_rating_raw: list[dict] = []
+
+    for c in contracts:
+        cid   = str(c.get('cid', ''))
+        wf    = workflows.get(cid, {})
+        s     = str(c.get('status_n', ''))
+        dl    = int(c.get('dateline') or 0)
+        stage = classify_contract_stage(
+            s, dl,
+            str(c.get('inituid', '') or ''), str(c.get('otheruid', '') or ''), uid,
+            bool(wf.get('completed_side_at')), now,
+            str(c.get('istatus', '') or ''), str(c.get('ostatus', '') or ''),
+        )
+        if stage == 'completed' and cid not in sent_cids:
+            stage = 'needs_rating'
+        contract_stage_counts[stage] = contract_stage_counts.get(stage, 0) + 1
+        cp = counterparty_uid(c, uid)
+        if stage == 'needs_review' and len(_needs_review_raw) < 5:
+            _needs_review_raw.append({
+                'cid': cid, 'cp_uid': cp,
+                'product': (c.get('iproduct') or c.get('oproduct') or '').strip(),
+                'dateline': dl,
+            })
+        elif stage == 'needs_rating' and len(_needs_rating_raw) < 5:
+            _needs_rating_raw.append({
+                'cid': cid, 'cp_uid': cp,
+                'product': (c.get('iproduct') or c.get('oproduct') or '').strip(),
+                'dateline': dl,
+            })
+
+    _rating_needs_mine   = contract_stage_counts.get('needs_rating', 0)
+    _rating_waiting_them = 0
+    _rating_both         = 0
+    for c in contracts:
+        if str(c.get('status_n', '')) == '6':
+            cid = str(c.get('cid', ''))
+            if cid in sent_cids:
+                if cid in bratings_by_cid:
+                    _rating_both += 1
+                else:
+                    _rating_waiting_them += 1
+
+    # ── Thread health list ──────────────────────────────────────────────────────
+    _health_order = {'needs_attention': 0, 'wasting_spend': 1, 'healthy': 2, 'new': 3, 'stale': 4}
+    thread_health_list: list[dict] = []
+    for t in threads:
+        tid = str(t.get('tid', ''))
+        rs  = rstats_by_tid.get(tid, {})
+        cs  = cstats_by_tid.get(tid, {})
+        bs  = bstats_by_tid.get(tid, {})
+        health = offer_health(t, cs, rs, bs, sla_hours)
+        thread_health_list.append({
+            'tid':                tid,
+            'title':              t.get('title', '')[:60],
+            'health':             health,
+            'unread_replies':     rs.get('unread_replies', 0),
+            'contracts_active':   cs.get('active', 0) + cs.get('awaiting', 0),
+            'contracts_complete': cs.get('complete', 0),
+            'latest_bump_at':     bs.get('latest_bump_at', 0),
+            'bumps_7d':           bs.get('bumps_7d', 0),
+        })
+    thread_health_list.sort(key=lambda x: (_health_order.get(x['health'], 5), -x['unread_replies']))
+    threads_needing_attention = sum(1 for th in thread_health_list if th['health'] == 'needs_attention')
+    thread_health_list = thread_health_list[:8]
+
     action_queue = overview_action_queue(
         unread_replies=len(unread_replies),
         active_contracts=len(active_contracts),
@@ -396,21 +468,36 @@ def get_overview(uid: str) -> dict:
         u for u in
         [counterparty_uid(c, uid) for c in recent_slice]
         + [cp for cp, _ in top_cp_pairs]
+        + [r['cp_uid'] for r in _needs_review_raw]
+        + [r['cp_uid'] for r in _needs_rating_raw]
         if u
     })
     name_cache = _get_usernames(all_lookup_uids) if all_lookup_uids else {}
 
     recent_contracts = []
     for c in recent_slice:
-        cp = counterparty_uid(c, uid)
+        cid = str(c.get('cid', ''))
+        cp  = counterparty_uid(c, uid)
+        wf  = workflows.get(cid, {})
+        s   = str(c.get('status_n', ''))
+        dl  = int(c.get('dateline') or 0)
+        rc_stage = classify_contract_stage(
+            s, dl,
+            str(c.get('inituid', '') or ''), str(c.get('otheruid', '') or ''), uid,
+            bool(wf.get('completed_side_at')), now,
+            str(c.get('istatus', '') or ''), str(c.get('ostatus', '') or ''),
+        )
+        if rc_stage == 'completed' and cid not in sent_cids:
+            rc_stage = 'needs_rating'
         recent_contracts.append({
-            'cid': c.get('cid', ''),
-            'cp_uid': cp,
+            'cid':         cid,
+            'cp_uid':      cp,
             'cp_username': name_cache.get(cp, ''),
-            'bucket': contract_bucket(str(c.get('status_n', '')), int(c.get('dateline') or 0)),
-            'product': (c.get('iproduct') or c.get('oproduct') or '').strip(),
-            'dateline': c.get('dateline', 0),
-            'tid': str(c.get('tid', '')),
+            'stage':       rc_stage,
+            'bucket':      contract_bucket(s, dl),
+            'product':     (c.get('iproduct') or c.get('oproduct') or '').strip(),
+            'dateline':    dl,
+            'tid':         str(c.get('tid', '')),
         })
 
     top_customers_out = [{
@@ -421,6 +508,25 @@ def get_overview(uid: str) -> dict:
         'is_repeat': stats['is_repeat'],
         'last_deal_at': stats['last_deal_at'],
     } for cp, stats in top_cp_pairs]
+
+    needs_review_items = [
+        {**r, 'cp_username': name_cache.get(r['cp_uid'], '')}
+        for r in _needs_review_raw
+    ]
+    needs_rating_items = [
+        {**r, 'cp_username': name_cache.get(r['cp_uid'], '')}
+        for r in _needs_rating_raw
+    ]
+    needs_action_total = (
+        contract_stage_counts.get('needs_review', 0)
+        + sla_breaches
+        + _rating_needs_mine
+    )
+    active_pipeline_total = (
+        contract_stage_counts.get('waiting_on_approval', 0)
+        + contract_stage_counts.get('active', 0)
+        + contract_stage_counts.get('waiting_on_counterparty', 0)
+    )
 
     return {
         'action_queue': action_queue,
@@ -445,7 +551,19 @@ def get_overview(uid: str) -> dict:
         },
         'recent_contracts': recent_contracts,
         'top_customers': top_customers_out,
-        'daily_completions': daily_completions,
+        'daily_completions':         daily_completions,
+        'contract_stage_counts':     contract_stage_counts,
+        'rating_summary': {
+            'needs_mine':     _rating_needs_mine,
+            'waiting_theirs': _rating_waiting_them,
+            'both_rated':     _rating_both,
+        },
+        'needs_review_items':        needs_review_items,
+        'needs_rating_items':        needs_rating_items,
+        'thread_health':             thread_health_list,
+        'needs_action':              needs_action_total,
+        'active_pipeline':           active_pipeline_total,
+        'threads_needing_attention': threads_needing_attention,
     }
 
 

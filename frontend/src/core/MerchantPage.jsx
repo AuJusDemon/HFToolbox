@@ -40,13 +40,27 @@ function FreshnessBadge() {
 }
 
 export default function MerchantPage() {
-  const [tab, setTab] = useState('overview')
+  const [tab, setTab]             = useState('overview')
+  const [dealStage, setDealStage] = useState(null)
+
+  // Navigate to Contracts with a pre-selected stage filter (from Overview pipeline)
+  const goToDealsWithStage = (stage) => {
+    setDealStage(stage)
+    setTab('deals')
+  }
+
+  // Tab bar click resets the deal filter so direct nav always shows All
+  const handleTabClick = (id) => {
+    if (id !== 'deals') setDealStage(null)
+    else setDealStage(null)
+    setTab(id)
+  }
 
   const content = {
-    overview:  <MerchantOverview setTab={setTab} />,
+    overview:  <MerchantOverview setTab={setTab} onGoToDeals={goToDealsWithStage} />,
     offers:    <MerchantOffers />,
     pipeline:  <MerchantPipeline />,
-    deals:     <MerchantDeals />,
+    deals:     <MerchantDeals initialStage={dealStage} />,
     customers: <MerchantCustomers />,
     promotion: <MerchantPromotion />,
     reports:   <MerchantReports />,
@@ -75,7 +89,7 @@ export default function MerchantPage() {
           <button
             key={t.id}
             className={`tab${tab === t.id ? ' on' : ''}`}
-            onClick={() => setTab(t.id)}
+            onClick={() => handleTabClick(t.id)}
           >
             {t.label}
           </button>

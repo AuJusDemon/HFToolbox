@@ -18,6 +18,9 @@ const STAGES = [
   { val: 'waiting_on_counterparty',  label: 'Waiting on Counterparty' },
   { val: 'needs_rating',             label: 'Needs Rating' },
   { val: 'completed',                label: 'Completed' },
+  { val: 'disputed',                 label: 'Disputed' },
+  { val: 'cancelled',                label: 'Cancelled' },
+  { val: 'expired',                  label: 'Expired' },
   { val: 'problem',                  label: 'Problem' },
 ]
 
@@ -48,7 +51,7 @@ function reclassifyFromRefreshed(raw, myUid, completedSideAt) {
   const isOther = other === String(myUid)
 
   if (s === '0' || s === '1') {
-    if (dl && (now - dl) > STALE_SECS) return 'problem'
+    if (dl && (now - dl) > STALE_SECS) return 'expired'
     const myFlag    = isInit ? ist : (isOther ? ost : '')
     const theirFlag = isInit ? ost : (isOther ? ist : '')
     if (myFlag === '0') return 'needs_review'
@@ -59,6 +62,9 @@ function reclassifyFromRefreshed(raw, myUid, completedSideAt) {
   // After a contract action that results in status 6, we can't know sent-rating state from raw
   // contract data. Classify as needs_rating; background fetchDeals corrects once rating is known.
   if (s === '6') return 'needs_rating'
+  if (s === '2' || s === '3' || s === '4') return 'cancelled'
+  if (s === '7') return 'disputed'
+  if (s === '8') return 'expired'
   return 'problem'
 }
 
@@ -761,13 +767,9 @@ function PMTemplatesModal({ templates, onClose, onRefresh }) {
 function DealCard({ deal, onClick }) {
   const sc         = contractStageColor(deal.stage)
   const product    = deal.iproduct || deal.oproduct || ''
-  const isDisputed = deal.status_n === '7'
-
-  const badgeLabel = deal.stage === 'problem'
-    ? bucketLabel(deal.bucket)
-    : contractStageLabel(deal.stage)
-
-  const borderColor = isDisputed ? 'var(--red)' : sc
+  const isDisputed = deal.stage === 'disputed'
+  const badgeLabel = contractStageLabel(deal.stage)
+  const borderColor = sc
 
   return (
     <div
@@ -831,12 +833,12 @@ function DealCard({ deal, onClick }) {
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function MerchantDeals() {
+export default function MerchantDeals({ initialStage = null }) {
   const myUid = useStore(s => s.user?.uid)
 
   const [allDeals, setAllDeals]                     = useState([])
   const [loading, setLoading]                       = useState(true)
-  const [stage, setStage]                           = useState(null)
+  const [stage, setStage]                           = useState(initialStage)
   const [templates, setTemplates]                   = useState([])
   const [showTemplatesModal, setShowTemplatesModal] = useState(false)
   const [modalDeal, setModalDeal]                   = useState(null)
