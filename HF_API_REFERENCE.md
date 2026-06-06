@@ -327,8 +327,12 @@ Scope: Contracts Permissions
 
 Fields: `crid`, `contractid`, `fromid`, `toid`, `dateline`, `amount`, `message`, `contract` (embedded), `from` (embedded User), `to` (embedded User)
 
-> `amount` is the b-rating value (typically `1` or `-1`) — it is **not** a byte amount despite the numeric field name.  
-> Use `_to:[uid]` to fetch ratings received by a user. This is the reliable source for determining whether a contract has been rated — do not rely on `contracts.brating` alone (the brating field in the contracts list response is not consistently populated via `_uid` pagination).  
+> **Read-only.** There is no write API for b-ratings. Ratings must be submitted on the HF contract page directly.
+> `amount` is the b-rating value (typically `1` or `-1`) — it is **not** a byte amount.
+> `_to:[uid]` returns ratings **received** by uid (`fromid` = counterparty, `toid` = uid). Use this to display what ratings have been left for a user.
+> `_from:[uid]` returns ratings **left by** uid (`fromid` = uid, `toid` = counterparty). Use this to determine whether the current user has rated a contract.
+> `_cid:[cid]` returns all ratings for a specific contract regardless of direction.
+> **Needs Rating logic must use `_from`**, not `_to`. A completed contract shows "Needs Rating" only when no row with `fromid == my_uid` exists for that `contractid`. Checking received ratings (`_to`) tells you whether the counterparty has rated you, which is a different question.
 > Match ratings to contracts by `contractid`.
 
 ---

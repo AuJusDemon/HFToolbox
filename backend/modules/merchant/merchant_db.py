@@ -152,6 +152,7 @@ def init_merchant_db() -> None:
             "ALTER TABLE merchant_goals ADD COLUMN max_bumps_without_lead INT NOT NULL DEFAULT 10",
             "ALTER TABLE merchant_goals ADD COLUMN weekly_new_lead_goal INT NOT NULL DEFAULT 0",
             "ALTER TABLE merchant_goals ADD COLUMN templates_seeded TINYINT NOT NULL DEFAULT 0",
+            "ALTER TABLE merchant_goals ADD COLUMN sent_ratings_fetched TINYINT NOT NULL DEFAULT 0",
         ]:
             try:
                 conn.execute(_col)
@@ -596,11 +597,11 @@ def upsert_bratings(uid: str, ratings: list) -> None:
 
 
 def get_bratings_by_cid(uid: str) -> dict:
-    """Return {contractid: rating_row} for all received ratings for uid."""
+    """Return {contractid: rating_row} for ratings received by uid (fromid != uid)."""
     with _db() as conn:
         rows = conn.execute(
-            "SELECT * FROM merchant_bratings WHERE uid=? ORDER BY dateline DESC",
-            (uid,)
+            "SELECT * FROM merchant_bratings WHERE uid=? AND fromid!=? ORDER BY dateline DESC",
+            (uid, uid)
         ).fetchall()
     result: dict = {}
     for r in rows:
@@ -608,3 +609,43 @@ def get_bratings_by_cid(uid: str) -> dict:
         if cid not in result:
             result[cid] = dict(r)
     return result
+
+
+def get_sent_brating_cids(uid: str) -> set:
+    """Return set of contractids where the current user has left a b-rating."""
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT contractid FROM merchant_bratings WHERE uid=? AND fromid=?",
+            (uid, uid)
+        ).fetchall()
+        return {str(r['contractid']) for r in rows}
+
+
+def has_sent_ratings_data(uid: str) -> bool:
+    """Return True if sent ratings have been fetched at least once for this user."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT sent_ratings_fetched FROM merchant_goals WHERE uid=?", (uid,)
+        ).fetchone()
+        if row and int(row.get('sent_ratings_fetched') or 0):
+            return True
+        # Also treat as known if sent ratings actually exist in the table
+        row2 = conn.execute(
+            "SELECT 1 FROM merchant_bratings WHERE uid=? AND fromid=? LIMIT 1",
+            (uid, uid)
+        ).fetchone()
+        return row2 is not None
+
+
+def mark_sent_ratings_fetched(uid: str) -> None:
+    with _db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO merchant_goals
+               (uid, reply_sla_hours, weekly_bump_budget, weekly_completed_deal_goal,
+                max_stale_offer_days, max_bumps_without_lead, weekly_new_lead_goal)
+               VALUES (?,24,0,0,30,10,0)""",
+            (uid,)
+        )
+        conn.execute(
+            "UPDATE merchant_goals SET sent_ratings_fetched=1 WHERE uid=?", (uid,)
+        )

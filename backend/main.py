@@ -2426,6 +2426,44 @@ async def mark_seen(request: Request):
     return {"ok": True}
 
 
+def _parse_brating_rows(rows_raw, uid: str) -> list:
+    """Parse HF bratings response rows into upsert-ready dicts."""
+    if isinstance(rows_raw, dict): rows_raw = [rows_raw]
+    result = []
+    for r in (rows_raw or []):
+        crid = str(r.get("crid") or "")
+        if not crid:
+            continue
+        from_user = r.get("from") or {}
+        if isinstance(from_user, list):
+            from_user = from_user[0] if from_user else {}
+        try:
+            amt = int(float(r.get("amount") or 0))
+        except (TypeError, ValueError):
+            amt = 0
+        result.append({
+            "crid":          crid,
+            "contractid":    str(r.get("contractid") or ""),
+            "from_uid":      str(from_user.get("uid") or r.get("fromid") or ""),
+            "toid":          str(r.get("toid")        or ""),
+            "amount":        amt,
+            "message":       str(r.get("message")     or ""),
+            "dateline":      int(r.get("dateline")    or 0),
+            "from_username": str(from_user.get("username") or ""),
+        })
+    return result
+
+
+async def _store_bratings(uid: str, parsed: list) -> None:
+    """Store parsed brating rows and mark sent-ratings as fetched if any are from uid."""
+    if not parsed:
+        return
+    from modules.merchant.merchant_db import upsert_bratings as _ub, mark_sent_ratings_fetched as _ms
+    await asyncio.to_thread(_ub, uid, parsed)
+    if any(r["from_uid"] == uid for r in parsed):
+        await asyncio.to_thread(_ms, uid)
+
+
 @app.get("/api/contracts/{cid}")
 async def get_contract_detail(request: Request, cid: int):
     """Fetch contract detail. Cached globally per CID with stale-while-revalidate."""
@@ -2447,7 +2485,21 @@ async def get_contract_detail(request: Request, cid: int):
     contract = data.get("contract")
     if not contract:
         return JSONResponse({"error": "Contract not found"}, status_code=404)
-    # Pick counterparty relative to the requesting user
+
+    if force:
+        try:
+            from HFClient import HFClient as _HFC
+            _br = await asyncio.wait_for(_HFC(token).read({"bratings": {
+                "_cid": [int(cid)],
+                "crid": True, "contractid": True, "fromid": True, "toid": True,
+                "dateline": True, "amount": True, "message": True,
+                "from": {"uid": True, "username": True},
+            }}), timeout=8)
+            if _br:
+                await _store_bratings(uid, _parse_brating_rows(_br.get("bratings", []), uid))
+        except Exception as e:
+            log.warning("contract detail brating fetch failed cid=%s: %s", cid, e)
+
     init_uid  = str(contract.get("inituid")  or "")
     other_uid = str(contract.get("otheruid") or "")
     if uid == init_uid:
@@ -2494,28 +2546,35 @@ async def contract_action(request: Request, cid: int):
         import hf_service
         hf_service.invalidate_after_write("contract_action", uid=uid, cid=str(cid))
 
-        # Write-through: force-fetch the updated contract and persist it locally so the
-        # frontend can use refreshed data without waiting for the next crawl cycle.
         refreshed = None
         try:
-            fresh = await asyncio.wait_for(client.read({"contracts": {
-                "_cid": [int(cid)],
-                "cid": True, "status": True, "type": True,
-                "istatus": True, "ostatus": True,
-                "inituid": True, "otheruid": True,
-                "iprice": True, "icurrency": True, "iproduct": True,
-                "oprice": True, "ocurrency": True, "oproduct": True,
-                "iaddress": True, "oaddress": True,
-                "terms": True, "timeout_days": True, "timeout": True,
-                "public": True, "idispute": True, "odispute": True,
-                "dateline": True, "tid": True, "brating": True,
-            }}), timeout=8)
+            fresh = await asyncio.wait_for(client.read({
+                "contracts": {
+                    "_cid": [int(cid)],
+                    "cid": True, "status": True, "type": True,
+                    "istatus": True, "ostatus": True,
+                    "inituid": True, "otheruid": True,
+                    "iprice": True, "icurrency": True, "iproduct": True,
+                    "oprice": True, "ocurrency": True, "oproduct": True,
+                    "iaddress": True, "oaddress": True,
+                    "terms": True, "timeout_days": True, "timeout": True,
+                    "public": True, "idispute": True, "odispute": True,
+                    "dateline": True, "tid": True, "brating": True,
+                },
+                "bratings": {
+                    "_cid": [int(cid)],
+                    "crid": True, "contractid": True, "fromid": True, "toid": True,
+                    "dateline": True, "amount": True, "message": True,
+                    "from": {"uid": True, "username": True},
+                },
+            }), timeout=8)
             if fresh:
                 fresh_list = fresh.get("contracts", [])
                 if isinstance(fresh_list, dict): fresh_list = [fresh_list]
                 if fresh_list:
                     await asyncio.to_thread(db.upsert_contracts, uid, fresh_list)
                     refreshed = fresh_list[0]
+                await _store_bratings(uid, _parse_brating_rows(fresh.get("bratings", []), uid))
         except Exception as e:
             log.warning("contract action write-through failed cid=%s: %s", cid, e)
 
@@ -2529,7 +2588,7 @@ async def contract_action(request: Request, cid: int):
 
 @app.post("/api/merchant/ratings/refresh")
 async def merchant_ratings_refresh(request: Request):
-    """Fetch received b-ratings from HF and store locally for Seller HQ Needs Rating detection."""
+    """Fetch sent and received b-ratings from HF for Seller HQ Needs Rating detection."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -2537,53 +2596,80 @@ async def merchant_ratings_refresh(request: Request):
     if not token:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
-    # 15-minute cache — avoid hammering the API on every Seller HQ load
-    cached = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_refresh", 900)
+    cached = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_refresh", 120)
     if cached:
         return {"ok": True, "cached": True, "count": cached.get("count", 0)}
+
+    def _parse_rows(data, direction_uid):
+        rows = (data or {}).get("bratings", [])
+        if isinstance(rows, dict): rows = [rows]
+        result = []
+        for r in (rows or []):
+            from_user = r.get("from") or {}
+            if isinstance(from_user, list):
+                from_user = from_user[0] if from_user else {}
+            try:
+                amt = int(float(r.get("amount") or 0))
+            except (TypeError, ValueError):
+                amt = 0
+            crid = str(r.get("crid") or "")
+            if not crid:
+                continue
+            result.append({
+                "crid":          crid,
+                "contractid":    str(r.get("contractid") or ""),
+                "from_uid":      str(from_user.get("uid") or r.get("fromid") or direction_uid or ""),
+                "toid":          str(r.get("toid")        or ""),
+                "amount":        amt,
+                "message":       str(r.get("message")     or ""),
+                "dateline":      int(r.get("dateline")    or 0),
+                "from_username": str(from_user.get("username") or ""),
+            })
+        return result
 
     try:
         from HFClient import HFClient
         client  = HFClient(token)
         uid_int = int(uid)
         all_ratings: list = []
-        for page in range(1, 4):  # cap at 90 ratings (3 pages × 30)
+
+        # Ratings received by me (_to) — paginate until exhausted, cap at 30 pages (900 ratings)
+        for page in range(1, 31):
             data = await asyncio.wait_for(client.read({"bratings": {
                 "_to": [uid_int], "_page": page, "_perpage": 30,
                 "crid": True, "contractid": True, "fromid": True, "toid": True,
                 "dateline": True, "amount": True, "message": True,
                 "from": {"uid": True, "username": True},
             }}), timeout=10)
-            if not data:
+            rows = _parse_rows(data, None)
+            all_ratings.extend(rows)
+            if not rows or len(rows) < 30:
                 break
-            rows = data.get("bratings", [])
-            if isinstance(rows, dict): rows = [rows]
-            if not rows:
-                break
-            for r in (rows or []):
-                from_user = r.get("from") or {}
-                if isinstance(from_user, list):
-                    from_user = from_user[0] if from_user else {}
-                try:
-                    amt = int(float(r.get("amount") or 0))
-                except (TypeError, ValueError):
-                    amt = 0
-                all_ratings.append({
-                    "crid":          str(r.get("crid")       or ""),
-                    "contractid":    str(r.get("contractid") or ""),
-                    "from_uid":      str(from_user.get("uid") or r.get("fromid") or ""),
-                    "toid":          str(r.get("toid")        or ""),
-                    "amount":        amt,
-                    "message":       str(r.get("message")    or ""),
-                    "dateline":      int(r.get("dateline")   or 0),
-                    "from_username": str(from_user.get("username") or ""),
-                })
-            if len(rows) < 30:
-                break
+
+        # Ratings left by me (_from) — paginate until exhausted, cap at 30 pages
+        sent_ok = False
+        try:
+            for page in range(1, 31):
+                data_sent = await asyncio.wait_for(client.read({"bratings": {
+                    "_from": [uid_int], "_page": page, "_perpage": 30,
+                    "crid": True, "contractid": True, "fromid": True, "toid": True,
+                    "dateline": True, "amount": True, "message": True,
+                }}), timeout=10)
+                rows_sent = _parse_rows(data_sent, uid)
+                all_ratings.extend(rows_sent)
+                if not rows_sent or len(rows_sent) < 30:
+                    break
+            sent_ok = True
+        except Exception as e:
+            log.warning("merchant ratings refresh: sent fetch failed uid=%s: %s", uid, e)
 
         if all_ratings:
             from modules.merchant.merchant_db import upsert_bratings as _upsert
             await asyncio.to_thread(_upsert, uid, all_ratings)
+
+        if sent_ok:
+            from modules.merchant.merchant_db import mark_sent_ratings_fetched as _mark
+            await asyncio.to_thread(_mark, uid)
 
         await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_refresh",
                                 {"count": len(all_ratings)})

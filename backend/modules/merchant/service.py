@@ -39,6 +39,7 @@ from modules.merchant.merchant_db import (
     get_all_lead_group_metas,
     get_all_contract_workflows,
     get_bratings_by_cid,
+    get_sent_brating_cids,
 )
 
 
@@ -713,9 +714,12 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
     buyer_uids = list({counterparty_uid(c, uid) for c in contracts if counterparty_uid(c, uid)})
     names = _get_usernames(buyer_uids)
     workflows = get_all_contract_workflows(uid)
-    # Received b-ratings keyed by contractid. Empty dict means no ratings fetched yet.
-    bratings = get_bratings_by_cid(uid)
-    has_rating_data = bool(bratings)
+    # Received ratings (counterparty rated me): {contractid: row}
+    bratings  = get_bratings_by_cid(uid)
+    # Sent ratings (I rated): set of contractids.
+    # A status-6 contract is only truly Completed once I have left a rating.
+    # Default to needs_rating for any unrated status-6; sync populates this set.
+    sent_cids = get_sent_brating_cids(uid)
 
     # tid -> title from my_threads + tid_titles cache
     with _db() as conn:
@@ -747,10 +751,10 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
             str(c.get('istatus', '') or ''),
             str(c.get('ostatus', '') or ''),
         )
-        # needs_rating only when we have proven rating data and this contract has none.
-        # If merchant_bratings is empty (user hasn't refreshed yet), keep as completed
-        # to avoid false positives from unreliable contracts_history.brating alone.
-        if stage == 'completed' and has_rating_data and cid not in bratings:
+        # Status 6 = both sides marked complete, but not truly finished until I leave a rating.
+        # Mirrors HF: Awaiting Approval -> Active Deal -> Credibility -> Completed.
+        # Default is needs_rating; moves to completed only once rating is confirmed via Sync.
+        if stage == 'completed' and cid not in sent_cids:
             stage = 'needs_rating'
 
         bucket = contract_bucket(status_n, dateline)
@@ -795,6 +799,7 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
             'idispute':                       _parse_dispute(c.get('idispute', '')),
             'odispute':                       _parse_dispute(c.get('odispute', '')),
             'completed_side_at':              completed_side_at,
+            'has_sent_rating':                cid in sent_cids,
             'has_received_rating':            bool(brating),
             'received_rating_amount':         brating.get('amount') if brating else None,
             'received_rating_from_uid':       brating.get('fromid', '') if brating else '',

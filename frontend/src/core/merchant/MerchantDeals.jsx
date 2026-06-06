@@ -56,8 +56,9 @@ function reclassifyFromRefreshed(raw, myUid, completedSideAt) {
     return isOther ? 'needs_review' : 'waiting_on_approval'
   }
   if (s === '5') return completedSideAt ? 'waiting_on_counterparty' : 'active'
-  // For status 6, needs_rating depends on local DB brating data — defer to background fetchDeals
-  if (s === '6') return 'completed'
+  // After a contract action that results in status 6, we can't know sent-rating state from raw
+  // contract data. Classify as needs_rating; background fetchDeals corrects once rating is known.
+  if (s === '6') return 'needs_rating'
   return 'problem'
 }
 
@@ -119,14 +120,16 @@ function ModalHeader({ title, onClose }) {
 }
 
 // ── Progress steps ────────────────────────────────────────────────────────────
-function ProgressBar({ stage, status_n }) {
+function ProgressBar({ stage, status_n, hasSentRating }) {
   const s = String(status_n || '')
   const steps = [
-    { key: 'review',    label: 'Review',       done: !['0','1'].includes(s) },
-    { key: 'active',    label: 'Active',        done: ['5','6'].includes(s) },
-    { key: 'my_side',   label: 'My Side',       done: stage === 'waiting_on_counterparty' || s === '6' },
-    { key: 'complete',  label: 'Complete',      done: s === '6' },
-    { key: 'rated',     label: 'Rated',         done: stage === 'completed' },
+    { key: 'review',    label: 'Review',   done: !['0','1'].includes(s) },
+    { key: 'active',    label: 'Active',   done: ['5','6'].includes(s) },
+    { key: 'my_side',   label: 'My Side',  done: stage === 'waiting_on_counterparty' || s === '6' },
+    { key: 'complete',  label: 'Complete', done: s === '6' },
+    // Rated only when we have confirmed the user left a rating — not just because
+    // the stage fallback is 'completed' while sent-rating data hasn't been fetched yet.
+    { key: 'rated',     label: 'Rated',    done: !!hasSentRating },
   ]
   const currentIdx = steps.findLastIndex(st => st.done)
 
@@ -190,14 +193,7 @@ function PaymentInfo({ iaddr, oaddr, isPending }) {
   if (!iaddr && !oaddr) {
     return (
       <div style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
-        No payment info returned by HF.{' '}
-        <a
-          href={`https://hackforums.net/contracts.php?action=view&cid=${deal.cid}`}
-          target="_blank" rel="noopener noreferrer"
-          style={{ color: 'var(--acc)' }}
-        >
-          View on HF
-        </a>
+        No payment info on record. Use Sync from HF or view on HackForums.
       </div>
     )
   }
@@ -243,7 +239,7 @@ function PaymentInfo({ iaddr, oaddr, isPending }) {
 }
 
 // ── Contract Modal ────────────────────────────────────────────────────────────
-function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpenTemplates }) {
+function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpenTemplates, onSyncDone }) {
   // liveDetail holds data from a manual "Sync from HF" — null until user requests it
   const [liveDetail,   setLiveDetail]   = useState(null)
   const [syncing,      setSyncing]      = useState(false)
@@ -255,11 +251,10 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
   const [fuTid,         setFuTid]         = useState('')
   const [fuCopied,      setFuCopied]      = useState('')
 
-  // Manual sync — spends 1 HF read, only on explicit user request
   const doSync = () => {
     setSyncing(true)
     api.get(`/api/contracts/${deal.cid}?force=true`)
-      .then(d => { setLiveDetail(d); setSyncing(false) })
+      .then(d => { setLiveDetail(d); setSyncing(false); onSyncDone?.() })
       .catch(() => setSyncing(false))
   }
 
@@ -363,7 +358,9 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
       {pmUrl    && <a href={pmUrl}    target="_blank" rel="noopener noreferrer" className="btn btn-sm">PM</a>}
       {convoUrl && <a href={convoUrl} target="_blank" rel="noopener noreferrer" className="btn btn-sm">Convo</a>}
       {deal.stage === 'needs_rating' && (
-        <a href={hfUrl} target="_blank" rel="noopener noreferrer" className="btn btn-sm" style={{ color: 'var(--blue, #4b8cf5)' }}>
+        <a href={hfUrl} target="_blank" rel="noopener noreferrer"
+          className="btn btn-sm btn-acc"
+          style={{ order: -1 }}>
           Leave Rating on HF
         </a>
       )}
@@ -414,7 +411,7 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
       </div>
 
       {/* Progress bar */}
-      <ProgressBar stage={deal.stage} status_n={deal.status_n} />
+      <ProgressBar stage={deal.stage} status_n={deal.status_n} hasSentRating={deal.has_sent_rating} />
 
       {/* Product / obligations */}
       {(deal.iproduct || deal.oproduct || deal.iprice || deal.oprice) && (
@@ -509,24 +506,37 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
         </div>
       )}
 
-      {/* Received rating */}
-      {deal.has_received_rating && (
-        <div style={{
-          fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--acc)',
-          padding: '6px 10px', background: 'rgba(0,212,180,.05)',
-          border: '1px solid rgba(0,212,180,.18)', marginBottom: 10,
-        }}>
-          Rating received: {deal.received_rating_amount > 0 ? '+' : ''}{deal.received_rating_amount}
-          {deal.received_rating_from_username
-            ? ` from ${deal.received_rating_from_username}`
-            : deal.received_rating_from_uid
-              ? ` from UID ${deal.received_rating_from_uid}`
-              : ''
-          }
-          {deal.received_rating_message
-            ? <span style={{ color: 'var(--sub)' }}> — {deal.received_rating_message}</span>
-            : null
-          }
+      {/* Rating status — shown for completed and needs_rating contracts */}
+      {(deal.stage === 'needs_rating' || deal.stage === 'completed') && (
+        <div style={{ marginBottom: 10, fontSize: 11, fontFamily: 'var(--mono)' }}>
+          <div style={{ fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 5 }}>
+            Rating Status
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ color: deal.has_sent_rating ? 'var(--acc)' : 'var(--yellow)' }}>
+              {deal.has_sent_rating
+                ? '✓ You have left a rating'
+                : '○ You have not rated this contract'}
+            </div>
+            {deal.has_received_rating ? (
+              <div style={{ color: 'var(--acc)' }}>
+                ✓ Rating received:{' '}
+                {deal.received_rating_amount > 0 ? '+' : ''}{deal.received_rating_amount}
+                {deal.received_rating_from_username
+                  ? ` from ${deal.received_rating_from_username}`
+                  : deal.received_rating_from_uid
+                    ? ` from UID ${deal.received_rating_from_uid}`
+                    : ''
+                }
+                {deal.received_rating_message
+                  ? <span style={{ color: 'var(--sub)' }}> — {deal.received_rating_message}</span>
+                  : null
+                }
+              </div>
+            ) : (
+              <div style={{ color: 'var(--dim)' }}>○ No rating received from counterparty yet</div>
+            )}
+          </div>
         </div>
       )}
 
@@ -831,6 +841,7 @@ export default function MerchantDeals() {
   const [showTemplatesModal, setShowTemplatesModal] = useState(false)
   const [modalDeal, setModalDeal]                   = useState(null)
   const [actionBanner, setActionBanner]             = useState(null)
+  const [ratingsRefreshing, setRatingsRefreshing]   = useState(false)
 
   const fetchDeals = useCallback(() => {
     setLoading(true)
@@ -845,14 +856,17 @@ export default function MerchantDeals() {
       .catch(() => {})
   }, [])
 
-  useEffect(() => {
-    fetchDeals()
-    fetchTemplates()
-    // Sync received ratings in background; only re-fetch deals if server got fresh data
-    // (server caches for 15 min, so this avoids HF calls on every tab open)
+  const syncRatings = useCallback(() => {
+    setRatingsRefreshing(true)
     api.post('/api/merchant/ratings/refresh', {})
       .then(d => { if (d && !d.cached) fetchDeals() })
       .catch(() => {})
+      .finally(() => setRatingsRefreshing(false))
+  }, [fetchDeals])
+
+  useEffect(() => {
+    fetchDeals()
+    fetchTemplates()
   }, [fetchDeals, fetchTemplates])
 
   // Counts: in_progress groups active + waiting_on_approval
@@ -925,6 +939,14 @@ export default function MerchantDeals() {
         <button
           className="btn btn-sm"
           style={{ flexShrink: 0 }}
+          disabled={ratingsRefreshing}
+          onClick={syncRatings}
+        >
+          {ratingsRefreshing ? 'Syncing…' : 'Sync Ratings'}
+        </button>
+        <button
+          className="btn btn-sm"
+          style={{ flexShrink: 0 }}
           onClick={() => setShowTemplatesModal(true)}
         >
           PM Templates
@@ -965,6 +987,7 @@ export default function MerchantDeals() {
           onClose={() => setModalDeal(null)}
           onActionSuccess={handleActionSuccess}
           onOpenTemplates={() => { setModalDeal(null); setShowTemplatesModal(true) }}
+          onSyncDone={fetchDeals}
         />
       )}
 
