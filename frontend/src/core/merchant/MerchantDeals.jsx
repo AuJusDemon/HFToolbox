@@ -27,6 +27,15 @@ const SECONDARY_STAGES = [
   { val: 'problem',   label: 'Other',     accent: 'var(--dim)'  },
 ]
 
+const RATING_STAGES = [
+  { val: 'needs_my_rating', label: 'Needs My Rating', color: 'var(--blue)'   },
+  { val: 'waiting_on_them', label: 'Waiting on Them',  color: 'var(--yellow)' },
+  { val: 'both_rated',      label: 'Both Rated',       color: 'var(--green)'  },
+]
+
+// Rating filters only make sense under All or Completed stage context
+const RATING_COMPATIBLE = new Set([null, 'completed'])
+
 const TYPE_LABEL = { '1':'Selling','2':'Purchasing','3':'Exchanging','4':'Trading','5':'Vouch Copy' }
 
 function interpolate(text, deal) {
@@ -524,12 +533,12 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ color: deal.has_sent_rating ? 'var(--acc)' : 'var(--yellow)' }}>
               {deal.has_sent_rating
-                ? '✓ You have left a rating'
-                : '○ You have not rated this contract'}
+                ? '✓ Your rating: sent'
+                : '○ Your rating: missing — leave rating on HF'}
             </div>
             {deal.has_received_rating ? (
               <div style={{ color: 'var(--acc)' }}>
-                ✓ Rating received:{' '}
+                ✓ Their rating:{' '}
                 {deal.received_rating_amount > 0 ? '+' : ''}{deal.received_rating_amount}
                 {deal.received_rating_from_username
                   ? ` from ${deal.received_rating_from_username}`
@@ -542,8 +551,10 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
                   : null
                 }
               </div>
+            ) : deal.rating_state === 'waiting_on_them' ? (
+              <div style={{ color: 'var(--yellow)' }}>○ Waiting on their rating</div>
             ) : (
-              <div style={{ color: 'var(--dim)' }}>○ No rating received from counterparty yet</div>
+              <div style={{ color: 'var(--dim)' }}>○ Their rating: not received yet</div>
             )}
           </div>
         </div>
@@ -831,17 +842,23 @@ function DealCard({ deal, onClick }) {
           {relTime(deal.dateline)}
         </span>
       </div>
+      {deal.rating_state === 'waiting_on_them' && (
+        <div style={{ fontSize: 9, color: 'var(--yellow)', fontFamily: 'var(--mono)', marginTop: 3 }}>
+          Waiting on their rating
+        </div>
+      )}
     </div>
   )
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
-export default function MerchantDeals({ initialStage = null }) {
+export default function MerchantDeals({ initialStage = null, initialRatingFilter = null }) {
   const myUid = useStore(s => s.user?.uid)
 
   const [allDeals, setAllDeals]                     = useState([])
   const [loading, setLoading]                       = useState(true)
   const [stage, setStage]                           = useState(initialStage)
+  const [ratingFilter, setRatingFilter]             = useState(initialRatingFilter)
   const [templates, setTemplates]                   = useState([])
   const [showTemplatesModal, setShowTemplatesModal] = useState(false)
   const [modalDeal, setModalDeal]                   = useState(null)
@@ -884,11 +901,25 @@ export default function MerchantDeals({ initialStage = null }) {
     in_progress: (rawCounts.active || 0) + (rawCounts.waiting_on_approval || 0),
   }
 
-  const visible = stage === 'in_progress'
+  // Stage-filtered list is the basis for both ratingCounts and visible
+  const stageFiltered = stage === 'in_progress'
     ? allDeals.filter(d => IN_PROGRESS_STAGES.has(d.stage))
-    : stage
-      ? allDeals.filter(d => d.stage === stage)
-      : allDeals
+    : stage ? allDeals.filter(d => d.stage === stage) : allDeals
+
+  // Rating counts computed from the stage-filtered list so counts reflect context
+  const ratingCounts = {}
+  for (const d of stageFiltered) {
+    if (d.rating_state && d.rating_state !== 'not_applicable') {
+      ratingCounts[d.rating_state] = (ratingCounts[d.rating_state] || 0) + 1
+    }
+  }
+  // Rating row only shown under All or Completed — not for workflow/archive stages
+  const hasRatingFilters = RATING_COMPATIBLE.has(stage)
+    && (RATING_STAGES.some(s => (ratingCounts[s.val] || 0) > 0) || !!ratingFilter)
+
+  const visible = ratingFilter
+    ? stageFiltered.filter(d => d.rating_state === ratingFilter)
+    : stageFiltered
 
   const handleActionSuccess = useCallback((cid, refreshed, newStage) => {
     setAllDeals(prev => prev.map(d => {
@@ -936,7 +967,10 @@ export default function MerchantDeals({ initialStage = null }) {
                 <button
                   key={s.val || 'all'}
                   className={`tab${stage === s.val ? ' on' : ''}`}
-                  onClick={() => setStage(s.val)}
+                  onClick={() => {
+                    setStage(s.val)
+                    if (s.val === null || !RATING_COMPATIBLE.has(s.val)) setRatingFilter(null)
+                  }}
                 >
                   {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
                 </button>
@@ -976,7 +1010,29 @@ export default function MerchantDeals({ initialStage = null }) {
                   } : (s.val === 'cancelled' || s.val === 'expired' ? {
                     opacity: 0.75,
                   } : {})}
-                  onClick={() => setStage(s.val)}
+                  onClick={() => { setStage(s.val); setRatingFilter(null) }}
+                >
+                  {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {/* Tier 3: rating filters — shown when rating data has nonzero buckets or one is active */}
+        {hasRatingFilters && (
+          <div style={{ display:'flex', borderTop:'1px solid var(--b2)', paddingTop:2 }}>
+            {RATING_STAGES.map(s => {
+              const cnt = ratingCounts[s.val] || 0
+              if (!cnt && ratingFilter !== s.val) return null
+              const isActive = ratingFilter === s.val
+              return (
+                <button
+                  key={s.val}
+                  className={`tab${isActive ? ' on' : ''}`}
+                  style={isActive
+                    ? { color: s.color, borderBottomColor: s.color }
+                    : cnt > 0 ? { color: s.color } : {}}
+                  onClick={() => setRatingFilter(isActive ? null : s.val)}
                 >
                   {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
                 </button>

@@ -40,19 +40,21 @@ function FreshnessBadge() {
 }
 
 export default function MerchantPage() {
-  const [tab, setTab]             = useState('overview')
-  const [dealStage, setDealStage] = useState(null)
+  const [tab, setTab]                         = useState('overview')
+  const [dealStage, setDealStage]             = useState(null)
+  const [dealRatingFilter, setDealRatingFilter] = useState(null)
 
-  // Navigate to Contracts with a pre-selected stage filter (from Overview pipeline)
-  const goToDealsWithStage = (stage) => {
+  // Navigate to Contracts — accepts optional stage and/or rating filter
+  const goToDealsWithStage = (stage, ratingFilter = null) => {
     setDealStage(stage)
+    setDealRatingFilter(ratingFilter)
     setTab('deals')
   }
 
-  // Tab bar click resets the deal filter so direct nav always shows All
+  // Tab bar click clears all deal filters so direct nav always shows All
   const handleTabClick = (id) => {
-    if (id !== 'deals') setDealStage(null)
-    else setDealStage(null)
+    setDealStage(null)
+    setDealRatingFilter(null)
     setTab(id)
   }
 
@@ -60,7 +62,7 @@ export default function MerchantPage() {
     overview:  <MerchantOverview setTab={setTab} onGoToDeals={goToDealsWithStage} />,
     offers:    <MerchantOffers />,
     pipeline:  <MerchantPipeline />,
-    deals:     <MerchantDeals initialStage={dealStage} />,
+    deals:     <MerchantDeals initialStage={dealStage} initialRatingFilter={dealRatingFilter} />,
     customers: <MerchantCustomers />,
     promotion: <MerchantPromotion />,
     reports:   <MerchantReports />,

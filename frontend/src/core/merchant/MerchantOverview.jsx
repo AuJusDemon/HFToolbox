@@ -219,18 +219,23 @@ function ActionItem({ type, cid, cpUsername, cpUid, product, dateline }) {
 }
 
 // ── Rating bucket ─────────────────────────────────────────────────────────────
-function RatingBucket({ label, count, color }) {
+function RatingBucket({ label, count, color, onClick }) {
   return (
-    <div style={{
-      flex: 1, padding: '8px 10px',
-      background: 'var(--bg)', border: '1px solid var(--b2)',
-      borderLeft: `2px solid ${color}`,
-    }}>
+    <button
+      style={{
+        flex: 1, padding: '8px 10px',
+        background: 'var(--bg)', border: '1px solid var(--b2)',
+        borderLeft: `2px solid ${color}`,
+        cursor: onClick ? 'pointer' : 'default',
+        textAlign: 'left',
+      }}
+      onClick={onClick}
+    >
       <div style={{ fontSize: 8, color: 'var(--dim)', fontFamily: 'var(--mono)', letterSpacing: '.1em', textTransform: 'uppercase', marginBottom: 4 }}>
         {label}
       </div>
       <div style={{ fontSize: 22, fontWeight: 700, fontFamily: 'var(--mono)', color }}>{count}</div>
-    </div>
+    </button>
   )
 }
 
@@ -528,9 +533,24 @@ export default function MerchantOverview({ setTab, onGoToDeals }) {
           </div>
           <div className="card-body" style={{ padding: '10px 12px' }}>
             <div style={{ display: 'flex', gap: 6, marginBottom: (needsMine > 0 || !receivedDataFresh) ? 10 : 0 }}>
-              <RatingBucket label="Needs My Rating" count={needsMine}     color={needsMine     > 0 ? 'var(--blue)'   : 'var(--dim)'} />
-              <RatingBucket label="Waiting on Them" count={receivedDataFresh ? waitingTheirs : '?'} color={receivedDataFresh && waitingTheirs > 0 ? 'var(--yellow)' : 'var(--dim)'} />
-              <RatingBucket label="Both Rated"      count={receivedDataFresh ? bothRated     : '?'} color={receivedDataFresh && bothRated     > 0 ? 'var(--green)'  : 'var(--dim)'} />
+              <RatingBucket
+                label="Needs My Rating"
+                count={needsMine}
+                color={needsMine > 0 ? 'var(--blue)' : 'var(--dim)'}
+                onClick={needsMine > 0 ? () => goToDeals(null, 'needs_my_rating') : undefined}
+              />
+              <RatingBucket
+                label="Waiting on Them"
+                count={receivedDataFresh ? waitingTheirs : '?'}
+                color={receivedDataFresh && waitingTheirs > 0 ? 'var(--yellow)' : 'var(--dim)'}
+                onClick={receivedDataFresh && waitingTheirs > 0 ? () => goToDeals('completed', 'waiting_on_them') : undefined}
+              />
+              <RatingBucket
+                label="Both Rated"
+                count={receivedDataFresh ? bothRated : '?'}
+                color={receivedDataFresh && bothRated > 0 ? 'var(--green)' : 'var(--dim)'}
+                onClick={receivedDataFresh && bothRated > 0 ? () => goToDeals('completed', 'both_rated') : undefined}
+              />
             </div>
             {!receivedDataFresh && (
               <div style={{

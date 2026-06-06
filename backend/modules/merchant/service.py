@@ -860,6 +860,14 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
     # Default to needs_rating for any unrated status-6; sync populates this set.
     sent_cids = get_sent_brating_cids(uid)
 
+    # Received-rating freshness — same sparse-data cross-check as get_overview.
+    # Only claim waiting_on_them when received data is trusted fresh.
+    goals         = get_goals(uid)
+    recv_fresh_at = int(goals.get('received_ratings_fetched_at') or 0)
+    recv_is_fresh = recv_fresh_at > 0 and (now - recv_fresh_at) < 86400
+    if recv_is_fresh and len(bratings) < 3 and len(sent_cids) > 20:
+        recv_is_fresh = False
+
     # tid -> title from my_threads + tid_titles cache
     with _db() as conn:
         tid_rows = conn.execute(
@@ -908,6 +916,18 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
         cp      = counterparty_uid(c, uid)
         tid     = str(c.get('tid', ''))
         brating = bratings.get(cid)
+
+        if status_n != '6':
+            rating_state = 'not_applicable'
+        elif cid not in sent_cids:
+            rating_state = 'needs_my_rating'
+        elif bool(brating):
+            rating_state = 'both_rated'
+        elif recv_is_fresh:
+            rating_state = 'waiting_on_them'
+        else:
+            rating_state = 'not_applicable'
+
         result.append({
             'cid':                            cid,
             'type_n':                         str(c.get('type_n', '') or ''),
@@ -940,6 +960,7 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
             'completed_side_at':              completed_side_at,
             'has_sent_rating':                cid in sent_cids,
             'has_received_rating':            bool(brating),
+            'rating_state':                   rating_state,
             'received_rating_amount':         brating.get('amount') if brating else None,
             'received_rating_from_uid':       brating.get('fromid', '') if brating else '',
             'received_rating_from_username':  brating.get('from_username', '') if brating else '',
