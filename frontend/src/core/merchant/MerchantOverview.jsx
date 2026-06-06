@@ -105,10 +105,10 @@ function ContractPipeline({ stageCounts, onGoToDeals }) {
         </>
       )}
 
-      {/* Terminal states — disputed prominent (red), cancelled/expired muted */}
+      {/* Archive/outcome row — same button structure as primary, no opacity hack */}
       {hasTerminal && (
         <div style={{
-          display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
+          display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
           borderTop: pipelineTotal > 0 ? '1px solid var(--b2)' : undefined,
           paddingTop: pipelineTotal > 0 ? 8 : 0,
         }}>
@@ -126,31 +126,34 @@ function ContractPipeline({ stageCounts, onGoToDeals }) {
           {cancelled > 0 && (
             <button
               className="btn"
-              style={{ padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6 }}
+              style={{ padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5 }}
               onClick={() => onGoToDeals('cancelled')}
             >
+              <span style={{ width: 7, height: 7, background: 'var(--dim)', display: 'inline-block', flexShrink: 0 }} />
               <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Cancelled</span>
-              <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{cancelled}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{cancelled}</span>
             </button>
           )}
           {expired > 0 && (
             <button
               className="btn"
-              style={{ padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6 }}
+              style={{ padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5 }}
               onClick={() => onGoToDeals('expired')}
             >
+              <span style={{ width: 7, height: 7, background: 'var(--dim)', display: 'inline-block', flexShrink: 0 }} />
               <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Expired</span>
-              <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{expired}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{expired}</span>
             </button>
           )}
           {problem > 0 && (
             <button
               className="btn"
-              style={{ padding: '2px 6px', display: 'flex', alignItems: 'center', gap: 4, opacity: 0.6 }}
+              style={{ padding: '3px 8px', display: 'flex', alignItems: 'center', gap: 5 }}
               onClick={() => onGoToDeals('problem')}
             >
+              <span style={{ width: 7, height: 7, background: 'var(--dim)', display: 'inline-block', flexShrink: 0 }} />
               <span style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Other</span>
-              <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{problem}</span>
+              <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{problem}</span>
             </button>
           )}
         </div>

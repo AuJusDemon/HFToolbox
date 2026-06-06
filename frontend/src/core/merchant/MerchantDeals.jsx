@@ -863,8 +863,8 @@ export default function MerchantDeals({ initialStage = null }) {
 
   const syncRatings = useCallback(() => {
     setRatingsRefreshing(true)
-    api.post('/api/merchant/ratings/refresh', {})
-      .then(d => { if (d && !d.cached) fetchDeals() })
+    api.post('/api/merchant/ratings/refresh?force=true', {})
+      .then(() => fetchDeals())
       .catch(() => {})
       .finally(() => setRatingsRefreshing(false))
   }, [fetchDeals])
@@ -959,29 +959,26 @@ export default function MerchantDeals({ initialStage = null }) {
             PM Templates
           </button>
         </div>
-        {/* Secondary: archive/outcome stages — only rendered when any have contracts */}
-        {SECONDARY_STAGES.some(s => (counts[s.val] || 0) > 0) && (
-          <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'center' }}>
+        {/* Tier 2: closed/archive outcomes — same tab size as tier 1, separated by a subtle line */}
+        {(SECONDARY_STAGES.some(s => (counts[s.val] || 0) > 0) || SECONDARY_STAGES.some(s => s.val === stage)) && (
+          <div style={{ display:'flex', borderTop:'1px solid var(--b2)', paddingTop:2 }}>
             {SECONDARY_STAGES.map(s => {
               const cnt = counts[s.val] || 0
-              if (!cnt && s.val === 'problem') return null
-              if (!cnt) return null
-              const isActive = stage === s.val
-              const color = s.accent
+              if (!cnt && stage !== s.val) return null
+              const isDisputed = s.val === 'disputed' && cnt > 0
               return (
                 <button
                   key={s.val}
-                  style={{
-                    fontSize: 11, padding: '2px 8px', cursor: 'pointer',
-                    fontFamily: 'var(--mono)', letterSpacing: '.03em',
-                    background: isActive ? `${color}22` : 'var(--s2)',
-                    border: `1px solid ${isActive ? color : 'var(--b2)'}`,
-                    color: isActive ? color : cnt > 0 ? color : 'var(--dim)',
-                    fontWeight: isActive ? 700 : 400,
-                  }}
+                  className={`tab${stage === s.val ? ' on' : ''}`}
+                  style={isDisputed ? {
+                    color: stage === s.val ? 'var(--red)' : 'var(--red)',
+                    borderBottomColor: stage === s.val ? 'var(--red)' : 'transparent',
+                  } : (s.val === 'cancelled' || s.val === 'expired' ? {
+                    opacity: 0.75,
+                  } : {})}
                   onClick={() => setStage(s.val)}
                 >
-                  {s.label} {cnt}
+                  {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
                 </button>
               )
             })}

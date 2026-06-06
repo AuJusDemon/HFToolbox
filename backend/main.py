@@ -2427,16 +2427,19 @@ async def mark_seen(request: Request):
 
 
 def _parse_brating_rows(rows_raw, uid: str) -> list:
-    """Parse HF bratings response rows into upsert-ready dicts."""
+    """Parse HF bratings response rows into upsert-ready dicts.
+
+    Uses flat fields only (fromid, toid).  Embedded from/to user objects are NOT
+    requested because including them in paginated _to/_from calls triggers an HF API
+    error: "Users - Maximum of 30 users allowed."  Usernames are resolved separately
+    via the uid_usernames cache.
+    """
     if isinstance(rows_raw, dict): rows_raw = [rows_raw]
     result = []
     for r in (rows_raw or []):
         crid = str(r.get("crid") or "")
         if not crid:
             continue
-        from_user = r.get("from") or {}
-        if isinstance(from_user, list):
-            from_user = from_user[0] if from_user else {}
         try:
             amt = int(float(r.get("amount") or 0))
         except (TypeError, ValueError):
@@ -2444,12 +2447,12 @@ def _parse_brating_rows(rows_raw, uid: str) -> list:
         result.append({
             "crid":          crid,
             "contractid":    str(r.get("contractid") or ""),
-            "from_uid":      str(from_user.get("uid") or r.get("fromid") or ""),
+            "from_uid":      str(r.get("fromid")     or ""),
             "toid":          str(r.get("toid")        or ""),
             "amount":        amt,
             "message":       str(r.get("message")     or ""),
             "dateline":      int(r.get("dateline")    or 0),
-            "from_username": str(from_user.get("username") or ""),
+            "from_username": "",
         })
     return result
 
@@ -2493,9 +2496,8 @@ async def get_contract_detail(request: Request, cid: int):
                 "_cid": [int(cid)],
                 "crid": True, "contractid": True, "fromid": True, "toid": True,
                 "dateline": True, "amount": True, "message": True,
-                "from": {"uid": True, "username": True},
             }}), timeout=8)
-            if _br:
+            if _br and _br.get("success") is not False:
                 await _store_bratings(uid, _parse_brating_rows(_br.get("bratings", []), uid))
         except Exception as e:
             log.warning("contract detail brating fetch failed cid=%s: %s", cid, e)
@@ -2565,7 +2567,6 @@ async def contract_action(request: Request, cid: int):
                     "_cid": [int(cid)],
                     "crid": True, "contractid": True, "fromid": True, "toid": True,
                     "dateline": True, "amount": True, "message": True,
-                    "from": {"uid": True, "username": True},
                 },
             }), timeout=8)
             if fresh:
@@ -2574,7 +2575,8 @@ async def contract_action(request: Request, cid: int):
                 if fresh_list:
                     await asyncio.to_thread(db.upsert_contracts, uid, fresh_list)
                     refreshed = fresh_list[0]
-                await _store_bratings(uid, _parse_brating_rows(fresh.get("bratings", []), uid))
+                if fresh.get("success") is not False and fresh.get("bratings"):
+                    await _store_bratings(uid, _parse_brating_rows(fresh.get("bratings", []), uid))
         except Exception as e:
             log.warning("contract action write-through failed cid=%s: %s", cid, e)
 
@@ -2587,12 +2589,18 @@ async def contract_action(request: Request, cid: int):
 
 
 @app.post("/api/merchant/ratings/refresh")
-async def merchant_ratings_refresh(request: Request):
+async def merchant_ratings_refresh(request: Request, force: bool = False):
     """Fetch sent and received b-ratings from HF for Seller HQ Needs Rating detection.
 
-    Caches each direction (_to, _from) separately so a partial failure on one side
-    does not prevent the other from being retried, and does not falsely mark the
-    failed direction as complete.
+    Each direction (_to received, _from sent) has its own 120-second cache key so
+    a failure on one side does not poison the other.
+
+    force=true: bypasses per-direction caches and resets received-freshness flag so
+    the user can always recover from a bad sync.  Use for explicit button actions.
+
+    Zero-row guard: if _to returns 0 rows but local DB has received ratings, the
+    result is treated as a failed/suspicious API response and NOT cached or marked
+    as fresh.  This prevents a silent empty response from overwriting known-good state.
     """
     uid = request.session.get("uid")
     if not uid:
@@ -2603,6 +2611,15 @@ async def merchant_ratings_refresh(request: Request):
 
     cached_to   = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_to",   120)
     cached_from = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_from", 120)
+
+    if force:
+        # Force clears per-direction caches and resets freshness so stale/bad state
+        # doesn't block the user from recovering via an explicit Sync Ratings action.
+        cached_to   = None
+        cached_from = None
+        from modules.merchant.merchant_db import clear_received_ratings_freshness as _clr
+        await asyncio.to_thread(_clr, uid)
+
     if cached_to and cached_from:
         return {
             "ok": True, "cached": True,
@@ -2611,13 +2628,12 @@ async def merchant_ratings_refresh(request: Request):
         }
 
     def _parse_rows(data, direction_uid):
+        if data and data.get("success") is False:
+            raise ValueError("HF API error: %s" % data.get("message", "unknown"))
         rows = (data or {}).get("bratings", [])
         if isinstance(rows, dict): rows = [rows]
         result = []
         for r in (rows or []):
-            from_user = r.get("from") or {}
-            if isinstance(from_user, list):
-                from_user = from_user[0] if from_user else {}
             try:
                 amt = int(float(r.get("amount") or 0))
             except (TypeError, ValueError):
@@ -2628,12 +2644,12 @@ async def merchant_ratings_refresh(request: Request):
             result.append({
                 "crid":          crid,
                 "contractid":    str(r.get("contractid") or ""),
-                "from_uid":      str(from_user.get("uid") or r.get("fromid") or direction_uid or ""),
-                "toid":          str(r.get("toid")        or ""),
+                "from_uid":      str(r.get("fromid") or direction_uid or ""),
+                "toid":          str(r.get("toid")    or ""),
                 "amount":        amt,
-                "message":       str(r.get("message")     or ""),
-                "dateline":      int(r.get("dateline")    or 0),
-                "from_username": str(from_user.get("username") or ""),
+                "message":       str(r.get("message") or ""),
+                "dateline":      int(r.get("dateline") or 0),
+                "from_username": "",
             })
         return result
 
@@ -2655,17 +2671,35 @@ async def merchant_ratings_refresh(request: Request):
                         "_to": [uid_int], "_page": page, "_perpage": 30,
                         "crid": True, "contractid": True, "fromid": True, "toid": True,
                         "dateline": True, "amount": True, "message": True,
-                        "from": {"uid": True, "username": True},
                     }}), timeout=10)
                     rows = _parse_rows(data, None)
                     recv_rows.extend(rows)
                     if not rows or len(rows) < 30:
                         break
-                all_ratings.extend(recv_rows)
+
                 recv_count = len(recv_rows)
-                recv_ok = True
-                await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_to",
-                                        {"count": recv_count})
+
+                if recv_count == 0:
+                    # Zero rows from _to is suspicious when local DB already has received
+                    # ratings — the API probably returned empty due to a transient error.
+                    # Don't cache or mark fresh in that case.
+                    from modules.merchant.merchant_db import has_local_received_ratings as _hlrr
+                    if await asyncio.to_thread(_hlrr, uid):
+                        log.warning(
+                            "merchant ratings: _to returned 0 rows but local received "
+                            "ratings exist uid=%s — treating as failed/suspicious", uid
+                        )
+                        recv_count = 0
+                    else:
+                        recv_ok = True
+                        await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_to",
+                                                {"count": 0})
+                else:
+                    all_ratings.extend(recv_rows)
+                    recv_ok = True
+                    await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_to",
+                                            {"count": recv_count})
+
             except Exception as e:
                 log.warning("merchant ratings refresh: recv fetch failed uid=%s: %s", uid, e)
 
@@ -2696,21 +2730,21 @@ async def merchant_ratings_refresh(request: Request):
             from modules.merchant.merchant_db import upsert_bratings as _upsert
             await asyncio.to_thread(_upsert, uid, all_ratings)
 
-        if recv_ok and not cached_to:
+        if recv_ok and not (cached_to):
             from modules.merchant.merchant_db import mark_received_ratings_fetched as _mark_recv
             await asyncio.to_thread(_mark_recv, uid)
 
-        if sent_ok and not cached_from:
+        if sent_ok and not (cached_from):
             from modules.merchant.merchant_db import mark_sent_ratings_fetched as _mark_sent
             await asyncio.to_thread(_mark_sent, uid)
 
         return {
-            "ok":        True,
-            "cached":    False,
+            "ok":         True,
+            "cached":     False,
             "count_to":   recv_count,
             "count_from": sent_count,
-            "recv_ok":   recv_ok,
-            "sent_ok":   sent_ok,
+            "recv_ok":    recv_ok,
+            "sent_ok":    sent_ok,
         }
     except asyncio.TimeoutError:
         return JSONResponse({"error": "HF API timeout"}, status_code=503)

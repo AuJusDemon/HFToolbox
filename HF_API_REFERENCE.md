@@ -334,6 +334,7 @@ Fields: `crid`, `contractid`, `fromid`, `toid`, `dateline`, `amount`, `message`,
 > `_cid:[cid]` returns all ratings for a specific contract regardless of direction.
 > **Needs Rating logic must use `_from`**, not `_to`. A completed contract shows "Needs Rating" only when no row with `fromid == my_uid` exists for that `contractid`. Checking received ratings (`_to`) tells you whether the counterparty has rated you, which is a different question.
 > Match ratings to contracts by `contractid`.
+> **Warning: requesting embedded `from: {uid, username}` or `to: {uid, username}` inside a paginated `_to`/`_from` call fails** with `"Users - Maximum of 30 users allowed."` API error. Use flat fields only (`fromid`, `toid`). If usernames are needed, resolve them separately via `uid_usernames` cache — do not request embedded user objects in brating calls.
 
 ---
 

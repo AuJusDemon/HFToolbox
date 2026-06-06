@@ -337,6 +337,23 @@ def get_overview(uid: str) -> dict:
                 'dateline': dl,
             })
 
+    # Cross-check received-rating freshness against local data.
+    # A prior bad sync may have called mark_received_ratings_fetched even when _to returned
+    # 0 rows, leaving recv_is_fresh=True but bratings_by_cid nearly empty.  Override the
+    # flag when local received-rating data is clearly incomplete relative to known context:
+    #   - Empty (0 rows) while completed contracts exist, OR
+    #   - Very sparse (< 3 rows) while user has rated more than 20 contracts themselves.
+    # Either case means the UI would show a misleading "Waiting on Them" count; better to
+    # show the "not synced" notice so the user knows to click Sync Ratings.
+    if recv_is_fresh:
+        n_recv = len(bratings_by_cid)
+        n_sent = len(sent_cids)
+        completions = contract_stage_counts.get('completed', 0) + contract_stage_counts.get('needs_rating', 0)
+        if n_recv == 0 and completions > 0:
+            recv_is_fresh = False
+        elif n_recv < 3 and n_sent > 20:
+            recv_is_fresh = False
+
     _rating_needs_mine   = contract_stage_counts.get('needs_rating', 0)
     _rating_waiting_them = 0
     _rating_both         = 0

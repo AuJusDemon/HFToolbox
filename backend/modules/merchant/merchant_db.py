@@ -676,3 +676,21 @@ def get_received_ratings_freshness(uid: str) -> int:
             "SELECT received_ratings_fetched_at FROM merchant_goals WHERE uid=?", (uid,)
         ).fetchone()
         return int(row['received_ratings_fetched_at'] or 0) if row else 0
+
+
+def has_local_received_ratings(uid: str) -> bool:
+    """Return True if any received (counterparty-to-me) ratings exist in local DB."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM merchant_bratings WHERE uid=? AND fromid!=? LIMIT 1",
+            (uid, uid)
+        ).fetchone()
+        return row is not None
+
+
+def clear_received_ratings_freshness(uid: str) -> None:
+    """Reset the received-ratings freshness flag so next sync is treated as unknown."""
+    with _db() as conn:
+        conn.execute(
+            "UPDATE merchant_goals SET received_ratings_fetched_at=0 WHERE uid=?", (uid,)
+        )
