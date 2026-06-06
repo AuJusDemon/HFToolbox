@@ -245,6 +245,8 @@ def get_overview(uid: str) -> dict:
     bump_logs        = _get_bump_log(uid, 200)
     goals            = get_goals(uid)
     sla_hours        = goals.get('reply_sla_hours', 24)
+    recv_fresh_at    = int(goals.get('received_ratings_fetched_at') or 0)
+    recv_is_fresh    = recv_fresh_at > 0 and (now - recv_fresh_at) < 86400
     lead_group_metas = {
         k: v for k, v in get_all_lead_group_metas(uid).items()
         if k[1] in marketplace_tids
@@ -554,9 +556,11 @@ def get_overview(uid: str) -> dict:
         'daily_completions':         daily_completions,
         'contract_stage_counts':     contract_stage_counts,
         'rating_summary': {
-            'needs_mine':     _rating_needs_mine,
-            'waiting_theirs': _rating_waiting_them,
-            'both_rated':     _rating_both,
+            'needs_mine':          _rating_needs_mine,
+            'waiting_theirs':      _rating_waiting_them,
+            'both_rated':          _rating_both,
+            'received_data_fresh': recv_is_fresh,
+            'received_fetched_at': recv_fresh_at,
         },
         'needs_review_items':        needs_review_items,
         'needs_rating_items':        needs_rating_items,

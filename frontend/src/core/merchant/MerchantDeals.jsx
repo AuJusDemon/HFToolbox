@@ -11,17 +11,20 @@ import {
 const IN_PROGRESS_STAGES = new Set(['waiting_on_approval', 'active'])
 const STALE_SECS = 90 * 86400
 
-const STAGES = [
+const PRIMARY_STAGES = [
   { val: null,                       label: 'All' },
   { val: 'needs_review',             label: 'Needs Review' },
   { val: 'in_progress',              label: 'In Progress' },
-  { val: 'waiting_on_counterparty',  label: 'Waiting on Counterparty' },
+  { val: 'waiting_on_counterparty',  label: 'Waiting' },
   { val: 'needs_rating',             label: 'Needs Rating' },
   { val: 'completed',                label: 'Completed' },
-  { val: 'disputed',                 label: 'Disputed' },
-  { val: 'cancelled',                label: 'Cancelled' },
-  { val: 'expired',                  label: 'Expired' },
-  { val: 'problem',                  label: 'Problem' },
+]
+
+const SECONDARY_STAGES = [
+  { val: 'disputed',  label: 'Disputed',  accent: 'var(--red)'  },
+  { val: 'cancelled', label: 'Cancelled', accent: 'var(--dim)'  },
+  { val: 'expired',   label: 'Expired',   accent: 'var(--dim)'  },
+  { val: 'problem',   label: 'Other',     accent: 'var(--dim)'  },
 ]
 
 const TYPE_LABEL = { '1':'Selling','2':'Purchasing','3':'Exchanging','4':'Trading','5':'Vouch Copy' }
@@ -922,37 +925,68 @@ export default function MerchantDeals({ initialStage = null }) {
 
   return (
     <div>
-      {/* Stage filter tabs + PM Templates button */}
-      <div style={{ display:'flex', gap:4, marginBottom:12, flexWrap:'wrap', alignItems:'center' }}>
-        <div style={{ display:'flex', gap:4, overflowX:'auto', whiteSpace:'nowrap', flex:1 }}>
-          {STAGES.map(s => {
-            const cnt = s.val ? counts[s.val] ?? 0 : allDeals.length
-            return (
-              <button
-                key={s.val || 'all'}
-                className={`tab${stage === s.val ? ' on' : ''}`}
-                onClick={() => setStage(s.val)}
-              >
-                {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
-              </button>
-            )
-          })}
+      {/* Stage filter tabs — primary workflow row + secondary archive row */}
+      <div style={{ marginBottom: 12 }}>
+        {/* Primary: workflow stages + action buttons */}
+        <div style={{ display:'flex', gap:4, alignItems:'center', marginBottom: 5 }}>
+          <div style={{ display:'flex', gap:4, overflowX:'auto', whiteSpace:'nowrap', flex:1, scrollbarWidth:'none' }}>
+            {PRIMARY_STAGES.map(s => {
+              const cnt = s.val ? counts[s.val] ?? 0 : allDeals.length
+              return (
+                <button
+                  key={s.val || 'all'}
+                  className={`tab${stage === s.val ? ' on' : ''}`}
+                  onClick={() => setStage(s.val)}
+                >
+                  {s.label}{!loading && cnt > 0 ? ` (${cnt})` : ''}
+                </button>
+              )
+            })}
+          </div>
+          <button
+            className="btn btn-sm"
+            style={{ flexShrink: 0 }}
+            disabled={ratingsRefreshing}
+            onClick={syncRatings}
+          >
+            {ratingsRefreshing ? 'Syncing…' : 'Sync Ratings'}
+          </button>
+          <button
+            className="btn btn-sm"
+            style={{ flexShrink: 0 }}
+            onClick={() => setShowTemplatesModal(true)}
+          >
+            PM Templates
+          </button>
         </div>
-        <button
-          className="btn btn-sm"
-          style={{ flexShrink: 0 }}
-          disabled={ratingsRefreshing}
-          onClick={syncRatings}
-        >
-          {ratingsRefreshing ? 'Syncing…' : 'Sync Ratings'}
-        </button>
-        <button
-          className="btn btn-sm"
-          style={{ flexShrink: 0 }}
-          onClick={() => setShowTemplatesModal(true)}
-        >
-          PM Templates
-        </button>
+        {/* Secondary: archive/outcome stages — only rendered when any have contracts */}
+        {SECONDARY_STAGES.some(s => (counts[s.val] || 0) > 0) && (
+          <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'center' }}>
+            {SECONDARY_STAGES.map(s => {
+              const cnt = counts[s.val] || 0
+              if (!cnt && s.val === 'problem') return null
+              if (!cnt) return null
+              const isActive = stage === s.val
+              const color = s.accent
+              return (
+                <button
+                  key={s.val}
+                  style={{
+                    fontSize: 11, padding: '2px 8px', cursor: 'pointer',
+                    fontFamily: 'var(--mono)', letterSpacing: '.03em',
+                    background: isActive ? `${color}22` : 'var(--s2)',
+                    border: `1px solid ${isActive ? color : 'var(--b2)'}`,
+                    color: isActive ? color : cnt > 0 ? color : 'var(--dim)',
+                    fontWeight: isActive ? 700 : 400,
+                  }}
+                  onClick={() => setStage(s.val)}
+                >
+                  {s.label} {cnt}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Global action banner (from closed modal) */}

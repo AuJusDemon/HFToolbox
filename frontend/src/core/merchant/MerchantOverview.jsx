@@ -375,9 +375,11 @@ export default function MerchantOverview({ setTab, onGoToDeals }) {
 
   const pipelineTotal = pipeline.total        ?? 0
   const slaBreaches   = pipeline.sla_breaches ?? 0
-  const needsMine     = rating_summary.needs_mine     ?? 0
-  const waitingTheirs = rating_summary.waiting_theirs ?? 0
-  const bothRated     = rating_summary.both_rated     ?? 0
+  const needsMine          = rating_summary.needs_mine          ?? 0
+  const waitingTheirs      = rating_summary.waiting_theirs      ?? 0
+  const bothRated          = rating_summary.both_rated          ?? 0
+  const receivedDataFresh  = rating_summary.received_data_fresh ?? false
+  const receivedFetchedAt  = rating_summary.received_fetched_at ?? 0
 
   // Needs Review first (urgent — waiting for my approval), then Needs Rating
   const queueItems = [
@@ -522,11 +524,19 @@ export default function MerchantOverview({ setTab, onGoToDeals }) {
             <span className="card-title">Rating Status</span>
           </div>
           <div className="card-body" style={{ padding: '10px 12px' }}>
-            <div style={{ display: 'flex', gap: 6, marginBottom: needsMine > 0 ? 14 : 0 }}>
-              <RatingBucket label="Needs My Rating"  count={needsMine}     color={needsMine     > 0 ? 'var(--blue)'   : 'var(--dim)'} />
-              <RatingBucket label="Waiting on Them"  count={waitingTheirs} color={waitingTheirs > 0 ? 'var(--yellow)' : 'var(--dim)'} />
-              <RatingBucket label="Both Rated"       count={bothRated}     color={bothRated     > 0 ? 'var(--green)'  : 'var(--dim)'} />
+            <div style={{ display: 'flex', gap: 6, marginBottom: (needsMine > 0 || !receivedDataFresh) ? 10 : 0 }}>
+              <RatingBucket label="Needs My Rating" count={needsMine}     color={needsMine     > 0 ? 'var(--blue)'   : 'var(--dim)'} />
+              <RatingBucket label="Waiting on Them" count={receivedDataFresh ? waitingTheirs : '?'} color={receivedDataFresh && waitingTheirs > 0 ? 'var(--yellow)' : 'var(--dim)'} />
+              <RatingBucket label="Both Rated"      count={receivedDataFresh ? bothRated     : '?'} color={receivedDataFresh && bothRated     > 0 ? 'var(--green)'  : 'var(--dim)'} />
             </div>
+            {!receivedDataFresh && (
+              <div style={{
+                fontSize: 10, color: 'var(--yellow)', fontFamily: 'var(--mono)',
+                padding: '5px 8px', background: 'var(--yellow2)', marginBottom: needsMine > 0 ? 10 : 0,
+              }}>
+                Received-rating data not yet synced. Click Sync Ratings in the Contracts tab to update.
+              </div>
+            )}
             {needsMine > 0 && needs_rating_items.length > 0 && (
               <>
                 <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)', marginBottom: 6, letterSpacing: '.08em' }}>PENDING RATINGS</div>

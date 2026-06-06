@@ -153,6 +153,7 @@ def init_merchant_db() -> None:
             "ALTER TABLE merchant_goals ADD COLUMN weekly_new_lead_goal INT NOT NULL DEFAULT 0",
             "ALTER TABLE merchant_goals ADD COLUMN templates_seeded TINYINT NOT NULL DEFAULT 0",
             "ALTER TABLE merchant_goals ADD COLUMN sent_ratings_fetched TINYINT NOT NULL DEFAULT 0",
+            "ALTER TABLE merchant_goals ADD COLUMN received_ratings_fetched_at BIGINT NOT NULL DEFAULT 0",
         ]:
             try:
                 conn.execute(_col)
@@ -649,3 +650,29 @@ def mark_sent_ratings_fetched(uid: str) -> None:
         conn.execute(
             "UPDATE merchant_goals SET sent_ratings_fetched=1 WHERE uid=?", (uid,)
         )
+
+
+def mark_received_ratings_fetched(uid: str) -> None:
+    """Record that received (_to) ratings were successfully fetched from HF."""
+    now = int(time.time())
+    with _db() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO merchant_goals
+               (uid, reply_sla_hours, weekly_bump_budget, weekly_completed_deal_goal,
+                max_stale_offer_days, max_bumps_without_lead, weekly_new_lead_goal)
+               VALUES (?,24,0,0,30,10,0)""",
+            (uid,)
+        )
+        conn.execute(
+            "UPDATE merchant_goals SET received_ratings_fetched_at=? WHERE uid=?",
+            (now, uid)
+        )
+
+
+def get_received_ratings_freshness(uid: str) -> int:
+    """Return Unix timestamp of last successful _to fetch, or 0 if never fetched."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT received_ratings_fetched_at FROM merchant_goals WHERE uid=?", (uid,)
+        ).fetchone()
+        return int(row['received_ratings_fetched_at'] or 0) if row else 0

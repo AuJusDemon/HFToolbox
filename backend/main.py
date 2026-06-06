@@ -2588,7 +2588,12 @@ async def contract_action(request: Request, cid: int):
 
 @app.post("/api/merchant/ratings/refresh")
 async def merchant_ratings_refresh(request: Request):
-    """Fetch sent and received b-ratings from HF for Seller HQ Needs Rating detection."""
+    """Fetch sent and received b-ratings from HF for Seller HQ Needs Rating detection.
+
+    Caches each direction (_to, _from) separately so a partial failure on one side
+    does not prevent the other from being retried, and does not falsely mark the
+    failed direction as complete.
+    """
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -2596,9 +2601,14 @@ async def merchant_ratings_refresh(request: Request):
     if not token:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
-    cached = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_refresh", 120)
-    if cached:
-        return {"ok": True, "cached": True, "count": cached.get("count", 0)}
+    cached_to   = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_to",   120)
+    cached_from = await asyncio.to_thread(db.get_dash_cache, uid, "merchant_ratings_from", 120)
+    if cached_to and cached_from:
+        return {
+            "ok": True, "cached": True,
+            "count_to":   cached_to.get("count",   0),
+            "count_from": cached_from.get("count", 0),
+        }
 
     def _parse_rows(data, direction_uid):
         rows = (data or {}).get("bratings", [])
@@ -2632,48 +2642,76 @@ async def merchant_ratings_refresh(request: Request):
         client  = HFClient(token)
         uid_int = int(uid)
         all_ratings: list = []
+        recv_count = cached_to.get("count", 0)   if cached_to   else 0
+        sent_count = cached_from.get("count", 0) if cached_from else 0
 
-        # Ratings received by me (_to) — paginate until exhausted, cap at 30 pages (900 ratings)
-        for page in range(1, 31):
-            data = await asyncio.wait_for(client.read({"bratings": {
-                "_to": [uid_int], "_page": page, "_perpage": 30,
-                "crid": True, "contractid": True, "fromid": True, "toid": True,
-                "dateline": True, "amount": True, "message": True,
-                "from": {"uid": True, "username": True},
-            }}), timeout=10)
-            rows = _parse_rows(data, None)
-            all_ratings.extend(rows)
-            if not rows or len(rows) < 30:
-                break
+        # Ratings received by me (_to) — skip if recently cached
+        recv_ok = bool(cached_to)
+        if not cached_to:
+            try:
+                recv_rows: list = []
+                for page in range(1, 31):
+                    data = await asyncio.wait_for(client.read({"bratings": {
+                        "_to": [uid_int], "_page": page, "_perpage": 30,
+                        "crid": True, "contractid": True, "fromid": True, "toid": True,
+                        "dateline": True, "amount": True, "message": True,
+                        "from": {"uid": True, "username": True},
+                    }}), timeout=10)
+                    rows = _parse_rows(data, None)
+                    recv_rows.extend(rows)
+                    if not rows or len(rows) < 30:
+                        break
+                all_ratings.extend(recv_rows)
+                recv_count = len(recv_rows)
+                recv_ok = True
+                await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_to",
+                                        {"count": recv_count})
+            except Exception as e:
+                log.warning("merchant ratings refresh: recv fetch failed uid=%s: %s", uid, e)
 
-        # Ratings left by me (_from) — paginate until exhausted, cap at 30 pages
-        sent_ok = False
-        try:
-            for page in range(1, 31):
-                data_sent = await asyncio.wait_for(client.read({"bratings": {
-                    "_from": [uid_int], "_page": page, "_perpage": 30,
-                    "crid": True, "contractid": True, "fromid": True, "toid": True,
-                    "dateline": True, "amount": True, "message": True,
-                }}), timeout=10)
-                rows_sent = _parse_rows(data_sent, uid)
-                all_ratings.extend(rows_sent)
-                if not rows_sent or len(rows_sent) < 30:
-                    break
-            sent_ok = True
-        except Exception as e:
-            log.warning("merchant ratings refresh: sent fetch failed uid=%s: %s", uid, e)
+        # Ratings sent by me (_from) — skip if recently cached
+        sent_ok = bool(cached_from)
+        if not cached_from:
+            try:
+                sent_rows: list = []
+                for page in range(1, 31):
+                    data_sent = await asyncio.wait_for(client.read({"bratings": {
+                        "_from": [uid_int], "_page": page, "_perpage": 30,
+                        "crid": True, "contractid": True, "fromid": True, "toid": True,
+                        "dateline": True, "amount": True, "message": True,
+                    }}), timeout=10)
+                    rows_sent = _parse_rows(data_sent, uid)
+                    sent_rows.extend(rows_sent)
+                    if not rows_sent or len(rows_sent) < 30:
+                        break
+                all_ratings.extend(sent_rows)
+                sent_count = len(sent_rows)
+                sent_ok = True
+                await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_from",
+                                        {"count": sent_count})
+            except Exception as e:
+                log.warning("merchant ratings refresh: sent fetch failed uid=%s: %s", uid, e)
 
         if all_ratings:
             from modules.merchant.merchant_db import upsert_bratings as _upsert
             await asyncio.to_thread(_upsert, uid, all_ratings)
 
-        if sent_ok:
-            from modules.merchant.merchant_db import mark_sent_ratings_fetched as _mark
-            await asyncio.to_thread(_mark, uid)
+        if recv_ok and not cached_to:
+            from modules.merchant.merchant_db import mark_received_ratings_fetched as _mark_recv
+            await asyncio.to_thread(_mark_recv, uid)
 
-        await asyncio.to_thread(db.set_dash_cache, uid, "merchant_ratings_refresh",
-                                {"count": len(all_ratings)})
-        return {"ok": True, "count": len(all_ratings)}
+        if sent_ok and not cached_from:
+            from modules.merchant.merchant_db import mark_sent_ratings_fetched as _mark_sent
+            await asyncio.to_thread(_mark_sent, uid)
+
+        return {
+            "ok":        True,
+            "cached":    False,
+            "count_to":   recv_count,
+            "count_from": sent_count,
+            "recv_ok":   recv_ok,
+            "sent_ok":   sent_ok,
+        }
     except asyncio.TimeoutError:
         return JSONResponse({"error": "HF API timeout"}, status_code=503)
     except Exception as e:

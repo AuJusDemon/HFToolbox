@@ -49,7 +49,7 @@ export function contractStageLabel(stage) {
     disputed:                'Disputed',
     cancelled:               'Cancelled',
     expired:                 'Expired',
-    problem:                 'Problem',
+    problem:                 'Other',
   }
   return map[stage] || stage || '—'
 }
