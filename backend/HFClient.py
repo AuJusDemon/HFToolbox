@@ -161,6 +161,7 @@ def _cb_success() -> None:
 
 # ── Rate limit tracking ────────────────────────────────────────────────────────
 _rate_limits: dict[str, int] = {}
+_rate_limit_seen_at: dict[str, float] = {}
 
 
 def is_rate_limited(token: str) -> bool:
@@ -173,6 +174,7 @@ def get_rate_limit_remaining(token: str) -> int:
 
 def _update_rate_limit(token: str, remaining: int) -> None:
     _rate_limits[token] = remaining
+    _rate_limit_seen_at[token] = time.time()
 
 
 # ── Sync HTTP call (runs in thread pool) ──────────────────────────────────────

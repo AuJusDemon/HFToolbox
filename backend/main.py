@@ -79,8 +79,14 @@ def _handle_auth_expired(request: Request, uid: str) -> JSONResponse:
 def _throttle_level() -> str:
     """Return throttle level from HFClient in-memory rate limit data. Never blocks."""
     try:
+        import time as _t
         import HFClient as _hfc
-        values = [v for v in _hfc._rate_limits.values() if v < 9999]
+        seen_at = getattr(_hfc, "_rate_limit_seen_at", {})
+        now = _t.time()
+        values = [
+            v for token, v in _hfc._rate_limits.items()
+            if v < 9999 and now - float(seen_at.get(token, 0) or 0) < 3900
+        ]
         if not values:
             return "normal"
         lowest = min(values)
