@@ -144,9 +144,10 @@ _RE_INSERT_IGNORE   = re.compile(r'\bINSERT\s+OR\s+IGNORE\b', re.IGNORECASE)
 _RE_INSERT_REPLACE  = re.compile(r'\bINSERT\s+OR\s+REPLACE\s+INTO\b', re.IGNORECASE)
 _RE_STRFTIME        = re.compile(r"strftime\('%s',\s*'now'\)", re.IGNORECASE)
 _RE_ON_CONFLICT     = re.compile(
-    r'ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+UPDATE\s+SET\s+((?:\w+\s*=\s*excluded\.\w+\s*,?\s*)+)',
-    re.IGNORECASE | re.DOTALL
+    r'ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+UPDATE\s+SET\b',
+    re.IGNORECASE,
 )
+_RE_EXCLUDED        = re.compile(r'\bexcluded\.(\w+)', re.IGNORECASE)
 _RE_PRAGMA_INFO     = re.compile(r'^\s*PRAGMA\s+table_info\((\w+)\)', re.IGNORECASE)
 _RE_PRAGMA          = re.compile(r'^\s*PRAGMA\b', re.IGNORECASE)
 
@@ -155,17 +156,11 @@ def _translate(sql: str) -> str:
     sql = _RE_INSERT_IGNORE.sub('INSERT IGNORE', sql)
     sql = _RE_INSERT_REPLACE.sub('REPLACE INTO', sql)
     sql = _RE_STRFTIME.sub('UNIX_TIMESTAMP()', sql)
-    sql = _RE_ON_CONFLICT.sub(_replace_conflict, sql)
-    # Escape MySQL reserved words used as column names
+    sql = _RE_ON_CONFLICT.sub('ON DUPLICATE KEY UPDATE', sql)
+    sql = _RE_EXCLUDED.sub(lambda m: f'VALUES({m.group(1)})', sql)
     sql = re.sub(r'(?<![`\w])key(?![`\w])(?=\s*[=,)])', '`key`', sql)
     sql = _RE_PLACEHOLDER.sub('%s', sql)
     return sql
-
-
-def _replace_conflict(m: re.Match) -> str:
-    assignments = m.group(1).strip().rstrip(',')
-    assignments = re.sub(r'excluded\.(\w+)', r'VALUES(\1)', assignments)
-    return f'ON DUPLICATE KEY UPDATE {assignments}'
 
 
 # ── Cursor wrapper ─────────────────────────────────────────────────────────────
