@@ -19,7 +19,7 @@ backend/
   db.py               framework-level persistence and shared local history tables
   _db_compat.py       SQLite/MySQL _db() compatibility shim
   db_connection.py    MySQL pool and SQL translation layer
-  HFClient.py         HF API v2 wrapper, proxy handling, rate-limit tracking
+  HFClient.py         HF API v2 wrapper and rate-limit tracking
   hf_cache.py         resource cache tables and TTL logic
   hf_service.py       stale-while-revalidate helpers and token selection
   module_registry.py  module manifest and router registry
@@ -159,9 +159,8 @@ Rules:
 - All HF values arrive as strings; cast explicitly.
 - Use `int(float(x))` for bytes amounts.
 - Single result can be a dict, multiple results are lists; normalize both.
-- `posts._uid` and `posts._tid` are paginated oldest-first; fetch the last page for recent activity.
-- `threads._uid` page 1 is newest/most recently active.
-- Handle transient HF 503s and `None` from `client.read()` / `client.write()` without deleting trusted local state.
+- `posts._uid` is oldest-first. `threads._uid` page 1 is newest/most recently active.
+- Handle `None` from `client.read()` / `client.write()`.
 
 See `HF_API_REFERENCE.md` for endpoint details, fields, batching examples, and known API limitations.
 

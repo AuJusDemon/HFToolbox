@@ -132,19 +132,19 @@ Scope: Basic Info (Advanced Info for private fields)
 ---
 
 ### /users - Any user(s) by UID
-Scope: Users Permissions  
+Scope: Users Permissions
 Input: `_uid` [array of ints]
 
 Fields: `uid`, `username`, `usergroup`, `displaygroup`, `additionalgroups`, `postnum`, `threadnum`, `awards`, `myps`, `avatar`, `avatardimensions`, `avatartype`, `usertitle`, `website`, `timeonline`, `reputation`, `referrals`
 
-> `myps` = byte balance. Same data as `me.bytes` but different field name.  
+> `myps` = byte balance. Same data as `me.bytes` but different field name.
 > Advanced scope fields (`unreadpms` etc.) are **not available** via `/users` - only via `/me`.
 
 ---
 
 ### /forums - Forum metadata
-Scope: Posts Permissions  
-Input: `_fid` [array]  
+Scope: Posts Permissions
+Input: `_fid` [array]
 Fields: `fid`, `name`, `description`, `type`
 
 | type code | Description |
@@ -156,142 +156,6 @@ Fields: `fid`, `name`, `description`, `type`
 
 **Category FID set** (never valid for `_fid` thread queries):
 `1, 7, 45, 88, 105, 120, 141, 151, 156, 241, 259, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 460`
-
-#### Known FIDs - Forum Map
-
-Category FIDs (`type="c"`) are bold. Do not use category FIDs as `_fid` inputs for thread watching.
-
-| FID | Name | Parent |
-|---|---|---|
-| **1** | **Hack Forums Official Information** | root |
-| 2 | Site News | 1 |
-| 134 | Suggestions and Ideas | 2 |
-| **45** | **Hacks, Exploits, and Various Discussions** | root |
-| **447** | **Blackhat** | 45 |
-| 10 | Hacking Tools and Programs | 447 |
-| 114 | Remote Administration Tools | 447 |
-| 92 | Botnets and Botting | 447 |
-| 113 | Keyloggers | 447 |
-| 126 | Cryptography, Encryption, and Decryption | 447 |
-| 287 | Malware and Viruses | 447 |
-| 405 | Blackhat Training | 447 |
-| 229 | Reverse Engineering | 405 |
-| 466 | Jailbreaking, Modding, and Rooting | 447 |
-| **449** | **Grayhat** | 45 |
-| 4 | Beginner Hacking | 449 |
-| 47 | Hacking Tutorials | 4 |
-| 43 | Website Hacking | 449 |
-| 103 | SQL Injection Attacks | 43 |
-| 91 | VPN, Proxies, and Socks | 449 |
-| 46 | Social Media Hacks | 449 |
-| 104 | Wifi / 5G / WPA / WEP / Bluetooth / Wireless Hacking | 449 |
-| 433 | Hacktivism | 449 |
-| **448** | **Whitehat** | 45 |
-| 110 | Malware, Rat, and Virus Removal | 448 |
-| 400 | White Hat Hacking | 448 |
-| 322 | OpSec and OSINT | 448 |
-| 231 | Pentesting and Forensics | 448 |
-| 193 | IoT, Embedded Systems, Electronics, Gadgets, and DIY | 448 |
-| 434 | Bug Bounties | 448 |
-| **444** | **Tech** | root |
-| **460** | **Artificial Intelligence** | 444 |
-| 431 | Artificial Intelligence Discussion | 460 |
-| 461 | Prompt Engineering & Optimization | 460 |
-| 462 | AI Programming and Vibe Coding | 460 |
-| 463 | AI for Marketing & Automation | 460 |
-| 464 | AI Tools, APIs & Platforms | 460 |
-| 465 | AI-Generated Art, Music & Video | 460 |
-| **151** | **Coding** | 444 |
-| 5 | Coders Lounge | 151 |
-| 118 | Software Development | 151 |
-| 117 | Mobile Development | 151 |
-| 183 | Web Development | 151 |
-| 375 | HF API | 151 |
-| **88** | **Computing** | 444 |
-| 8 | Computing Lounge | 88 |
-| 87 | Computer Hardware | 88 |
-| 240 | Networking and Firewalls | 87 |
-| 79 | Mobile Smartphones | 88 |
-| 192 | Android OS | 79 |
-| 137 | Apple iOS | 79 |
-| 347 | Microsoft Windows | 88 |
-| 85 | Linux | 88 |
-| 159 | MacOS | 88 |
-| **141** | **Webmasters** | 444 |
-| 50 | Website Construction | 141 |
-| 172 | Website Showcase and Reviews | 141 |
-| 142 | SEO and Internet Marketing | 141 |
-| 139 | Social Networking | 141 |
-| 143 | Hosting and Web Servers | 141 |
-| **156** | **Graphics** | 444 |
-| 6 | Graphics | 156 |
-| 248 | Graphic Resources | 6 |
-| 157 | GFX Contests | 6 |
-| 133 | Rate My Graphic | 156 |
-| 158 | Free Graphic Help | 156 |
-| 160 | Video Editing | 156 |
-| 293 | Photography | 156 |
-| **241** | **Money** | root |
-| 380 | Crypto Currency | 241 |
-| **120** | **Monetizing Techniques** | 241 |
-| 221 | Free Money Making Ebooks | 120 |
-| 245 | Surveys | 120 |
-| 127 | Referrals | 120 |
-| 268 | CPA / PPD Make Money | 120 |
-| 170 | Adult Content Management | 241 |
-| 155 | Member Contests | 241 |
-| 121 | Shopping Deals | 241 |
-| 281 | Markets, Finance, and Investing | 241 |
-| **105** | **Marketplace** | root |
-| **450** | **Bazaar** | 105 |
-| 163 | Marketplace Discussions | 450 |
-| 402 | Promotional Advertising | 450 |
-| 186 | Free Services and Giveaways | 450 |
-| 205 | Appraisals and Pricing | 450 |
-| 217 | Jobs and Partnerships | 450 |
-| 111 | Deal Disputes | 450 |
-| **451** | **Premium** | 105 |
-| 107 | Premium Sellers Section | 451 |
-| 374 | Premium Tools and Programs | 451 |
-| 299 | Cryptography and Encryption Market | 451 |
-| 136 | Ebook Bazaar | 451 |
-| 182 | Currency Exchange | 451 |
-| 218 | Virtual Game Items | 451 |
-| **452** | **Services** | 105 |
-| 145 | Hosting Services | 452 |
-| 263 | Social Media Services | 452 |
-| 106 | Service Offerings | 452 |
-| 219 | Graphics Market | 452 |
-| 171 | VPN and Proxy Services | 452 |
-| 308 | Service Requests | 452 |
-| **453** | **Auxiliary** | 105 |
-| 44 | Buyers Bay | 453 |
-| 176 | Member Sales Market | 453 |
-| 291 | Online Accounts | 453 |
-| 404 | Adult Zone Accounts | 291 |
-| 339 | Hash Bounties | 453 |
-| 255 | Rewards and Small Favors | 453 |
-| 225 | Webmaster Marketplace | 453 |
-| **7** | **General Topics** | root |
-| **445** | **World** | 7 |
-| 25 | The Lounge | 445 |
-| 89 | News and Happenings | 445 |
-| 12 | Bragging Rights | 445 |
-| 260 | Education and Careers | 445 |
-| **446** | **Entertainment** | 7 |
-| 65 | Gaming | 446 |
-| 112 | Anime and Manga | 446 |
-| 32 | Movies, TV, and Videos | 446 |
-| 37 | Music | 446 |
-| 167 | Sports | 446 |
-| 385 | Cars, Bikes, and Motors | 446 |
-| **259** | **Personal Life** | 7 |
-| 318 | Vices | 259 |
-| 370 | Gambling | 259 |
-| 262 | Health Wise | 259 |
-| 180 | Innuendo | 259 |
-| 261 | Pets and Animals | 259 |
-| 354 | Food, Recipes, and Cooking | 259 |
 
 ---
 
@@ -341,10 +205,10 @@ Scope: Bytes Permissions
 
 All support `_page`, `_perpage` (max 30).
 
-Fields: `id`, `amount`, `dateline`, `type`, `reason`, `post` (embedded when requested)
+Fields: `id`, `amount`, `dateline`, `type`, `reason`
 
-> `amount` is a float string (e.g. `"430.43"`) - always cast via `int(float(x))`.  
-> Direction is determined by using two separate calls: `_from` for sent, `_to` for received.  
+> `amount` is a float string (e.g. `"430.43"`) - always cast via `int(float(x))`.
+> Direction is determined by using two separate calls: `_from` for sent, `_to` for received.
 > `from` and `to` embedded fields are never returned even when requested.
 
 #### Bytes Transaction Type Codes (confirmed live, 290+ transactions)
@@ -372,7 +236,7 @@ Fields: `id`, `amount`, `dateline`, `type`, `reason`, `post` (embedded when requ
 | `slo` | IN | Slots winner |
 | `ugb` | IN | Upgrade bonus |
 
-> `don` is the only code that appears on both sides and represents real peer-to-peer money movement.  
+> `don` is the only code that appears on both sides and represents real peer-to-peer money movement.
 > To isolate contract payments: filter `type == "don"` and `reason == "Contract"`.
 
 ---
@@ -387,7 +251,7 @@ Scope: Contracts Permissions
 
 Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`, `status`, `type`, `istatus`, `ostatus`, `muid`, `inituid`, `otheruid`, `iprice`, `icurrency`, `iproduct`, `oprice`, `ocurrency`, `oproduct`, `iaddress`, `oaddress`, `terms`, `tid`, `idispute`, `odispute`
 
-> `idispute`/`odispute` are embedded - dispute info comes free with the contracts call.  
+> `idispute`/`odispute` are embedded - dispute info comes free with the contracts call.
 > `iaddress`/`oaddress` are payment addresses for the initiator and counterparty sides respectively. These fields appear after approval and may contain crypto wallet addresses or other payment identifiers. They are absent or null before the contract is approved. Do not assume `iaddress` is always the counterparty's address - label from the initiator/counterparty perspective.
 > All contract values are numeric strings.
 
@@ -415,7 +279,7 @@ Fields: `cid`, `dateline`, `otherdateline`, `public`, `timeout_days`, `timeout`,
 | `"4"` | Trading |
 | `"5"` | Vouch Copy |
 
-> `type` reflects the **initiator's** position at creation time.  
+> `type` reflects the **initiator's** position at creation time.
 > `istatus`/`ostatus`: `"0"` = not approved, `"1"` = approved - per-party flags, separate from overall `status`.
 
 #### Contract Value Display Logic
@@ -491,11 +355,13 @@ Fields: `cdid`, `contractid`, `claimantuid`, `defendantuid`, `dateline`, `status
 
 ### /sigmarket - Signature marketplace
 
-**market** - Input: `_type`=`"market"`, `_uid` [array], `_page`, `_perpage`  
+**market** - Input: `_type`=`"market"`, `_uid` [array], `_page`, `_perpage`
 Fields: `uid`, `user` (embedded), `price`, `duration`, `active`, `sig`, `dateadded`, `ppd`
 
-**order** - Input: `_type`=`"order"`, `_smid`/`_uid`/`_seller`/`_buyer` [arrays], `_page`, `_perpage`  
-Fields: `smid`, `buyer`/`seller` (embedded User), `startdate`, `enddate`, `price`, `duration`, `active`
+**order** - Input: `_type`=`"order"`, `_smid`/`_uid`/`_seller`/`_buyer` [arrays], `_page`, `_perpage`
+Fields: `smid`, `startdate`, `enddate`, `price`, `duration`, `active`
+
+> Do not request embedded `buyer` or `seller` user objects in paginated order calls. Live testing returned `Users - Invalid User ID Supplied`. Resolve usernames separately from local cache or a dedicated users lookup when needed.
 
 ---
 
@@ -527,7 +393,7 @@ Returns: `tid`, `uid`, `subject`, `dateline`, `firstpost` {`pid`, `message`}
 Scope: Bytes Write
 ```python
 # Send bytes to a user
-{"bytes": {"_uid": "UID", "_amount": "100", "_reason": "Payment", "_pid": "optional_pid"}}
+{"bytes": {"_uid": "UID", "_amount": "100", "_reason": "Payment"}}
 
 # Deposit to vault (min 100)
 {"bytes": {"_deposit": 500}}
@@ -539,32 +405,26 @@ Scope: Bytes Write
 {"bytes": {"_bump": TID}}
 ```
 
-Send bytes returns `bytes[0].id` (transaction ID).
-
 ---
 
 ### contracts - Contract actions
 Scope: Contracts Write
-All actions except `new` require `_cid`.
 
-| `_action` | Required params | Optional params | Notes |
-|---|---|---|---|
-| `new` | `_uid`, `_terms`, `_position` | `_yourproduct`, `_yourcurrency`, `_youramount`, `_theirproduct`, `_theircurrency`, `_theiramount`, `_tid`, `_muid`, `_timeout` (default 14d), `_public`=`"yes"`, `_address` | Creates contract |
-| `undo` | `_cid` | | Undo a contract you just created |
-| `deny` | `_cid` | | Deny as counterparty |
-| `approve` | `_cid` | `_address` | Approve as counterparty. Confirmed working. |
-| `cancel` | `_cid` | | Request cancellation - both parties must submit |
-| `complete` | `_cid` | `_address` (txn ID) | Mark your side complete |
-| `middleman_deny` | `_cid` | | Middleman rejects the contract |
-| `middleman_approve` | `_cid` | | Middleman approves the contract |
-| `vendor_cancel` | `_cid` | | Cancel a template-spawned contract as vendor |
+| `_action` | Notes |
+|---|---|
+| `new` | Requires `_uid`, `_terms`, `_position`. Optional: `_yourproduct`, `_yourcurrency`, `_youramount`, `_theirproduct`, `_theircurrency`, `_theiramount`, `_tid`, `_muid`, `_timeout`, `_public` |
+| `undo` | Undo a contract you just created |
+| `deny` | Deny as counterparty |
+| `approve` | Approve as counterparty (confirmed working) |
+| `cancel` | Request cancellation - both parties must submit |
+| `complete` | Mark your side complete |
+| `middleman_deny` / `middleman_approve` | Middleman actions |
 
 > `_position` values: `selling`, `buying`, `exchanging`, `trading`, `vouchcopy`
 
 ---
 
 ### sigmarket - Signature market actions
-Scope: Sigmarket Permissions
 ```python
 # List your sig for sale
 {"sigmarket": {"_type": "setsale", "_price": BYTES, "_duration": DAYS}}

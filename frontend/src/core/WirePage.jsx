@@ -165,9 +165,9 @@ function UimgEmbed({ url, size }) {
         const imageId = url.match(/uploadimages\.org\/([a-f0-9]+)/)?.[1]
         if (!imageId) { setErrMsg('no image id'); setPhase('error'); return }
         let resp
-        try { resp = await fetch(`/api/proxy/uimg/${imageId}?key=${encodeURIComponent(gwKey)}`) }
+        try { resp = await fetch(`/api/uimg/${imageId}?key=${encodeURIComponent(gwKey)}`) }
         catch(e) { setErrMsg('fetch: '+e.message); setPhase('error'); return }
-        if (!resp.ok) { const b=await resp.text().catch(()=>''); setErrMsg(`proxy ${resp.status}: ${b.slice(0,60)}`); setPhase('error'); return }
+        if (!resp.ok) { const b=await resp.text().catch(()=>''); setErrMsg(`image ${resp.status}: ${b.slice(0,60)}`); setPhase('error'); return }
         const encrypted = await resp.arrayBuffer()
         let key
         try { key=await _e2eDeriveKey(seed) } catch(e) { setErrMsg('key: '+e.message); setPhase('error'); return }
@@ -362,8 +362,8 @@ function BBCode({ raw }) {
           const imageId = url.match(/uploadimages\.org\/([a-f0-9]+)/)?.[1]
           if (!imageId) throw new Error('no image id')
 
-          const resp = await fetch(`/api/proxy/uimg/${imageId}?key=${encodeURIComponent(gwKey)}`)
-          if (!resp.ok) throw new Error(`proxy ${resp.status}`)
+          const resp = await fetch(`/api/uimg/${imageId}?key=${encodeURIComponent(gwKey)}`)
+          if (!resp.ok) throw new Error(`image ${resp.status}`)
 
           const key       = await _e2eDeriveKey(seed)
           const decrypted = await crypto.subtle.decrypt({name:'AES-GCM',iv,tagLength:128}, key, await resp.arrayBuffer())

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api.js'
 import {
   contractStageLabel, contractStageColor,
@@ -354,11 +354,29 @@ function MovementRow({ c }) {
 export default function MerchantOverview({ setTab, onGoToDeals }) {
   const [data, setData]       = useState(null)
   const [loading, setLoading] = useState(true)
+  const freshnessRef = useRef(null)
 
-  useEffect(() => {
+  const loadOverview = () =>
     api.get('/api/merchant/overview')
       .then(d  => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
+
+  useEffect(() => { loadOverview() }, [])
+
+  // Poll /api/merchant/freshness every 30s; reload overview when any timestamp advances.
+  useEffect(() => {
+    let last = null
+    const poll = () =>
+      api.get('/api/merchant/freshness')
+        .then(f => {
+          if (!f) return
+          const key = JSON.stringify(f)
+          if (last !== null && key !== last) loadOverview()
+          last = key
+        })
+        .catch(() => {})
+    const id = setInterval(poll, 30000)
+    return () => clearInterval(id)
   }, [])
 
   if (loading) return <div className="empty"><div className="spin" /></div>
@@ -410,7 +428,10 @@ export default function MerchantOverview({ setTab, onGoToDeals }) {
           value={needs_action}
           sub={needs_action > 0 ? 'contracts + replies' : 'all clear'}
           color={needs_action > 0 ? 'var(--red)' : 'var(--green)'}
-          onClick={() => goToDeals('needs_review')}
+          onClick={() => {
+            const hasReview = (contract_stage_counts?.needs_review || 0) > 0 || slaBreaches > 0
+            goToDeals(hasReview ? 'needs_review' : needsMine > 0 ? 'needs_rating' : 'needs_review')
+          }}
         />
         <StatTile
           label="Active Pipeline"

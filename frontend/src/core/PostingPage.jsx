@@ -89,7 +89,7 @@ const CATEGORIES = [
         forums: [
           { fid: 4,   name: 'Beginner Hacking' },
           { fid: 43,  name: 'Website Hacking' },
-          { fid: 91,  name: 'VPN, Proxies & Socks' },
+          { fid: 91,  name: 'VPN & Socks' },
           { fid: 46,  name: 'Social Media Hacks' },
           { fid: 104, name: 'Wifi / Wireless Hacking' },
           { fid: 433, name: 'Hacktivism' },
@@ -229,7 +229,7 @@ const CATEGORIES = [
           { fid: 263, name: 'Social Media Services' },
           { fid: 106, name: 'Service Offerings' },
           { fid: 219, name: 'Graphics Market' },
-          { fid: 171, name: 'VPN & Proxy Services' },
+          { fid: 171, name: 'VPN Services' },
           { fid: 308, name: 'Service Requests' },
         ]
       },
@@ -887,7 +887,7 @@ function _e2eLink(shareLink, seed, iv, hmac) {
 }
 
 // ── UimgEmbed — decrypts and renders a [uimg] image inline in preview ─────────
-// Fetches encrypted bytes via backend proxy (/api/proxy/uimg/{id}),
+// Fetches encrypted bytes via backend image endpoint (/api/uimg/{id}),
 // decrypts client-side using the key material in the URL fragment.
 // The backend only ever sees opaque ciphertext — the key never leaves the browser.
 function UimgEmbed({ url, size }) {
@@ -920,12 +920,12 @@ function UimgEmbed({ url, size }) {
         if (!imageId) { setErrMsg('no image id'); setPhase('error'); return }
 
         let resp
-        try { resp = await fetch(`/api/proxy/uimg/${imageId}?key=${encodeURIComponent(gwKey)}`) }
+        try { resp = await fetch(`/api/uimg/${imageId}?key=${encodeURIComponent(gwKey)}`) }
         catch(e) { setErrMsg('fetch: '+e.message); setPhase('error'); return }
 
         if (!resp.ok) {
           const body = await resp.text().catch(() => '')
-          setErrMsg(`proxy ${resp.status}: ${body.slice(0,80)}`)
+          setErrMsg(`image ${resp.status}: ${body.slice(0,80)}`)
           setPhase('error'); return
         }
 

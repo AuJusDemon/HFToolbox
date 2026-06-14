@@ -6,7 +6,7 @@ log = logging.getLogger("toolbox.telegram")
 
 _API_BASE = "https://api.telegram.org/bot"
 
-# The server's network stack has a proxy with a self-signed cert in the chain.
+# The server's network stack can include a self-signed cert in the chain.
 # Skip verification for outbound Telegram API calls only.
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False

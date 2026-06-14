@@ -382,13 +382,81 @@ function TelegramSection() {
 }
 
 
+// ── Section: Alert Preferences ────────────────────────────────────────────────
+
+const ALERT_LABELS = {
+  bytes_received:          'Bytes received',
+  bytes_gambling_bundle:   'Gambling winnings bundle',
+  contract_new:            'New contract',
+  contract_status_change:  'Contract status change',
+  contract_dispute:        'Contract dispute',
+  contract_b_rating:       'B-rating received',
+  reply_tracked_thread:    'Reply in tracked thread',
+  pm_unread_increase:      'Unread PMs increased',
+  autobump_daily:          'Daily autobump digest',
+  token_expiring:          'Auth token expiring',
+}
+
+function AlertPreferencesSection() {
+  const [prefs,    setPrefs]    = useState(null)
+  const [saving,   setSaving]   = useState(null)
+
+  useEffect(() => {
+    api.get('/api/telegram/alert-preferences')
+      .then(d => setPrefs(d?.preferences || {}))
+      .catch(() => {})
+  }, [])
+
+  const toggle = async (type, val) => {
+    setSaving(type)
+    try {
+      const d = await api.patch('/api/telegram/alert-preferences', { [type]: val })
+      setPrefs(d?.preferences || {})
+    } catch {}
+    setSaving(null)
+  }
+
+  const types = Object.keys(ALERT_LABELS)
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="card-head">
+        <span className="card-icon">ALT</span>
+        <span className="card-title">Alert Preferences</span>
+        <span style={{ fontSize: 10, color: 'var(--sub)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>Telegram</span>
+      </div>
+      <div className="card-body">
+        <div style={{ fontSize: 12, color: 'var(--sub)', marginBottom: 12, lineHeight: 1.6 }}>
+          Control which events trigger Telegram alerts. All are enabled by default.
+        </div>
+        {prefs === null && <div className="spin" style={{ width: 14, height: 14, margin: '8px 0' }} />}
+        {prefs !== null && types.map((type, i) => {
+          const enabled = prefs[type] !== false
+          return (
+            <Row key={type} label={ALERT_LABELS[type]} last={i === types.length - 1}>
+              <Toggle
+                value={enabled}
+                onChange={v => toggle(type, v)}
+              />
+              {saving === type && <div className="spin" style={{ width: 10, height: 10, marginLeft: 6 }} />}
+            </Row>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+
 // ── Section: Account ───────────────────────────────────────────────────────────
 
 function AccountSection() {
   const user   = useStore(s => s.user)
   const logout = useStore(s => s.logout)
-  const [phase, setPhase]         = useState('idle')
-  const [tokenInfo, setTokenInfo] = useState(null)
+  const [phase, setPhase]           = useState('idle')
+  const [deleteError, setDeleteError] = useState('')
+  const [inventory, setInventory]   = useState(null)
+  const [tokenInfo, setTokenInfo]   = useState(null)
 
   useEffect(() => {
     api.get('/api/crawl/status')
@@ -400,14 +468,25 @@ function AccountSection() {
       .catch(() => {})
   }, [])
 
+  const enterConfirm = () => {
+    setPhase('confirm')
+    if (!inventory) {
+      api.get('/api/account/inventory')
+        .then(d => setInventory(d))
+        .catch(() => {})
+    }
+  }
+
   const handleDelete = async () => {
     setPhase('deleting')
+    setDeleteError('')
     try {
       await api.delete('/api/account')
       setPhase('done')
       setTimeout(() => { window.location.href = '/' }, 1500)
-    } catch {
-      setPhase('confirm')
+    } catch (err) {
+      setDeleteError(err.message || 'Deletion failed')
+      setPhase('error')
     }
   }
 
@@ -473,13 +552,20 @@ function AccountSection() {
           last
         >
           {phase === 'idle' && (
-            <button className="btn btn-danger" onClick={() => setPhase('confirm')}>Delete</button>
+            <button className="btn btn-danger" onClick={enterConfirm}>Delete</button>
           )}
           {phase === 'confirm' && (
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <span style={{ fontSize: 11, color: 'var(--red)', marginRight: 2 }}>Sure?</span>
-              <button className="btn btn-danger" onClick={handleDelete}>Yes, delete</button>
-              <button className="btn btn-ghost" onClick={() => setPhase('idle')}>Cancel</button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
+              {inventory && inventory.total_rows > 0 && (
+                <span style={{ fontSize: 10, color: 'var(--sub)', fontFamily: 'var(--mono)' }}>
+                  {inventory.total_rows.toLocaleString()} rows across {Object.keys(inventory.inventory).length} tables
+                </span>
+              )}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <span style={{ fontSize: 11, color: 'var(--red)', marginRight: 2 }}>Sure?</span>
+                <button className="btn btn-danger" onClick={handleDelete}>Yes, delete</button>
+                <button className="btn btn-ghost" onClick={() => setPhase('idle')}>Cancel</button>
+              </div>
             </div>
           )}
           {phase === 'deleting' && (
@@ -490,6 +576,15 @@ function AccountSection() {
           )}
           {phase === 'done' && (
             <span style={{ fontSize: 11, color: 'var(--acc)' }}>Deleted — redirecting…</span>
+          )}
+          {phase === 'error' && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+              <span style={{ fontSize: 11, color: 'var(--red)' }}>{deleteError}</span>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-danger" onClick={() => setPhase('confirm')}>Try again</button>
+                <button className="btn btn-ghost" onClick={() => setPhase('idle')}>Cancel</button>
+              </div>
+            </div>
           )}
         </Row>
       </div>
@@ -515,6 +610,7 @@ export default function Settings() {
       <VisibilitySection />
       <CrawlerSection />
       <TelegramSection />
+      <AlertPreferencesSection />
       <AccountSection />
     </>
   )

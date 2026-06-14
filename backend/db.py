@@ -809,8 +809,11 @@ def upsert_contracts(uid: str, contracts: list) -> int:
                     ej(c.get("odispute","")),
                 ))
                 count += 1
-            except Exception:
-                pass
+            except Exception as _ue:
+                import logging as _ulog
+                _ulog.getLogger("db").warning(
+                    "upsert_contracts failed uid=%s cid=%s: %s", uid, c.get("cid", "?"), _ue
+                )
     return count
 
 
@@ -1537,42 +1540,195 @@ def save_user_settings(uid: str, settings: dict) -> None:
 # ── Account deletion ────────────────────────────────────────────────────────────
 
 
-def delete_user_data(uid: str) -> None:
-    """Hard delete all stored data for a user. Irreversible."""
-    with _db() as conn:
-        for tbl in [
-            "users", "module_prefs", "user_settings",
-            "dash_cache", "bytes_history", "bytes_crawl_state",
-            "contracts_history", "contracts_crawl_state",
-            "notifications",
-            "scheduled_threads", "my_threads", "reply_queue",
-            "posting_recents", "thread_drafts",
-            "draft_collaborators", "draft_edit_log", "draft_presence",
-            "sigmarket_rotations",
+def delete_user_data(uid: str) -> list:
+    """Delete all stored data for a user. Returns list of operation names that failed."""
+    failures: list = []
+
+    # Collect cascade data before any deletes
+    owned_draft_ids: list = []
+    owned_cids: list = []
+    try:
+        with _db() as conn:
+            rows = conn.execute(
+                "SELECT id FROM thread_drafts WHERE uid=?", (uid,)
+            ).fetchall()
+            owned_draft_ids = [r["id"] for r in rows]
+    except Exception:
+        pass
+    try:
+        with _db() as conn:
+            rows = conn.execute(
+                "SELECT cid FROM contracts_history WHERE uid=?", (uid,)
+            ).fetchall()
+            owned_cids = [str(r["cid"]) for r in rows]
+    except Exception:
+        pass
+
+    # Draft cascade: delete dependent rows for every draft owned by this user
+    if owned_draft_ids:
+        ph = ",".join("?" * len(owned_draft_ids))
+        for _lbl, _sql in [
+            ("draft_collaborators (cascade)", f"DELETE FROM draft_collaborators WHERE draft_id IN ({ph})"),
+            ("draft_edit_log (cascade)",      f"DELETE FROM draft_edit_log WHERE draft_id IN ({ph})"),
+            ("draft_invite_tokens (cascade)", f"DELETE FROM draft_invite_tokens WHERE draft_id IN ({ph})"),
+            ("draft_presence (cascade)",      f"DELETE FROM draft_presence WHERE draft_id IN ({ph})"),
         ]:
             try:
-                conn.execute(f"DELETE FROM {tbl} WHERE uid=?", (uid,))
+                with _db() as conn:
+                    conn.execute(_sql, owned_draft_ids)
             except Exception:
-                pass
-    # Autobump tables
+                failures.append(_lbl)
+
+    # UID-keyed tables
+    _uid_tables = [
+        ("users",                         "DELETE FROM users WHERE uid=?"),
+        ("module_prefs",                  "DELETE FROM module_prefs WHERE uid=?"),
+        ("user_settings",                 "DELETE FROM user_settings WHERE uid=?"),
+        ("dash_cache",                    "DELETE FROM dash_cache WHERE uid=?"),
+        ("bytes_history",                 "DELETE FROM bytes_history WHERE uid=?"),
+        ("bytes_crawl_state",             "DELETE FROM bytes_crawl_state WHERE uid=?"),
+        ("contracts_history",             "DELETE FROM contracts_history WHERE uid=?"),
+        ("contracts_crawl_state",         "DELETE FROM contracts_crawl_state WHERE uid=?"),
+        ("notifications",                 "DELETE FROM notifications WHERE uid=?"),
+        ("scheduled_threads",             "DELETE FROM scheduled_threads WHERE uid=?"),
+        ("my_threads",                    "DELETE FROM my_threads WHERE uid=?"),
+        ("reply_queue",                   "DELETE FROM reply_queue WHERE uid=?"),
+        ("posting_recents",               "DELETE FROM posting_recents WHERE uid=?"),
+        ("thread_drafts",                 "DELETE FROM thread_drafts WHERE uid=?"),
+        ("sigmarket_rotations",           "DELETE FROM sigmarket_rotations WHERE uid=?"),
+        # Merchant module
+        ("merchant_leads",                "DELETE FROM merchant_leads WHERE uid=?"),
+        ("merchant_customers",            "DELETE FROM merchant_customers WHERE uid=?"),
+        ("merchant_offers",               "DELETE FROM merchant_offers WHERE uid=?"),
+        ("merchant_goals",                "DELETE FROM merchant_goals WHERE uid=?"),
+        ("merchant_lead_groups",          "DELETE FROM merchant_lead_groups WHERE uid=?"),
+        ("contract_status_events",        "DELETE FROM contract_status_events WHERE uid=?"),
+        ("merchant_pm_templates",         "DELETE FROM merchant_pm_templates WHERE uid=?"),
+        ("merchant_contract_workflow",    "DELETE FROM merchant_contract_workflow WHERE uid=?"),
+        ("merchant_bratings",             "DELETE FROM merchant_bratings WHERE uid=?"),
+        # Wire (curator role and activity log)
+        ("notable_curators",              "DELETE FROM notable_curators WHERE uid=?"),
+        ("notable_refresh_log",           "DELETE FROM notable_refresh_log WHERE uid=?"),
+    ]
+    for _lbl, _sql in _uid_tables:
+        try:
+            with _db() as conn:
+                conn.execute(_sql, (uid,))
+        except Exception:
+            failures.append(_lbl)
+
+    # Remove this user from other people's collaborative drafts
+    for _lbl, _sql, _params in [
+        ("draft_collaborators (as collab)",   "DELETE FROM draft_collaborators WHERE uid=?",        (uid,)),
+        ("draft_presence (as collab)",        "DELETE FROM draft_presence WHERE uid=?",             (uid,)),
+        ("draft_edit_log (as editor)",        "DELETE FROM draft_edit_log WHERE editor_uid=?",      (uid,)),
+        ("draft_invite_tokens (as creator)",  "DELETE FROM draft_invite_tokens WHERE created_by=?", (uid,)),
+    ]:
+        try:
+            with _db() as conn:
+                conn.execute(_sql, _params)
+        except Exception:
+            failures.append(_lbl)
+
+    # Autobump (separate module with its own delete helper)
     try:
         from modules.autobump.autobump_db import delete_user_jobs
         delete_user_jobs(uid)
     except Exception:
-        pass
-    # hf_resource_cache and hf_api_call_log (different column names — handled separately)
+        failures.append("autobump")
+
+    # Integration/Telegram tables (keyed by hf_uid, not uid)
+    for _lbl, _sql in [
+        ("telegram_links",       "DELETE FROM telegram_links WHERE hf_uid=?"),
+        ("telegram_link_codes",  "DELETE FROM telegram_link_codes WHERE hf_uid=?"),
+        ("integration_accounts", "DELETE FROM integration_accounts WHERE hf_uid=?"),
+        ("alert_events",         "DELETE FROM alert_events WHERE hf_uid=?"),
+        ("alert_preferences",    "DELETE FROM alert_preferences WHERE hf_uid=?"),
+    ]:
+        try:
+            with _db() as conn:
+                conn.execute(_sql, (uid,))
+        except Exception:
+            failures.append(_lbl)
+
+    # HF cache: owner_uid rows, user-keyed patterns, and contract detail rows by CID
     try:
         with _db() as conn:
             conn.execute("DELETE FROM hf_resource_cache WHERE owner_uid=?", (uid,))
-            for pattern in [
+            for _pattern in [
                 f"me:{uid}", f"bytes:{uid}:", f"contracts:{uid}:",
                 f"user:{uid}:", f"sigmarket:status:{uid}",
                 f"sigmarket:analytics:{uid}", f"threads:uid:{uid}:",
             ]:
                 conn.execute(
                     "DELETE FROM hf_resource_cache WHERE cache_key LIKE ?",
-                    (pattern + "%",),
+                    (_pattern + "%",),
+                )
+            # Contract detail entries are global (owner_uid='') keyed by CID
+            if owned_cids:
+                _ph = ",".join("?" * len(owned_cids))
+                _detail_keys = [f"contract:{cid}:detail" for cid in owned_cids]
+                conn.execute(
+                    f"DELETE FROM hf_resource_cache WHERE cache_key IN ({_ph})",
+                    _detail_keys,
                 )
             conn.execute("DELETE FROM hf_api_call_log WHERE uid=?", (uid,))
     except Exception:
-        pass
+        failures.append("hf_resource_cache")
+
+    return failures
+
+
+def audit_user_data_remaining(uid: str) -> dict:
+    """Check every user-owned table for rows still present after deletion.
+    Returns {table_name: row_count}. All counts should be 0. -1 means the check failed."""
+    result: dict = {}
+    _checks = [
+        ("users",                         "SELECT COUNT(*) FROM users WHERE uid=?",                      (uid,)),
+        ("module_prefs",                  "SELECT COUNT(*) FROM module_prefs WHERE uid=?",               (uid,)),
+        ("user_settings",                 "SELECT COUNT(*) FROM user_settings WHERE uid=?",              (uid,)),
+        ("dash_cache",                    "SELECT COUNT(*) FROM dash_cache WHERE uid=?",                 (uid,)),
+        ("bytes_history",                 "SELECT COUNT(*) FROM bytes_history WHERE uid=?",              (uid,)),
+        ("bytes_crawl_state",             "SELECT COUNT(*) FROM bytes_crawl_state WHERE uid=?",          (uid,)),
+        ("contracts_history",             "SELECT COUNT(*) FROM contracts_history WHERE uid=?",          (uid,)),
+        ("contracts_crawl_state",         "SELECT COUNT(*) FROM contracts_crawl_state WHERE uid=?",      (uid,)),
+        ("notifications",                 "SELECT COUNT(*) FROM notifications WHERE uid=?",              (uid,)),
+        ("scheduled_threads",             "SELECT COUNT(*) FROM scheduled_threads WHERE uid=?",          (uid,)),
+        ("my_threads",                    "SELECT COUNT(*) FROM my_threads WHERE uid=?",                 (uid,)),
+        ("reply_queue",                   "SELECT COUNT(*) FROM reply_queue WHERE uid=?",                (uid,)),
+        ("posting_recents",               "SELECT COUNT(*) FROM posting_recents WHERE uid=?",            (uid,)),
+        ("thread_drafts",                 "SELECT COUNT(*) FROM thread_drafts WHERE uid=?",              (uid,)),
+        ("draft_collaborators",           "SELECT COUNT(*) FROM draft_collaborators WHERE uid=?",        (uid,)),
+        ("draft_edit_log",                "SELECT COUNT(*) FROM draft_edit_log WHERE editor_uid=?",      (uid,)),
+        ("draft_presence",                "SELECT COUNT(*) FROM draft_presence WHERE uid=?",             (uid,)),
+        ("sigmarket_rotations",           "SELECT COUNT(*) FROM sigmarket_rotations WHERE uid=?",        (uid,)),
+        ("bump_jobs",                     "SELECT COUNT(*) FROM bump_jobs WHERE uid=?",                  (uid,)),
+        ("bump_log",                      "SELECT COUNT(*) FROM bump_log WHERE uid=?",                   (uid,)),
+        ("autobump_settings",             "SELECT COUNT(*) FROM autobump_settings WHERE uid=?",          (uid,)),
+        ("merchant_leads",                "SELECT COUNT(*) FROM merchant_leads WHERE uid=?",             (uid,)),
+        ("merchant_customers",            "SELECT COUNT(*) FROM merchant_customers WHERE uid=?",         (uid,)),
+        ("merchant_offers",               "SELECT COUNT(*) FROM merchant_offers WHERE uid=?",            (uid,)),
+        ("merchant_goals",                "SELECT COUNT(*) FROM merchant_goals WHERE uid=?",             (uid,)),
+        ("merchant_lead_groups",          "SELECT COUNT(*) FROM merchant_lead_groups WHERE uid=?",       (uid,)),
+        ("contract_status_events",        "SELECT COUNT(*) FROM contract_status_events WHERE uid=?",     (uid,)),
+        ("merchant_pm_templates",         "SELECT COUNT(*) FROM merchant_pm_templates WHERE uid=?",      (uid,)),
+        ("merchant_contract_workflow",    "SELECT COUNT(*) FROM merchant_contract_workflow WHERE uid=?", (uid,)),
+        ("merchant_bratings",             "SELECT COUNT(*) FROM merchant_bratings WHERE uid=?",          (uid,)),
+        ("notable_curators",              "SELECT COUNT(*) FROM notable_curators WHERE uid=?",           (uid,)),
+        ("notable_refresh_log",           "SELECT COUNT(*) FROM notable_refresh_log WHERE uid=?",        (uid,)),
+        ("telegram_links",                "SELECT COUNT(*) FROM telegram_links WHERE hf_uid=?",          (uid,)),
+        ("telegram_link_codes",           "SELECT COUNT(*) FROM telegram_link_codes WHERE hf_uid=?",     (uid,)),
+        ("integration_accounts",          "SELECT COUNT(*) FROM integration_accounts WHERE hf_uid=?",    (uid,)),
+        ("alert_events",                  "SELECT COUNT(*) FROM alert_events WHERE hf_uid=?",            (uid,)),
+        ("alert_preferences",             "SELECT COUNT(*) FROM alert_preferences WHERE hf_uid=?",       (uid,)),
+        ("hf_resource_cache",             "SELECT COUNT(*) FROM hf_resource_cache WHERE owner_uid=?",    (uid,)),
+        ("hf_api_call_log",               "SELECT COUNT(*) FROM hf_api_call_log WHERE uid=?",            (uid,)),
+    ]
+    for _lbl, _sql, _params in _checks:
+        try:
+            with _db() as conn:
+                row = conn.execute(_sql, _params).fetchone()
+                result[_lbl] = row[0] if row else 0
+        except Exception:
+            result[_lbl] = -1
+    return result

@@ -40,7 +40,7 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 
-# Global semaphore — limits concurrent live HF API calls to prevent proxy saturation
+# Global semaphore — limits concurrent live HF API calls
 _hf_sem = asyncio.Semaphore(4)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
@@ -237,10 +237,31 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
 
     await asyncio.to_thread(db.upsert_bytes_txns, uid, recv_txns + sent_txns)
 
-    new_recv_done = recv_done or len(recv_txns) < 30
-    new_sent_done = sent_done or len(sent_txns) < 30
-    new_recv_page = recv_page if recv_done else (recv_page + 1 if len(recv_txns) >= 30 else recv_page)
-    new_sent_page = sent_page if sent_done else (sent_page + 1 if len(sent_txns) >= 30 else sent_page)
+    # Frontier detection for bytes: if a full page is all already-known IDs, stop early.
+    _recv_frontier = _sent_frontier = False
+    if not recv_done and len(recv_txns) >= 30:
+        try:
+            _recv_ids = [str(t["id"]) for t in recv_txns if t.get("id")]
+            _existing_recv = await asyncio.to_thread(db.get_existing_bytes_ids, uid, _recv_ids)
+            if _existing_recv and all(str(t["id"]) in _existing_recv for t in recv_txns):
+                _recv_frontier = True
+                log.info("Bytes crawl: recv frontier hit page=%d uid=%s", recv_page, uid)
+        except Exception:
+            pass
+    if not sent_done and len(sent_txns) >= 30:
+        try:
+            _sent_ids = [str(t["id"]) for t in sent_txns if t.get("id")]
+            _existing_sent = await asyncio.to_thread(db.get_existing_bytes_ids, uid, _sent_ids)
+            if _existing_sent and all(str(t["id"]) in _existing_sent for t in sent_txns):
+                _sent_frontier = True
+                log.info("Bytes crawl: sent frontier hit page=%d uid=%s", sent_page, uid)
+        except Exception:
+            pass
+
+    new_recv_done = recv_done or len(recv_txns) < 30 or _recv_frontier
+    new_sent_done = sent_done or len(sent_txns) < 30 or _sent_frontier
+    new_recv_page = recv_page if recv_done else (recv_page + 1 if len(recv_txns) >= 30 and not _recv_frontier else recv_page)
+    new_sent_page = sent_page if sent_done else (sent_page + 1 if len(sent_txns) >= 30 and not _sent_frontier else sent_page)
 
     await asyncio.to_thread(db.update_crawl_state, uid,
         recv_page=new_recv_page, sent_page=new_sent_page,
@@ -260,6 +281,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
     c_batch1 = parse_contracts(data1)
     c_batch2 = parse_contracts(data2) if not c_done and c_page2 > 1 else []
     all_contracts = c_batch1 + c_batch2
+    existing_cids: set = set()  # populated below; needed for frontier check
 
     if all_contracts:
         try:
@@ -393,6 +415,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                             _before = {}
                         await asyncio.to_thread(db.upsert_contracts, uid, updated)
                         log.info("Contracts re-check uid=%s updated %d open contracts", uid, len(updated))
+                        _completed_cids: list = []
                         try:
                             _RC_STATUS = {"0":"Awaiting Approval","1":"Awaiting Approval",
                                           "2":"Cancelled","5":"Active Deal",
@@ -431,6 +454,11 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                                         await asyncio.to_thread(_rec_ev, uid, cid, old_sn, new_sn)
                                     except Exception:
                                         pass
+                                    if new_sn == "6":
+                                        try:
+                                            _completed_cids.append(int(cid))
+                                        except Exception:
+                                            pass
                                 if new_br and new_br != old_br:
                                     await asyncio.to_thread(
                                         integration_db.create_alert_event,
@@ -441,6 +469,18 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                                     )
                         except Exception as e:
                             log.warning("Contracts re-check: alert failed uid=%s: %s", uid, e)
+                        if _completed_cids:
+                            try:
+                                _br_resp = await asyncio.wait_for(client.read({"bratings": {
+                                    "_cid": _completed_cids[:8],
+                                    "crid": True, "contractid": True, "fromid": True, "toid": True,
+                                    "dateline": True, "amount": True, "message": True,
+                                }}), timeout=8)
+                                if _br_resp and _br_resp.get("success") is not False:
+                                    await _store_bratings(uid, _parse_brating_rows((_br_resp or {}).get("bratings", []), uid))
+                                    log.info("Contracts re-check: fetched bratings for %d completed cids uid=%s", len(_completed_cids), uid)
+                            except Exception as _bre:
+                                log.warning("Contracts re-check: bratings fetch failed uid=%s: %s", uid, _bre)
             await asyncio.to_thread(db.update_contracts_crawl_state, uid, last_recheck_ts=_now_ts)
     except Exception as e:
         log.warning("Contracts re-check failed uid=%s: %s", uid, e)
@@ -448,15 +488,27 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
     # Advance contracts crawl state
     pages_fetched_this_run = len([b for b in [c_batch1, c_batch2] if b])
     last_batch = c_batch2 if c_batch2 else c_batch1
-    new_c_done = c_done or len(last_batch) < 30
+    # Frontier check: if the last full page consists entirely of already-stored CIDs,
+    # we've reached the boundary of previously crawled history — stop early.
+    _frontier_hit = (
+        not c_done
+        and len(last_batch) >= 30
+        and existing_cids
+        and all(str(c.get("cid", "")) in existing_cids for c in last_batch)
+    )
+    if _frontier_hit:
+        log.info("Contracts crawl: frontier hit page=%d uid=%s — all %d CIDs already known, stopping",
+                 c_page_check, uid, len(last_batch))
+    new_c_done = c_done or len(last_batch) < 30 or _frontier_hit
     new_c_page = c_page_check if c_done else (c_page_check + pages_fetched_this_run
                                                if not new_c_done else c_page_check)
     await asyncio.to_thread(db.update_contracts_crawl_state, uid,
         page=new_c_page, done=int(new_c_done), last_crawl=int(_t.time()))
 
     c_total = await asyncio.to_thread(db.get_contracts_history_count, uid)
-    log.info("Contracts crawl uid=%s page=%d+%d total=%d done=%s",
-             uid, c_page_check, c_page2 if not c_done else 0, c_total, new_c_done)
+    log.info("Contracts crawl uid=%s page=%d+%d total=%d done=%s%s",
+             uid, c_page_check, c_page2 if not c_done else 0, c_total, new_c_done,
+             " (frontier)" if _frontier_hit else "")
 
     # ── Free bonus: thread reply detection (zero extra API calls) ───────────
     # Compares lastpost against stored cursor per thread.
@@ -494,8 +546,8 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                 await asyncio.to_thread(add_my_thread, uid, t_tid, t_fid, t_subject,
                                                    t_lastpost, t_lastposter, t_numreplies, t_closed,
                                                    firstpost=t_firstpost)
-            except Exception:
-                pass
+            except Exception as _mt_err:
+                log.warning("Crawl: add_my_thread failed uid=%s tid=%s: %s", uid, t_tid, _mt_err)
 
             stored_lastpost = int((_cursor_map.get(t_tid) or {}).get("last_checked") or 0)
 
@@ -509,7 +561,7 @@ async def _crawl_user_bytes(uid: str, token: str, active: bool = True) -> None:
                     pass
                 seed_tids_uid.add(t_tid)
 
-              # If we or Stanley posted last — advance cursor, no reply to queue
+            # If we or Stanley posted last — advance cursor, no reply to queue
             if t_lastposter in (uid, STANLEY_UID):
                 try:
                     last_pid = (_cursor_map.get(t_tid) or {}).get("last_pid") or "0"
@@ -779,8 +831,7 @@ _crawl_trigger: asyncio.Queue = asyncio.Queue(maxsize=10)  # uid queue for immed
 # ── Event loop watchdog ────────────────────────────────────────────────────────
 # Two-layer watchdog:
 # 1. Loop ping — detects a fully frozen event loop (rare)
-# 2. Activity heartbeat — detects stuck coroutines (common case: relay hangs
-#    at OS level below aiohttp timeout, loop is alive but requests never return)
+# 2. Activity heartbeat — detects stuck coroutines while the loop is alive
 import threading
 import os as _os
 import time as _time
@@ -866,20 +917,47 @@ async def _username_resolve_loop() -> None:
                     if not chunk and not tid_ints:
                         continue
 
-                    from HFClient import HFClient
+                    from HFClient import HFClient, get_rate_limit_remaining
                     client = HFClient(token)
                     ask: dict = {}
                     if chunk:
-                        ask["users"]   = {"_uid": chunk[:30], "uid": True, "username": True}
+                        ask["users"] = {
+                            "_uid": chunk[:30],
+                            "uid": True, "username": True, "avatar": True,
+                            "usertitle": True, "reputation": True,
+                            "displaygroup": True, "additionalgroups": True,
+                        }
                     if tid_ints:
                         ask["threads"] = {"_tid": tid_ints[:30], "tid": True, "subject": True}
 
+                    import time as _tr_t; _tr0 = _tr_t.time()
                     combined = await asyncio.wait_for(client.read(ask), timeout=15)
+                    import hf_cache as _hfc2
+                    _tr_ms = int((_tr_t.time() - _tr0) * 1000)
+                    await asyncio.to_thread(
+                        _hfc2.log_call, uid, "read", "username_resolver",
+                        "users+threads", _tr_ms, bool(combined),
+                        get_rate_limit_remaining(token), "", "direct_crawler",
+                    )
                     if combined:
                         if "users" in combined:
                             rows = combined["users"]
                             if isinstance(rows, dict): rows = [rows]
-                            uid_map = {str(r["uid"]): r["username"] for r in rows if r.get("uid") and r.get("username")}
+                            uid_map: dict = {}
+                            for r in rows:
+                                if not r.get("uid") or not r.get("username"):
+                                    continue
+                                av = str(r.get("avatar", "") or "")
+                                if av and not av.startswith("http"):
+                                    av = "https://hackforums.net/" + av.lstrip("./")
+                                uid_map[str(r["uid"])] = {
+                                    "username":         str(r.get("username", "") or ""),
+                                    "avatar":           av,
+                                    "usertitle":        str(r.get("usertitle", "") or ""),
+                                    "reputation":       int(r.get("reputation") or 0),
+                                    "displaygroup":     str(r.get("displaygroup") or ""),
+                                    "additionalgroups": str(r.get("additionalgroups") or ""),
+                                }
                             if uid_map:
                                 await asyncio.to_thread(db.upsert_uid_usernames, uid_map)
                                 log.info("Username cache: resolved %d UIDs for user %s", len(uid_map), uid)
@@ -1111,12 +1189,14 @@ async def lifespan(app: FastAPI):
         _last_browse_warm   = 0.0
         _last_sigmarket_warm = 0.0
         _last_wire_sync     = 0.0
-        AUTOBUMP_INTERVAL      = 1800  # 30 min — always runs (user-facing feature)
-        REPLY_POLL_INTERVAL    =  300  # 5 min normal; doubled at low/critical
-        BROWSE_WARM_INTERVAL   = 1500  # 25 min; skipped at caution+
-        SIGMARKET_WARM_INTERVAL =  900  # 15 min per-user sigmarket status; skip at caution+
-        WIRE_SYNC_INTERVAL     = 21600  # 6 hr — refresh numreplies/lastpost/closed on wire threads
-        TICK                   =   60  # 1 min normal; stretched at low/critical
+        _last_rating_sync   = 0.0
+        AUTOBUMP_INTERVAL      = 1800
+        REPLY_POLL_INTERVAL    =  300
+        BROWSE_WARM_INTERVAL   = 1500
+        SIGMARKET_WARM_INTERVAL =  900
+        WIRE_SYNC_INTERVAL     = 21600
+        RATING_SYNC_INTERVAL   = 21600
+        TICK                   =   60
 
         # Smart startup for autobump — check when it last ran
         try:
@@ -1304,6 +1384,48 @@ async def lifespan(app: FastAPI):
                         _last_wire_sync = _t.time()  # still advance so we don't spam retries
                     except Exception as e:
                         log.warning("Wire sync error: %s", e)
+
+                # ── 7. Ratings auto-sync (every 6h, normal throttle only) ──────
+                if now - _last_rating_sync >= RATING_SYNC_INTERVAL and _tl == "normal":
+                    try:
+                        from HFClient import HFClient as _HFC_r
+                        from modules.merchant.merchant_db import (
+                            upsert_bratings as _ub_r,
+                            mark_sent_ratings_fetched as _msrf_r,
+                            get_received_ratings_freshness as _grf_r,
+                        )
+                        _r_uids = await asyncio.to_thread(db.get_all_uids)
+                        for _r_uid in _r_uids:
+                            try:
+                                _r_tok = await asyncio.to_thread(db.get_token, _r_uid)
+                                if not _r_tok:
+                                    continue
+                                _r_last = await asyncio.to_thread(_grf_r, _r_uid)
+                                if _r_last and (_t.time() - _r_last) < 4 * 3600:
+                                    continue
+                                _r_client = _HFC_r(_r_tok)
+                                _r_int    = int(_r_uid)
+                                _r_rows: list = []
+                                for _r_pg in range(1, 31):
+                                    _r_d = await asyncio.wait_for(_r_client.read({"bratings": {
+                                        "_from": [_r_int], "_page": _r_pg, "_perpage": 30,
+                                        "crid": True, "contractid": True, "fromid": True, "toid": True,
+                                        "dateline": True, "amount": True, "message": True,
+                                    }}), timeout=10)
+                                    _r_raw = (_r_d or {}).get("bratings", [])
+                                    if isinstance(_r_raw, dict): _r_raw = [_r_raw]
+                                    _r_rows.extend(_parse_brating_rows(_r_raw, _r_uid))
+                                    if not _r_raw or len(_r_raw) < 30:
+                                        break
+                                if _r_rows:
+                                    await asyncio.to_thread(_ub_r, _r_uid, _r_rows)
+                                    await asyncio.to_thread(_msrf_r, _r_uid)
+                                await asyncio.sleep(2)
+                            except Exception as _r_e:
+                                log.warning("Ratings sync: uid=%s: %s", _r_uid, _r_e)
+                        _last_rating_sync = _t.time()
+                    except Exception as e:
+                        log.warning("Ratings sync error: %s", e)
 
             except Exception as e:
                 log.exception("Unified scheduler: unexpected error: %s", e)
@@ -1789,6 +1911,12 @@ async def dash_contracts(request: Request, force: bool = False):
     raw = data.get("contracts", [])
     if isinstance(raw, dict): raw = [raw]
     contracts = [_fmt(c) for c in (raw or [])]
+    # Write-through: persist live page-1 data so crawler picks up from here
+    if raw:
+        try:
+            await asyncio.to_thread(db.upsert_contracts, uid, raw)
+        except Exception:
+            pass
     total_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
     return {"contracts": contracts, "uid": uid, "total_count": total_count}
 
@@ -1837,7 +1965,7 @@ async def contracts_history_db(request: Request, page: int = 1, perpage: int = 1
     total    = await asyncio.to_thread(db.get_contracts_history_count, uid, status_n)
     cstate   = await asyncio.to_thread(db.get_contracts_crawl_state, uid)
 
-    STATUS   = {"1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
+    STATUS   = {"0":"Awaiting Approval","1":"Awaiting Approval","2":"Cancelled","3":"Unknown","4":"Cancelled",
                 "5":"Active Deal","6":"Complete","7":"Disputed","8":"Expired"}
     TYPE_MAP = {"1":"Selling","2":"Purchasing","3":"Exchanging","4":"Trading","5":"Vouch Copy"}
 
@@ -2408,9 +2536,61 @@ async def delete_account(request: Request):
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    await asyncio.to_thread(db.delete_user_data, uid)
+    failures = await asyncio.to_thread(db.delete_user_data, uid)
+    remaining = await asyncio.to_thread(db.audit_user_data_remaining, uid)
+    still_has_data = {t: c for t, c in remaining.items() if c > 0}
     request.session.clear()
+    if failures or still_has_data:
+        log.warning(
+            "delete_account incomplete uid=%s failures=%s remaining=%s",
+            uid, failures, still_has_data,
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Deletion incomplete - some data may remain. Try again or contact support.",
+                "failures": failures,
+                "remaining": still_has_data,
+            },
+            status_code=500,
+        )
     return {"ok": True}
+
+
+@app.get("/api/account/inventory")
+async def account_inventory(request: Request):
+    """Count all stored rows for the current user. Used for deletion preview."""
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    counts = await asyncio.to_thread(db.audit_user_data_remaining, uid)
+    non_zero = {t: c for t, c in counts.items() if isinstance(c, int) and c > 0}
+    total = sum(v for v in non_zero.values())
+    return {"inventory": non_zero, "total_rows": total}
+
+
+@app.get("/api/telegram/alert-preferences")
+async def get_alert_prefs(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    prefs = await asyncio.to_thread(integration_db.get_alert_preferences, uid)
+    return {"preferences": prefs}
+
+
+@app.patch("/api/telegram/alert-preferences")
+async def set_alert_prefs(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    body = await request.json()
+    for event_type, enabled in body.items():
+        if isinstance(enabled, bool):
+            await asyncio.to_thread(
+                integration_db.set_alert_preference, uid, str(event_type), enabled
+            )
+    prefs = await asyncio.to_thread(integration_db.get_alert_preferences, uid)
+    return {"preferences": prefs}
 
 
 @app.get("/api/notifications")
@@ -2494,6 +2674,15 @@ async def get_contract_detail(request: Request, cid: int):
     contract = data.get("contract")
     if not contract:
         return JSONResponse({"error": "Contract not found"}, status_code=404)
+
+    # Write-through: persist contract detail for this viewer if they're a party
+    try:
+        _init  = str(contract.get("inituid")  or "")
+        _other = str(contract.get("otheruid") or "")
+        if uid in (_init, _other):
+            await asyncio.to_thread(db.upsert_contracts, uid, [contract])
+    except Exception:
+        pass
 
     if force:
         try:
@@ -2581,6 +2770,47 @@ async def contract_action(request: Request, cid: int):
                 if fresh_list:
                     await asyncio.to_thread(db.upsert_contracts, uid, fresh_list)
                     refreshed = fresh_list[0]
+                    # Seed counterparty UIDs so contract list resolves them without extra calls
+                    _cp_init  = str(refreshed.get("inituid")  or "")
+                    _cp_other = str(refreshed.get("otheruid") or "")
+                    _unknown_parties = [
+                        u for u in [_cp_init, _cp_other]
+                        if u and u != uid and u.isdigit()
+                    ]
+                    if _unknown_parties:
+                        _known = await asyncio.to_thread(db.get_uid_usernames, _unknown_parties)
+                        _to_resolve = [u for u in _unknown_parties if u not in _known]
+                        if _to_resolve:
+                            try:
+                                from HFClient import HFClient as _HFC2
+                                _ur = await asyncio.wait_for(
+                                    _HFC2(token).read({"users": {
+                                        "_uid": [int(u) for u in _to_resolve],
+                                        "uid": True, "username": True, "avatar": True,
+                                        "usertitle": True, "reputation": True,
+                                        "displaygroup": True,
+                                    }}),
+                                    timeout=6,
+                                )
+                                _urows = (_ur or {}).get("users", [])
+                                if isinstance(_urows, dict): _urows = [_urows]
+                                _seed: dict = {}
+                                for _u in (_urows or []):
+                                    if not _u.get("uid"): continue
+                                    _av = str(_u.get("avatar", "") or "")
+                                    if _av and not _av.startswith("http"):
+                                        _av = "https://hackforums.net/" + _av.lstrip("./")
+                                    _seed[str(_u["uid"])] = {
+                                        "username":     str(_u.get("username", "") or ""),
+                                        "avatar":       _av,
+                                        "usertitle":    str(_u.get("usertitle", "") or ""),
+                                        "reputation":   int(_u.get("reputation") or 0),
+                                        "displaygroup": str(_u.get("displaygroup") or ""),
+                                    }
+                                if _seed:
+                                    await asyncio.to_thread(db.upsert_uid_usernames, _seed)
+                            except Exception:
+                                pass
                 if fresh.get("success") is not False and fresh.get("bratings"):
                     await _store_bratings(uid, _parse_brating_rows(fresh.get("bratings", []), uid))
         except Exception as e:
@@ -2759,9 +2989,9 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
         return JSONResponse({"error": str(e)}, status_code=503)
 
 
-@app.get("/api/proxy/uimg/{image_id}")
-async def proxy_uimg(request: Request, image_id: str, key: str = ""):
-    """Proxy raw encrypted bytes from uploadimages.org/api/image/{id}?key={gwKey}.
+@app.get("/api/uimg/{image_id}")
+async def fetch_uimg(request: Request, image_id: str, key: str = ""):
+    """Fetch raw encrypted bytes from uploadimages.org/api/image/{id}?key={gwKey}.
     The server only ever sees opaque ciphertext — no E2E key, no plaintext."""
     uid = request.session.get("uid")
     if not uid:
@@ -2788,8 +3018,8 @@ async def proxy_uimg(request: Request, image_id: str, key: str = ""):
             headers={"Cache-Control": "private, max-age=86400"},
         )
     except Exception as e:
-        log.warning("uimg proxy failed image_id=%s: %s", image_id, e)
-        return JSONResponse({"error": "proxy error"}, status_code=502)
+        log.warning("uimg fetch failed image_id=%s: %s", image_id, e)
+        return JSONResponse({"error": "image fetch error"}, status_code=502)
 
 
 

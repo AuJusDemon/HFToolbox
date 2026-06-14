@@ -4,7 +4,7 @@ integration_db.py — Toolbox ↔ HF Radar shared integration layer.
 Tables (all in Toolbox DB):
   telegram_links      — hf_uid → chat_id mapping
   telegram_link_codes — short-lived link codes generated from dashboard
-  integration_accounts — per-user mode (toolbox_only / toolbox_linked_relay / both_linked)
+  integration_accounts — per-user integration mode
   alert_events        — shared event queue; UNIQUE(hf_uid, type, dedupe_key) prevents doubles
   alert_preferences   — per-user per-type enable/disable
 

@@ -301,11 +301,33 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
         author_uids = list({str(item["post"].get("uid") or "") for item in pending if item["post"].get("uid")})
         if author_uids:
             try:
-                u_data    = await client.read({"users": {"_uid": [int(u) for u in author_uids if u], "uid": True, "username": True}})
+                u_data    = await client.read({"users": {
+                    "_uid": [int(u) for u in author_uids if u],
+                    "uid": True, "username": True, "avatar": True,
+                    "usertitle": True, "reputation": True,
+                    "displaygroup": True, "additionalgroups": True,
+                }})
                 users_raw = (u_data or {}).get("users", [])
                 if isinstance(users_raw, dict): users_raw = [users_raw]
+                uid_profile_map: dict = {}
                 for u in (users_raw or []):
-                    username_map[str(u.get("uid") or "")] = str(u.get("username") or "")
+                    _u_uid = str(u.get("uid") or "")
+                    _u_name = str(u.get("username") or "")
+                    if _u_uid:
+                        username_map[_u_uid] = _u_name
+                        av = str(u.get("avatar", "") or "")
+                        if av and not av.startswith("http"):
+                            av = "https://hackforums.net/" + av.lstrip("./")
+                        uid_profile_map[_u_uid] = {
+                            "username":         _u_name,
+                            "avatar":           av,
+                            "usertitle":        str(u.get("usertitle", "") or ""),
+                            "reputation":       int(u.get("reputation") or 0),
+                            "displaygroup":     str(u.get("displaygroup") or ""),
+                            "additionalgroups": str(u.get("additionalgroups") or ""),
+                        }
+                if uid_profile_map:
+                    await asyncio.to_thread(db.upsert_uid_usernames, uid_profile_map)
             except Exception as e:
                 log.warning("Reply poll: username batch failed uid=%s: %s", uid, e)
 

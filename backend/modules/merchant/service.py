@@ -548,6 +548,7 @@ def get_overview(uid: str) -> dict:
     )
 
     return {
+        'username_map': name_cache,
         'action_queue': action_queue,
         'today': {
             'completed_deals': completed_today,

@@ -14,7 +14,7 @@ Endpoints (existing):
   POST   /api/posting/replies/{id}/dismiss        — dismiss a reply
   POST   /api/posting/reply                       — post a reply to a thread
   GET    /api/posting/recents                     — recently used forums
-  POST   /api/posting/imagehost/upload            — proxy to uploadimages.org
+  POST   /api/posting/imagehost/upload            — upload to uploadimages.org
 
 Endpoints (collaborative drafts — specific routes before parameterised ones):
   GET    /api/posting/drafts/shared               — drafts shared with me
@@ -386,7 +386,7 @@ async def get_recents_route(request: Request):
     return {"recents": await asyncio.to_thread(get_recents, uid)}
 
 
-# ── Image host proxy ───────────────────────────────────────────────────────────
+# ── Image host upload ──────────────────────────────────────────────────────────
 
 @router.post("/imagehost/upload")
 async def imagehost_upload(request: Request):

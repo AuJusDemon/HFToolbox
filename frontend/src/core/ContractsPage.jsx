@@ -582,8 +582,8 @@ export default function ContractsPage() {
 
   useEffect(() => { loadDash(); loadHist(1, filter, sortCol, sortDir); loadStats() }, [])
   usePolling(loadDash,  apiPaused ? null : (settings?.contractsInterval||300) * 1000)
-  usePolling(() => loadHist(page, filter, sortCol, sortDir), apiPaused ? null : 30000)
-  usePolling(loadStats, apiPaused ? null : 60000)
+  usePolling(() => loadHist(page, filter, sortCol, sortDir), 30000)
+  usePolling(loadStats, 60000)
 
   // Resolve counterparty usernames — merge store cache first (instant),
   // then call resolveUids for any still-missing ones (DB-only, no HF cost).

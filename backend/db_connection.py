@@ -143,6 +143,10 @@ _RE_PLACEHOLDER     = re.compile(r'\?')
 _RE_INSERT_IGNORE   = re.compile(r'\bINSERT\s+OR\s+IGNORE\b', re.IGNORECASE)
 _RE_INSERT_REPLACE  = re.compile(r'\bINSERT\s+OR\s+REPLACE\s+INTO\b', re.IGNORECASE)
 _RE_STRFTIME        = re.compile(r"strftime\('%s',\s*'now'\)", re.IGNORECASE)
+# Matches the SQLite-style conflict preamble only — not the assignment body.
+# A second pass replaces all remaining excluded.col references with VALUES(col).
+# This handles simple assignments (col=excluded.col) and complex expressions
+# (CASE WHEN excluded.col='' THEN col ELSE excluded.col END) equally.
 _RE_ON_CONFLICT     = re.compile(
     r'ON\s+CONFLICT\s*\([^)]*\)\s+DO\s+UPDATE\s+SET\b',
     re.IGNORECASE,
@@ -156,8 +160,11 @@ def _translate(sql: str) -> str:
     sql = _RE_INSERT_IGNORE.sub('INSERT IGNORE', sql)
     sql = _RE_INSERT_REPLACE.sub('REPLACE INTO', sql)
     sql = _RE_STRFTIME.sub('UNIX_TIMESTAMP()', sql)
+    # Step 1: replace the preamble — ON CONFLICT(...) DO UPDATE SET → ON DUPLICATE KEY UPDATE
     sql = _RE_ON_CONFLICT.sub('ON DUPLICATE KEY UPDATE', sql)
+    # Step 2: replace every remaining excluded.col reference with VALUES(col)
     sql = _RE_EXCLUDED.sub(lambda m: f'VALUES({m.group(1)})', sql)
+    # Escape MySQL reserved words used as column names
     sql = re.sub(r'(?<![`\w])key(?![`\w])(?=\s*[=,)])', '`key`', sql)
     sql = _RE_PLACEHOLDER.sub('%s', sql)
     return sql

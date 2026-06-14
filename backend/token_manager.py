@@ -28,11 +28,6 @@ HF_TOKEN_URL  = "https://hackforums.net/api/v2/authorize"
 CLIENT_ID     = os.environ.get("HF_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("HF_CLIENT_SECRET", "")
 
-# Residential relay — required because Cloudflare blocks datacenter IPs
-_RELAY_HOST   = os.environ.get("HF_RELAY_HOST", "")
-_RELAY_PORT   = int(os.environ.get("HF_RELAY_PORT", "0"))
-_RELAY_SECRET = os.environ.get("HF_RELAY_SECRET", "")
-
 # Reuse a single session across all refresh calls — avoids the overhead of
 # spinning up a new connector + TLS handshake for every token refresh.
 # Created lazily on first use; closed connections are handled by aiohttp internally.
@@ -84,11 +79,6 @@ async def try_refresh_token(uid: str) -> str | None:
 
     log.info("token_manager: attempting token refresh for uid=%s", uid)
     try:
-        kwargs: dict = {}
-        if _RELAY_HOST and _RELAY_PORT:
-            kwargs["proxy"]      = f"http://{_RELAY_HOST}:{_RELAY_PORT}"
-            kwargs["proxy_auth"] = aiohttp.BasicAuth("proxy", _RELAY_SECRET)
-
         session = _get_refresh_session()
         resp = await session.post(
             HF_TOKEN_URL,
@@ -98,7 +88,6 @@ async def try_refresh_token(uid: str) -> str | None:
                 "client_secret": CLIENT_SECRET,
                 "refresh_token": refresh_token,
             },
-            **kwargs,
         )
         body = await resp.json(content_type=None)
     except Exception as e:

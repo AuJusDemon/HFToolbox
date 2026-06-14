@@ -50,7 +50,7 @@ def _auth(request: Request):
 async def _do_status_fetch(uid: str, token: str) -> dict | None:
     """
     Fetch sigmarket status: 3 sequential reads (market listing + seller orders + buyer orders).
-    Sequential to avoid concurrent session rotation on the shared proxy when reads time out.
+    Sequential to avoid stacking slow HF reads when one times out.
     Returns parsed result dict, or None if all three reads fail.
     Partial success (some reads return None) still produces a shaped result.
     Called via hf_service.get_or_fetch — never call directly from routes.
@@ -70,14 +70,12 @@ async def _do_status_fetch(uid: str, token: str) -> dict | None:
         "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
         "smid": True, "active": True, "startdate": True, "enddate": True,
         "price": True, "duration": True,
-        "buyer": {"uid": True, "username": True},
     }})
 
     data3 = await hf.read({"sigmarket": {
         "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
         "smid": True, "active": True, "startdate": True, "enddate": True,
         "price": True, "duration": True,
-        "seller": {"uid": True, "username": True},
     }})
 
     listing_raw       = (data1 or {}).get("sigmarket")
@@ -107,13 +105,17 @@ async def _do_status_fetch(uid: str, token: str) -> dict | None:
     seller_orders = [_parse(o, "buyer")  for o in (seller_orders_raw or [])]
     buyer_orders  = [_parse(o, "seller") for o in (buyer_orders_raw  or [])]
 
-    uid_name_map = {}
+    uid_name_map: dict = {}
     for o in seller_orders:
         b = o.get("buyer") or {}
-        if b.get("uid") and b.get("username"): uid_name_map[str(b["uid"])] = b["username"]
+        if b.get("uid") and b.get("username"):
+            uid_name_map[str(b["uid"])] = {"username": b.get("username", ""),
+                                            "displaygroup": str(b.get("usergroup") or "")}
     for o in buyer_orders:
         s = o.get("seller") or {}
-        if s.get("uid") and s.get("username"): uid_name_map[str(s["uid"])] = s["username"]
+        if s.get("uid") and s.get("username"):
+            uid_name_map[str(s["uid"])] = {"username": s.get("username", ""),
+                                            "displaygroup": str(s.get("usergroup") or "")}
     if uid_name_map:
         try:
             await asyncio.to_thread(db.upsert_uid_usernames, uid_name_map)
@@ -408,10 +410,14 @@ async def _do_browse_fetch(token: str) -> dict | None:
         if isinstance(urows, dict): urows = [urows]
         for u in (urows or []):
             user_map[str(u.get("uid"))] = u
-        uid_name_map = {
-            str(u.get("uid")): u.get("username", "")
-            for u in (urows or []) if u.get("uid") and u.get("username")
-        }
+        uid_name_map: dict = {}
+        for u in (urows or []):
+            if not u.get("uid") or not u.get("username"):
+                continue
+            uid_name_map[str(u["uid"])] = {
+                "username":   u.get("username", ""),
+                "reputation": int(u.get("reputation") or 0),
+            }
         if uid_name_map:
             try:
                 await asyncio.to_thread(db.upsert_uid_usernames, uid_name_map)

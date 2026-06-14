@@ -178,7 +178,7 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
             return False
 
         # Bump accepted — collect the fee
-        # Small delay so the relay doesn't drop back-to-back write calls
+        # Small delay between back-to-back write calls.
         await asyncio.sleep(2)
         if uid != MY_UID:
             try:

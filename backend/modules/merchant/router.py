@@ -28,6 +28,17 @@ async def merchant_overview(request: Request):
     return await asyncio.to_thread(get_overview, uid)
 
 
+@router.get("/freshness")
+async def merchant_freshness(request: Request):
+    """Return last-update timestamps for Seller HQ data areas. Lightweight poll target."""
+    uid = _uid(request)
+    from modules.merchant.service import _get_crawl_freshness
+    from modules.merchant.merchant_db import get_received_ratings_freshness
+    data = await asyncio.to_thread(_get_crawl_freshness, uid)
+    data["ratings_fresh_at"] = await asyncio.to_thread(get_received_ratings_freshness, uid)
+    return data
+
+
 @router.get("/offers")
 async def merchant_offers(request: Request,
                            status: Optional[str] = None,

@@ -35,7 +35,6 @@ You host it yourself. Your data stays on your server. Anyone with an HF account 
 | Backend | Python 3.11+, FastAPI, SQLite (default) or MySQL |
 | Frontend | React 18, Vite, Zustand |
 | Auth | HF OAuth2 |
-| Reverse proxy | Caddy (recommended) or nginx |
 
 ---
 
@@ -45,8 +44,6 @@ You host it yourself. Your data stays on your server. Anyone with an HF account 
 2. An HF API OAuth application — create one at `usercp.php?action=options` → API Management
 3. Python 3.11+
 4. Node.js 18+
-
-> **Cloudflare / Datacenter IPs:** HackForums is behind Cloudflare, which blocks most cloud/VPS IP ranges. If you're hosting on a server (DigitalOcean, AWS, etc.) you'll need to route API calls through a residential proxy. Set `HF_PROXY1_URL` in your `.env` — see [Proxy Setup](#proxy-setup) below.
 
 ---
 
@@ -107,27 +104,6 @@ npm install
 npm run build   # outputs to dist/
 ```
 
-**4. Reverse Proxy (Caddy)**
-
-```bash
-sudo apt install caddy   # or download from caddyserver.com
-```
-
-Caddyfile:
-```
-yourdomain.com {
-    handle /auth/*    { reverse_proxy localhost:8000 }
-    handle /api/*     { reverse_proxy localhost:8000 }
-    handle /modules/* { reverse_proxy localhost:8000 }
-    handle /health*   { reverse_proxy localhost:8000 }
-    handle {
-        root * /path/to/hftoolbox/frontend/dist
-        try_files {path} /index.html
-        file_server
-    }
-}
-```
-
 ---
 
 ### Option C — Manual (Windows)
@@ -145,22 +121,6 @@ python -m uvicorn server:app --port 8000
 
 **Frontend:** same as Linux — `npm install && npm run build`
 
-**Reverse proxy:** Download [Caddy for Windows](https://caddyserver.com/download), use same Caddyfile as above.
-
----
-
-## Proxy Setup
-
-If you're on a datacenter IP and getting 403 errors from HF, set `HF_PROXY_URL` in your `.env`:
-
-```env
-# HTTP proxy
-HF_PROXY_URL=http://user:password@proxy.example.com:8080
-
-# SOCKS5
-HF_PROXY_URL=socks5://user:password@proxy.example.com:1080
-```
-
 ---
 
 ## Configuration
@@ -174,9 +134,6 @@ Copy `.env.example` to `.env` and fill in your credentials:
 | `HF_REDIRECT_URI` | Must exactly match what you set in your HF app (e.g. `https://yourdomain.com/auth/callback`) |
 | `SESSION_SECRET` | Random secret for session signing — use `python -c "import secrets; print(secrets.token_hex(32))"` |
 | `FRONTEND_URL` | Your frontend URL (used for CORS) |
-| `HF_PROXY1_URL` | Primary residential proxy URL — needed on datacenter IPs |
-| `HF_PROXY1_SESSION_LIFETIME` | Sticky session lifetime in seconds (optional) |
-| `HF_PROXY2_URL` | Fallback proxy URL — used if primary fails (optional) |
 | `ENV` | `production` or `development` |
 
 ---
