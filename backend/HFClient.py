@@ -68,11 +68,10 @@ def _sync_call(token: str, url: str, form_data: dict) -> requests.Response:
 
 
 # ── Concurrency limiter ────────────────────────────────────────────────────────
-_hf_sem         = asyncio.Semaphore(6)
-_MAX_RETRIES    = 4               # 5 total attempts before giving up
-_CF_MAX_RETRIES = 2
-_RETRY_DELAYS   = [1, 2, 4, 8]   # backoff for Timeout/ConnectionError
-_CF_RETRY_DELAYS = [4, 8, 16, 30] # longer backoff for CF 403 blocks
+_hf_sem          = asyncio.Semaphore(6)
+_MAX_RETRIES     = 4               # 5 total attempts before giving up
+_RETRY_DELAYS    = [1, 2, 4, 8]   # backoff for Timeout/ConnectionError
+_CF_RETRY_DELAYS = [4, 8, 16, 30] # longer backoff for CF 403/502 blocks
 
 
 async def _request(
@@ -96,10 +95,8 @@ async def _request(
         if resp.status_code == 200:
             ct = resp.headers.get("Content-Type", "")
             if "text/html" in ct or resp.text.lstrip().startswith("<!"):
-                log.warning("HF returned HTML challenge response")
-                if attempt < _CF_MAX_RETRIES:
-                    await asyncio.sleep(1)
-                    return await _request(token, route, body, attempt + 1, max_retries)
+                log.warning("HF returned CF HTML challenge (route=%s attempt=%d) - returning None",
+                            route, attempt)
                 return None
             return resp.json()
 

@@ -16,6 +16,7 @@
 - **Max 4 endpoints per single `read()` call.** 5+ silently returns 503 with no warning.
 - **Rate limit: ~240 calls/hour per token** (empirical). Tracked via `x-rate-limit-remaining` response header.
 - `401` = missing or invalid access token
+- **Cloudflare quirk:** HF can return HTTP 200 with an HTML body (CF challenge page) instead of JSON. Always check `Content-Type` or whether the body starts with `<!` before parsing. Do not retry immediately - CF challenges do not clear in milliseconds.
 
 ---
 

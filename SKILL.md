@@ -164,6 +164,69 @@ Rules:
 
 See `HF_API_REFERENCE.md` for endpoint details, fields, batching examples, and known API limitations.
 
+## Unified User Dashboard Refresh
+
+`backend/dashboard_refresh.py` is the canonical home for all bundled private per-user HF reads.
+
+Do NOT scatter new private HF reads into feature routes or module pollers. To add a new dashboard resource:
+1. Add the HF API fields to the relevant ask dict in `refresh_user_dashboard()`.
+2. Write a `_section_<name>()` helper that processes the result and writes to local DB.
+3. Call it (wrapped in `try/except`) from `refresh_user_dashboard()`.
+
+`main.py`'s `_crawl_user_bytes()` delegates to `refresh_user_dashboard()`. The scheduler,
+activity trigger, and idle-return trigger all call through this path.
+
+## Cache-First Endpoint Pattern
+
+Feature routes must serve local DB or cache first and make HF calls only as a bounded cold fallback:
+
+```python
+# Correct: local DB first, live only when empty
+rows = await asyncio.to_thread(db.get_bytes_history, uid, 30, 0)
+if rows:
+    return {"transactions": rows}
+# ... cold fallback live fetch here
+
+# Correct: shared cache with stale-while-revalidate
+data, is_stale = await hf_service.get_or_fetch(
+    cache_key     = f"user:{target_uid}:profile",
+    resource_type = "user_profile",
+    fetch_fn      = lambda: _do_fetch(target_uid, token),
+    uid           = uid,
+)
+```
+
+Shared cacheable resources (user profile, contract detail, thread metadata, sigmarket browse,
+user activity/trust) use stable `hf_cache` keys and `hf_service.get_or_fetch()` so one
+request can refresh a shared entry and all concurrent requests see the same cached data.
+
+## HF Failure Handling
+
+`HFClient.read()` returns `None` for all failure types. Callers must handle `None` cleanly:
+
+- **CF HTML challenge**: HF returns HTTP 200 with HTML body. `HFClient` returns `None`
+  immediately without retrying. Do not retry CF failures in a loop - they do not clear in
+  milliseconds. Serve stale cache when available.
+- **Timeout/network error**: `HFClient` retries with backoff up to `_MAX_RETRIES` times,
+  then returns `None`. Serve stale cache.
+- **401 AuthExpired**: `HFClient` raises `AuthExpired`. Routes must catch this, clear the
+  session, and return 401 to the frontend.
+- **Rate limit exhaustion**: check `_throttle_level()` before non-critical background calls.
+
+Each feature should degrade independently. A `None` from sigmarket must not block bytes or
+autobump. A CF hit on one resource must not stall other in-flight requests.
+
+## Autobump Safety Rule
+
+Autobump MUST live-read from HF immediately before every bump decision. No exceptions.
+
+- Timer mode: live-read `threads._tid` and verify `lastpost`/`lastposteruid`/`numreplies`.
+- Page-1 mode: live-read forum page 1 and verify the thread position.
+- If the live read returns `None` (CF, timeout, or network failure): skip/defer and log.
+  Never bump from stale cache data.
+
+Cache and local DB may be used for UI display, job lists, stats, and bump history only.
+
 ## Frontend Pages
 
 Create feature pages under `frontend/src/core/` unless there is a clear module-specific frontend folder already in use.

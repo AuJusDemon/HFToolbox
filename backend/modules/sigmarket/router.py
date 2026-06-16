@@ -48,35 +48,35 @@ def _auth(request: Request):
 # Now one function, called by both the route and the scheduler warmer.
 
 async def _do_status_fetch(uid: str, token: str) -> dict | None:
-    """
-    Fetch sigmarket status: 3 sequential reads (market listing + seller orders + buyer orders).
-    Sequential to avoid stacking slow HF reads when one times out.
-    Returns parsed result dict, or None if all three reads fail.
-    Partial success (some reads return None) still produces a shaped result.
-    Called via hf_service.get_or_fetch — never call directly from routes.
-    """
-    from HFClient import HFClient
+    from HFClient import HFClient, AuthExpired
     hf      = HFClient(token)
     uid_int = int(uid)
 
-    # AuthExpired propagates naturally through hf_service to the route handler
-    data1 = await hf.read({"sigmarket": {
-        "_type": "market", "_uid": [uid_int], "_page": 1, "_perpage": 1,
-        "uid": True, "price": True, "duration": True, "active": True,
-        "sig": True, "ppd": True, "dateadded": True,
-    }})
+    results = await asyncio.gather(
+        hf.read({"sigmarket": {
+            "_type": "market", "_uid": [uid_int], "_page": 1, "_perpage": 1,
+            "uid": True, "price": True, "duration": True, "active": True,
+            "sig": True, "ppd": True, "dateadded": True,
+        }}),
+        hf.read({"sigmarket": {
+            "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
+            "smid": True, "active": True, "startdate": True, "enddate": True,
+            "price": True, "duration": True,
+        }}),
+        hf.read({"sigmarket": {
+            "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
+            "smid": True, "active": True, "startdate": True, "enddate": True,
+            "price": True, "duration": True,
+        }}),
+        return_exceptions=True,
+    )
+    for r in results:
+        if isinstance(r, AuthExpired):
+            raise r
 
-    data2 = await hf.read({"sigmarket": {
-        "_type": "order", "_seller": [uid_int], "_page": 1, "_perpage": 30,
-        "smid": True, "active": True, "startdate": True, "enddate": True,
-        "price": True, "duration": True,
-    }})
-
-    data3 = await hf.read({"sigmarket": {
-        "_type": "order", "_buyer": [uid_int], "_page": 1, "_perpage": 30,
-        "smid": True, "active": True, "startdate": True, "enddate": True,
-        "price": True, "duration": True,
-    }})
+    data1 = results[0] if not isinstance(results[0], Exception) else None
+    data2 = results[1] if not isinstance(results[1], Exception) else None
+    data3 = results[2] if not isinstance(results[2], Exception) else None
 
     listing_raw       = (data1 or {}).get("sigmarket")
     seller_orders_raw = (data2 or {}).get("sigmarket", [])

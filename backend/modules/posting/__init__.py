@@ -217,6 +217,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
 
         pending: list[dict] = []
         tid_max_pid: dict[str, str] = {}
+        failed_tids: set[str] = set()
 
         for tid_str in tids:
             tracked  = tid_map.get(tid_str, {})
@@ -237,6 +238,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
 
             try:
                 collected_posts: list = []
+                hf_failed = False
                 for fetch_page in pages_to_fetch:
                     page_data = await client.read({
                         "posts": {
@@ -250,15 +252,21 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                             "subject":  True,
                         }
                     })
-                    if not page_data:
+                    if page_data is None:
+                        hf_failed = True
                         continue
                     page_raw = page_data.get("posts", [])
                     if isinstance(page_raw, dict): page_raw = [page_raw]
                     collected_posts.extend(page_raw or [])
 
                 if not collected_posts:
-                    log.info("Reply poll: uid=%s tid=%s nr=%d pages=%s - no posts returned",
-                             uid, tid_str, nr, pages_to_fetch)
+                    if hf_failed:
+                        failed_tids.add(tid_str)
+                        log.info("Reply poll: uid=%s tid=%s - HF returned None, requeueing",
+                                 uid, tid_str)
+                    else:
+                        log.info("Reply poll: uid=%s tid=%s nr=%d pages=%s - no posts returned",
+                                 uid, tid_str, nr, pages_to_fetch)
                     continue
 
                 # Dedupe by pid (pages can overlap at boundaries)
@@ -295,6 +303,18 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
 
             except Exception as e:
                 log.warning("Reply poll: post fetch failed uid=%s tid=%s: %s", uid, tid_str, e)
+                failed_tids.add(tid_str)
+
+        if failed_tids:
+            _reply_check_queue.setdefault(uid, set()).update(failed_tids)
+            failed_titles = {t: titles[t] for t in failed_tids if t in titles}
+            if failed_titles:
+                _reply_check_titles.setdefault(uid, {}).update(failed_titles)
+            failed_nr = {t: numreplies[t] for t in failed_tids if t in numreplies}
+            if failed_nr:
+                _reply_check_numreplies.setdefault(uid, {}).update(failed_nr)
+            log.info("Reply poll: uid=%s re-queued %d tid(s) for retry (transient HF failure)",
+                     uid, len(failed_tids))
 
         # ── Batch username resolution ────────────────────────────────────────
         username_map: dict[str, str] = {}
