@@ -2459,7 +2459,7 @@ def _git_runtime_info() -> dict:
             timeout=3,
         )
         status = _subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain"],
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
             capture_output=True,
             text=True,
             timeout=3,
