@@ -2395,6 +2395,7 @@ _MANIFEST_EXCLUDE_DIRS = {
 _MANIFEST_EXCLUDE_FILES = {
     "agent.md",
     "AGENT_RUNTIME.md",
+    "docker-compose.migrated.yml",
     "backend/.env",
     "backend/deploy_info.json",
 }
@@ -2411,6 +2412,9 @@ _MANIFEST_EXCLUDE_SUFFIXES = (
     ".tar",
     ".gz",
     ".zip",
+    ".sh",
+    ".sql",
+    ".cnf",
 )
 
 
