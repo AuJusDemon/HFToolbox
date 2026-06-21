@@ -4,8 +4,12 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    environment:
+      HFT_MANIFEST_ROOT: /manifest-src
+      HFT_FRONTEND_DIST_ROOT: /manifest-src/frontend/dist
     volumes:
       - ./data:/app/data
+      - .:/manifest-src:ro
     env_file:
       - ./backend/.env
 

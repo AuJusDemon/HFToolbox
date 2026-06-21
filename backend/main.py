@@ -2389,9 +2389,12 @@ _MANIFEST_EXCLUDE_DIRS = {
     "build",
     "data",
     "logs",
+    "db_data",
+    "secrets",
 }
 _MANIFEST_EXCLUDE_FILES = {
     "agent.md",
+    "AGENT_RUNTIME.md",
     "backend/.env",
     "backend/deploy_info.json",
 }
@@ -2404,11 +2407,25 @@ _MANIFEST_EXCLUDE_SUFFIXES = (
     ".pyo",
     ".pyd",
     ".exe",
+    ".tgz",
+    ".tar",
+    ".gz",
+    ".zip",
 )
 
 
 def _repo_root() -> Path:
-    return Path(__file__).resolve().parent.parent
+    configured = os.environ.get("HFT_MANIFEST_ROOT", "").strip()
+    if configured:
+        root = Path(configured).resolve()
+        if root.exists():
+            return root
+
+    here = Path(__file__).resolve()
+    parent = here.parent
+    if parent.name == "backend" and (parent.parent / "frontend").exists():
+        return parent.parent
+    return parent
 
 
 def _load_deploy_info() -> dict:
@@ -2479,6 +2496,14 @@ def _is_manifest_file(path: Path, root: Path) -> bool:
     return path.is_file()
 
 
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def _file_sha256(path: Path) -> str:
     import hashlib as _hl
 
@@ -2517,25 +2542,37 @@ def _manifest_for(paths: list[Path], root: Path) -> dict:
     }
 
 
+def _iter_manifest_files(root: Path) -> list[Path]:
+    paths: list[Path] = []
+    for path in root.rglob("*"):
+        try:
+            if _is_manifest_file(path, root):
+                paths.append(path)
+        except (OSError, PermissionError):
+            continue
+    return paths
+
+
 def _public_repo_manifest() -> dict:
     root = _repo_root()
-    paths = [p for p in root.rglob("*") if _is_manifest_file(p, root)]
-    return _manifest_for(paths, root)
+    return _manifest_for(_iter_manifest_files(root), root)
 
 
 def _frontend_manifest() -> dict:
     root = _repo_root()
-    dist_root = root / "frontend" / "dist"
+    configured_dist = os.environ.get("HFT_FRONTEND_DIST_ROOT", "").strip()
+    dist_root = Path(configured_dist).resolve() if configured_dist else root / "frontend" / "dist"
     if dist_root.exists():
         paths = [p for p in dist_root.rglob("*") if p.is_file()]
-        manifest = _manifest_for(paths, root)
+        manifest_root = root if _is_relative_to(dist_root, root) else dist_root
+        manifest = _manifest_for(paths, manifest_root)
         manifest["source"] = "frontend/dist"
         return manifest
 
     src_root = root / "frontend" / "src"
-    paths = [p for p in src_root.rglob("*") if p.is_file()]
+    paths = [p for p in src_root.rglob("*") if p.is_file()] if src_root.exists() else []
     manifest = _manifest_for(paths, root)
-    manifest["source"] = "frontend/src"
+    manifest["source"] = "frontend/src" if src_root.exists() else "missing"
     return manifest
 
 
