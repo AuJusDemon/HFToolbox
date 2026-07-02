@@ -21,7 +21,7 @@ class AuthExpired(Exception):
     pass
 
 
-# ?? HF endpoints ???????????????????????????????????????????????????????????????
+# HF endpoints
 HF_READ  = "https://hackforums.net/api/v2/read"
 HF_WRITE = "https://hackforums.net/api/v2/write"
 HF_AUTH  = "https://hackforums.net/api/v2/authorize"
@@ -36,7 +36,7 @@ HF_TIMEOUT = (5, 12)
 log.info("HFClient: direct HF connection")
 
 
-# ?? Rate limit tracking ????????????????????????????????????????????????????????
+# Rate limit tracking
 _rate_limits: dict[str, int] = {}
 _rate_limit_seen_at: dict[str, float] = {}
 _hf_blocked_until = 0.0
@@ -66,7 +66,7 @@ def _update_rate_limit(token: str, remaining: int) -> None:
     _rate_limit_seen_at[token] = time.time()
 
 
-# ?? Sync HTTP call (runs in thread pool) ??????????????????????????????????????
+# Sync HTTP call (runs in thread pool)
 
 def _sync_call(token: str, url: str, form_data: dict) -> requests.Response:
     headers = {**HEADERS, "Authorization": f"Bearer {token}"}
@@ -79,11 +79,10 @@ def _sync_call(token: str, url: str, form_data: dict) -> requests.Response:
     )
 
 
-# ?? Concurrency limiter ????????????????????????????????????????????????????????
+# Concurrency limiter
 _hf_sem          = asyncio.Semaphore(2)
 _MAX_RETRIES     = 1               # one retry only for real network timeouts
 _RETRY_DELAYS    = [1, 2, 4, 8]   # backoff for Timeout/ConnectionError
-_CF_RETRY_DELAYS = [4, 8, 16, 30] # longer backoff for CF/HF 403/502/503 blocks
 
 
 async def _request(
@@ -132,27 +131,27 @@ async def _request(
     except requests.exceptions.Timeout:
         if attempt < max_retries:
             delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-            log.warning("HF ReadTimeout (attempt %d/%d) ? retrying in %ds",
+            log.warning("HF ReadTimeout (attempt %d/%d) - retrying in %ds",
                         attempt + 1, max_retries, delay)
             await asyncio.sleep(delay)
             return await _request(token, route, body, attempt + 1, max_retries)
-        log.warning("HF ReadTimeout ? all %d retries exhausted", max_retries)
+        log.warning("HF ReadTimeout - all %d retries exhausted", max_retries)
         return None
     except requests.exceptions.ConnectionError as e:
         if attempt < max_retries:
             delay = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
-            log.warning("HF %s (attempt %d/%d) ? retrying in %ds",
+            log.warning("HF %s (attempt %d/%d) - retrying in %ds",
                         type(e).__name__, attempt + 1, max_retries, delay)
             await asyncio.sleep(delay)
             return await _request(token, route, body, attempt + 1, max_retries)
-        log.warning("HF %s ? all %d retries exhausted", type(e).__name__, max_retries)
+        log.warning("HF %s - all %d retries exhausted", type(e).__name__, max_retries)
         return None
     except Exception as e:
         log.error("HF request error %s: %s", type(e).__name__, e)
         return None
 
 
-# ?? HFClient ???????????????????????????????????????????????????????????????????
+# HFClient
 
 class HFClient:
     def __init__(self, token: str, **kwargs):
@@ -163,7 +162,7 @@ class HFClient:
 
     async def write(self, asks: dict) -> dict | None:
         if os.environ.get("DEV_DISABLE_HF_WRITES") == "1":
-            log.warning("DEV_DISABLE_HF_WRITES=1 ? write blocked: %s", list(asks.keys()))
+            log.warning("DEV_DISABLE_HF_WRITES=1 - write blocked: %s", list(asks.keys()))
             return None
         return await _request(self.token, "write", asks, max_retries=0)
 
@@ -177,7 +176,7 @@ class HFClient:
             return False
 
 
-# ?? OAuth token exchange ???????????????????????????????????????????????????????
+# OAuth token exchange
 
 def _sync_token_exchange(code: str, cfg: dict):
     payload = {
@@ -207,7 +206,7 @@ async def exchange_code_for_token(code: str, cfg: dict):
                 data.get("expires_in"),
                 data.get("refresh_token"),
             )
-        log.error("Token exchange failed: HTTP %d ? %s", resp.status_code, resp.text[:300])
+        log.error("Token exchange failed: HTTP %d - %s", resp.status_code, resp.text[:300])
         return None, None, None
     except Exception as e:
         log.error("Token exchange error: %s", e)
