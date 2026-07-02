@@ -1,6 +1,8 @@
 services:
   db:
     image: mariadb:10.11
+    command:
+      - --log-warnings=1
     container_name: hftoolbox-prod-db
     restart: unless-stopped
     env_file:
