@@ -69,7 +69,7 @@ def _sync_call(token: str, url: str, form_data: dict) -> requests.Response:
 
 # ?? Concurrency limiter ????????????????????????????????????????????????????????
 _hf_sem          = asyncio.Semaphore(2)
-_MAX_RETRIES     = 4               # 5 total attempts before giving up
+_MAX_RETRIES     = 1               # one retry only for real network timeouts
 _RETRY_DELAYS    = [1, 2, 4, 8]   # backoff for Timeout/ConnectionError
 _CF_RETRY_DELAYS = [4, 8, 16, 30] # longer backoff for CF/HF 403/502/503 blocks
 
@@ -95,13 +95,7 @@ async def _request(
         if resp.status_code == 200:
             ct = resp.headers.get("Content-Type", "")
             if "text/html" in ct or resp.text.lstrip().startswith("<!"):
-                if attempt < max_retries:
-                    delay = _CF_RETRY_DELAYS[min(attempt, len(_CF_RETRY_DELAYS) - 1)]
-                    log.warning("HF returned HTML challenge (route=%s attempt %d/%d) - retrying in %ds",
-                                route, attempt + 1, max_retries, delay)
-                    await asyncio.sleep(delay)
-                    return await _request(token, route, body, attempt + 1, max_retries)
-                log.warning("HF returned HTML challenge (route=%s) - retries exhausted", route)
+                log.warning("HF returned HTML challenge (route=%s) - circuit open, not retrying", route)
                 return None
             return resp.json()
 
@@ -109,13 +103,7 @@ async def _request(
             raise AuthExpired()
 
         if resp.status_code in (403, 502, 503):
-            if attempt < max_retries:
-                delay = _CF_RETRY_DELAYS[min(attempt, len(_CF_RETRY_DELAYS) - 1)]
-                log.warning("HF HTTP %d (attempt %d/%d) ? retrying in %ds",
-                            resp.status_code, attempt + 1, max_retries, delay)
-                await asyncio.sleep(delay)
-                return await _request(token, route, body, attempt + 1, max_retries)
-            log.warning("HTTP %d ? all %d retries exhausted", resp.status_code, max_retries)
+            log.warning("HF HTTP %d (route=%s) - circuit open, not retrying", resp.status_code, route)
             return None
 
         log.warning("HF HTTP %d (route=%s)", resp.status_code, route)
