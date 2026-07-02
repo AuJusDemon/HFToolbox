@@ -39,6 +39,18 @@ log.info("HFClient: direct HF connection")
 # ?? Rate limit tracking ????????????????????????????????????????????????????????
 _rate_limits: dict[str, int] = {}
 _rate_limit_seen_at: dict[str, float] = {}
+_hf_blocked_until = 0.0
+_HF_BLOCK_COOLDOWN = int(os.environ.get("HF_CIRCUIT_COOLDOWN_SECONDS", "900"))
+
+
+def _is_hf_blocked() -> bool:
+    return time.time() < _hf_blocked_until
+
+
+def _trip_hf_circuit(reason: str) -> None:
+    global _hf_blocked_until
+    _hf_blocked_until = max(_hf_blocked_until, time.time() + _HF_BLOCK_COOLDOWN)
+    log.warning("HF circuit opened for %ds: %s", _HF_BLOCK_COOLDOWN, reason)
 
 
 def is_rate_limited(token: str) -> bool:
@@ -84,6 +96,10 @@ async def _request(
     url       = HF_READ if route == "read" else HF_WRITE
     form_data = {"asks": _json.dumps(body)}
 
+    if _is_hf_blocked():
+        log.warning("HF circuit open; skipping route=%s", route)
+        return None
+
     try:
         async with _hf_sem:
             resp = await asyncio.to_thread(_sync_call, token, url, form_data)
@@ -96,6 +112,7 @@ async def _request(
             ct = resp.headers.get("Content-Type", "")
             if "text/html" in ct or resp.text.lstrip().startswith("<!"):
                 log.warning("HF returned HTML challenge (route=%s) - circuit open, not retrying", route)
+                _trip_hf_circuit(f"HTML challenge route={route}")
                 return None
             return resp.json()
 
@@ -104,6 +121,7 @@ async def _request(
 
         if resp.status_code in (403, 502, 503):
             log.warning("HF HTTP %d (route=%s) - circuit open, not retrying", resp.status_code, route)
+            _trip_hf_circuit(f"HTTP {resp.status_code} route={route}")
             return None
 
         log.warning("HF HTTP %d (route=%s)", resp.status_code, route)
