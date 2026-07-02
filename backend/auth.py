@@ -12,6 +12,7 @@ Routes:
 import os
 import secrets
 import time as _time
+from urllib.parse import urlencode
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse
 from HFClient import exchange_code_for_token, HFClient
@@ -38,12 +39,13 @@ async def login(request: Request, next: str = ""):
     full_state = f"{state}|{safe_next}" if safe_next else state
     request.session["oauth_state"] = state
     request.session["oauth_next"]  = safe_next
-    url = (
-        f"https://hackforums.net/api/v2/authorize"
-        f"-response_type=code&client_id={CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_URI}&state={full_state}"
-    )
-    return RedirectResponse(url)
+    params = urlencode({
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": REDIRECT_URI,
+        "state": full_state,
+    })
+    return RedirectResponse(f"https://hackforums.net/api/v2/authorize?{params}")
 
 
 @router.get("/callback")
@@ -58,7 +60,7 @@ async def callback(
     if error or not code or not state:
         request.session.pop("oauth_state", None)
         request.session.pop("oauth_next", None)
-        return RedirectResponse(f"{FRONTEND_URL}/-auth_error={error or 'unknown'}")
+        return RedirectResponse(f"{FRONTEND_URL}/?auth_error={error or 'unknown'}")
 
     # State may be "TOKEN|/dashboard/path" ? extract the token part for validation
     state_token = state.split("|")[0]
