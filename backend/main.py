@@ -265,7 +265,7 @@ def _start_watchdog(loop: asyncio.AbstractEventLoop) -> None:
         while True:
             _time.sleep(PING_INTERVAL)
 
-            # Layer 1: is the event loop itself responding?
+            # Layer 1: is the event loop itself responding-
             fut = asyncio.run_coroutine_threadsafe(_ping(), loop)
             try:
                 fut.result(timeout=LOOP_HANG_TIMEOUT)
@@ -274,7 +274,7 @@ def _start_watchdog(loop: asyncio.AbstractEventLoop) -> None:
                 _dump_tasks(loop)
                 _os._exit(1)
 
-            # Layer 2: is any work actually happening? (stuck coroutine detection)
+            # Layer 2: is any work actually happening- (stuck coroutine detection)
             idle = _time.time() - _last_heartbeat
             if idle > HEARTBEAT_TIMEOUT:
                 log.error("WATCHDOG: no crawl activity for %.0fs ? stuck coroutine, killing for restart", idle)
@@ -1491,8 +1491,8 @@ async def contracts_export(
             "created_at": _created_at(r.get("dateline")),
             "dateline": r.get("dateline") or "",
             "tid": tid,
-            "thread_url":  f"https://hackforums.net/showthread.php?tid={tid}" if tid else "",
-            "contract_url": f"https://hackforums.net/contracts.php?action=view&cid={cid}",
+            "thread_url":  f"https://hackforums.net/showthread.php-tid={tid}" if tid else "",
+            "contract_url": f"https://hackforums.net/contracts.php-action=view&cid={cid}",
             "initiator_uid": init_uid,
             "other_uid": other_uid,
             "raw_type": r.get("type_n") or "",
@@ -2344,7 +2344,7 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
 
 @app.get("/api/uimg/{image_id}")
 async def fetch_uimg(request: Request, image_id: str, key: str = ""):
-    """Fetch raw encrypted bytes from uploadimages.org/api/image/{id}?key={gwKey}.
+    """Fetch raw encrypted bytes from uploadimages.org/api/image/{id}-key={gwKey}.
     The server only ever sees opaque ciphertext ? no E2E key, no plaintext."""
     uid = request.session.get("uid")
     if not uid:
@@ -2357,7 +2357,7 @@ async def fetch_uimg(request: Request, image_id: str, key: str = ""):
         return JSONResponse({"error": "invalid key"}, status_code=400)
     import aiohttp as _aiohttp
     from fastapi.responses import Response as _Response
-    url = f"https://uploadimages.org/api/image/{image_id}?key={key}"
+    url = f"https://uploadimages.org/api/image/{image_id}-key={key}"
     try:
         timeout = _aiohttp.ClientTimeout(total=15)
         async with _aiohttp.ClientSession(timeout=timeout) as session:
@@ -2571,7 +2571,7 @@ async def telegram_link_code(request: Request):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     code = await asyncio.to_thread(integration_db.generate_link_code, uid)
     bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "")
-    link = f"https://t.me/{bot_username}?start=tb_{code}" if bot_username else ""
+    link = f"https://t.me/{bot_username}-start=tb_{code}" if bot_username else ""
     return {
         "code":    code,
         "link":    link,

@@ -1,12 +1,12 @@
 import asyncio
 """
-auth.py — HackForums OAuth2 flow.
+auth.py ? HackForums OAuth2 flow.
 
 Routes:
-  GET  /auth/login      → redirect to HF authorize URL
-  GET  /auth/callback   → exchange code, store user, set session
-  GET  /auth/me         → return session user (used by frontend on load)
-  POST /auth/logout     → clear session
+  GET  /auth/login      ? redirect to HF authorize URL
+  GET  /auth/callback   ? exchange code, store user, set session
+  GET  /auth/me         ? return session user (used by frontend on load)
+  POST /auth/logout     ? clear session
 """
 
 import os
@@ -30,7 +30,7 @@ FRONTEND_URL  = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 async def login(request: Request, next: str = ""):
     state = secrets.token_urlsafe(16)
     # Encode the return path into the state so it survives the OAuth round-trip
-    # Format: "STATE|NEXT_PATH" — pipe is not in urlsafe base64 so safe to split on
+    # Format: "STATE|NEXT_PATH" ? pipe is not in urlsafe base64 so safe to split on
     safe_next = next.strip()
     # Only allow internal paths (must start with /dashboard)
     if safe_next and not safe_next.startswith("/dashboard"):
@@ -40,7 +40,7 @@ async def login(request: Request, next: str = ""):
     request.session["oauth_next"]  = safe_next
     url = (
         f"https://hackforums.net/api/v2/authorize"
-        f"?response_type=code&client_id={CLIENT_ID}"
+        f"-response_type=code&client_id={CLIENT_ID}"
         f"&redirect_uri={REDIRECT_URI}&state={full_state}"
     )
     return RedirectResponse(url)
@@ -54,13 +54,13 @@ async def callback(
     error: str = None,
     error_description: str = None,
 ):
-    # HF returned an error (user denied, expired state, etc.) — redirect back to login
+    # HF returned an error (user denied, expired state, etc.) ? redirect back to login
     if error or not code or not state:
         request.session.pop("oauth_state", None)
         request.session.pop("oauth_next", None)
-        return RedirectResponse(f"{FRONTEND_URL}/?auth_error={error or 'unknown'}")
+        return RedirectResponse(f"{FRONTEND_URL}/-auth_error={error or 'unknown'}")
 
-    # State may be "TOKEN|/dashboard/path" — extract the token part for validation
+    # State may be "TOKEN|/dashboard/path" ? extract the token part for validation
     state_token = state.split("|")[0]
     if request.session.pop("oauth_state", None) != state_token:
         raise HTTPException(400, "State mismatch")
@@ -81,18 +81,29 @@ async def callback(
         "me": {
             "uid": True, "username": True, "avatar": True,
             "usergroup": True, "displaygroup": True, "additionalgroups": True,
-            "postnum": True, "threadnum": True, "reputation": True,
-            "bytes": True, "vault": True, "usertitle": True, "timeonline": True,
         }
     })
 
     if not raw:
-        raise HTTPException(500, "Failed to reach HF API")
+        raise HTTPException(503, "HackForums API unavailable during login")
 
     me = raw.get("me", {})
     uid = str(me.get("uid") or "")
     if not uid:
-        raise HTTPException(500, "Failed to get UID from HF")
+        raise HTTPException(502, "HackForums did not return a user id")
+
+    profile_me = dict(me)
+    try:
+        profile_raw = await client.read({
+            "me": {
+                "postnum": True, "threadnum": True, "reputation": True,
+                "bytes": True, "vault": True, "usertitle": True, "timeonline": True,
+            }
+        })
+        if profile_raw and isinstance(profile_raw.get("me"), dict):
+            profile_me.update(profile_raw["me"])
+    except Exception:
+        pass
 
     groups: list[str] = []
     for field in ("usergroup", "displaygroup"):
@@ -112,7 +123,7 @@ async def callback(
         clean_av, groups,
     )
     await asyncio.to_thread(integration_db.upsert_integration_account, uid)
-    # expires_in is relative seconds — convert to absolute timestamp
+    # expires_in is relative seconds ? convert to absolute timestamp
     expiry_ts = int(_time.time()) + int(token_expiry) if token_expiry else 0
     if refresh_token:
         await asyncio.to_thread(db.store_refresh_token, uid, str(refresh_token), expiry_ts)
@@ -120,14 +131,14 @@ async def callback(
         await asyncio.to_thread(db.update_token_expiry, uid, expiry_ts)
     await asyncio.to_thread(db.mark_token_dead, uid, False)
     await asyncio.to_thread(db.update_profile_cache, uid, {
-        "postnum":      me.get("postnum"),
-        "threadnum":    me.get("threadnum"),
-        "reputation":   me.get("reputation"),
-        "myps":         me.get("bytes"),
-        "vault":        me.get("vault"),
-        "usertitle":    me.get("usertitle"),
-        "timeonline":   me.get("timeonline"),
-        "displaygroup": me.get("displaygroup") or me.get("usergroup") or "",
+        "postnum":      profile_me.get("postnum"),
+        "threadnum":    profile_me.get("threadnum"),
+        "reputation":   profile_me.get("reputation"),
+        "myps":         profile_me.get("bytes"),
+        "vault":        profile_me.get("vault"),
+        "usertitle":    profile_me.get("usertitle"),
+        "timeonline":   profile_me.get("timeonline"),
+        "displaygroup": profile_me.get("displaygroup") or profile_me.get("usergroup") or "",
     })
 
     # Regenerate the session to prevent session fixation.
@@ -140,13 +151,13 @@ async def callback(
 
 
 # Dev override: DEV_GROUPS_OVERRIDE=63,53,57,... in .env injects extra group IDs
-# into every user's groups list. Only for local dev — never set in production.
+# into every user's groups list. Only for local dev ? never set in production.
 _DEV_GROUPS_OVERRIDE: list[str] = [
     g.strip() for g in os.environ.get("DEV_GROUPS_OVERRIDE", "").split(",") if g.strip()
 ]
 if _DEV_GROUPS_OVERRIDE and os.environ.get("ENV") == "production":
     raise RuntimeError(
-        "DEV_GROUPS_OVERRIDE must not be set in production — "
+        "DEV_GROUPS_OVERRIDE must not be set in production ? "
         "remove it from .env before starting the server"
     )
 
