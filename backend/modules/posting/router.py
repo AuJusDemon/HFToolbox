@@ -185,7 +185,10 @@ async def queue_thread(request: Request):
         uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h,
         overflow_message, overflow_message_2
     )
-    await asyncio.to_thread(touch_recent, uid, fid, forum_name, category_name)
+    try:
+        await asyncio.to_thread(touch_recent, uid, fid, forum_name, category_name)
+    except Exception as e:
+        log.warning("touch_recent failed uid=%s fid=%s: %s", uid, fid, e)
 
     is_scheduled = fire_at > int(time.time()) + 60
     return {

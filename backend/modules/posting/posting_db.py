@@ -398,7 +398,9 @@ def touch_recent(uid: str, fid: str, forum_name: str, category_name: str) -> Non
         )
         conn.execute(
             """DELETE FROM posting_recents WHERE uid=? AND fid NOT IN (
-               SELECT fid FROM posting_recents WHERE uid=? ORDER BY last_used DESC LIMIT 5
+               SELECT fid FROM (
+                   SELECT fid FROM posting_recents WHERE uid=? ORDER BY last_used DESC LIMIT 5
+               ) AS keep
             )""",
             (uid, uid)
         )
