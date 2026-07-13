@@ -3,10 +3,10 @@ import asyncio
 auth.py — HackForums OAuth2 flow.
 
 Routes:
-  GET  /auth/login      — redirect to HF authorize URL
-  GET  /auth/callback   — exchange code, store user, set session
-  GET  /auth/me         — return session user (used by frontend on load)
-  POST /auth/logout     — clear session
+  GET  /auth/login      → redirect to HF authorize URL
+  GET  /auth/callback   → exchange code, store user, set session
+  GET  /auth/me         → return session user (used by frontend on load)
+  POST /auth/logout     → clear session
 """
 
 import os
