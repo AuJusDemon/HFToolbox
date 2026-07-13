@@ -2344,7 +2344,7 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
 
 @app.get("/api/uimg/{image_id}")
 async def fetch_uimg(request: Request, image_id: str, key: str = ""):
-    """Fetch raw encrypted bytes from uploadimages.org/api/image/{id}-key={gwKey}.
+    """Fetch raw encrypted bytes from uploadimages.org/api/image/{id}?key={gwKey}.
     The server only ever sees opaque ciphertext — no E2E key, no plaintext."""
     uid = request.session.get("uid")
     if not uid:
