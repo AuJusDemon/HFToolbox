@@ -1,11 +1,11 @@
 """
-modules/sigmarket/router.py ? API routes for sigmarket manager.
+modules/sigmarket/router.py — API routes for sigmarket manager.
 
-GET  /api/sigmarket/status          ? your listing + seller orders + buyer orders
-POST /api/sigmarket/listing         ? setsale / removesale / changesig
-POST /api/sigmarket/buy             ? buy a sig slot
-GET  /api/sigmarket/browse          ? browse all active market listings
-GET  /api/sigmarket/analytics/{uid} ? post/thread analytics for any user (cached 1hr)
+GET  /api/sigmarket/status          — your listing + seller orders + buyer orders
+POST /api/sigmarket/listing         — setsale / removesale / changesig
+POST /api/sigmarket/buy             — buy a sig slot
+GET  /api/sigmarket/browse          — browse all active market listings
+GET  /api/sigmarket/analytics/{uid} — post/thread analytics for any user (cached 1hr)
 """
 
 import asyncio
@@ -29,7 +29,7 @@ init_sigmarket_db()
 # Status cache is now managed by hf_cache (hf_resource_cache table).
 # TTL = 900s (15 min) so the 15-min warmer always refills before expiry.
 # Stale window = 3600s (1 hr) so stale data is served immediately while refresh runs.
-# The old 10-min TTL vs 15-min warmer created a 5-min cold gap ? now gone.
+# The old 10-min TTL vs 15-min warmer created a 5-min cold gap — now gone.
 _SIG_STATUS_CACHE_KEY = "sigmarket:status:{uid}"
 
 
@@ -43,7 +43,7 @@ def _auth(request: Request):
     return uid, token, None
 
 
-# ?? Single source of truth for sigmarket status ????????????????????????????????
+# ── Single source of truth for sigmarket status ────────────────────────────────
 # Previously duplicated between get_status() and warm_sigmarket_status().
 # Now one function, called by both the route and the scheduler warmer.
 
@@ -171,9 +171,9 @@ async def get_status(request: Request):
 @router.post("/listing")
 async def update_listing(request: Request):
     """
-    setsale    ? { action: "setsale",   price: N, duration: N }
-    removesale ? { action: "removesale" }
-    changesig  ? { action: "changesig", smid: "all"|N, sig: "BBCode" }
+    setsale    — { action: "setsale",   price: N, duration: N }
+    removesale — { action: "removesale" }
+    changesig  — { action: "changesig", smid: "all"|N, sig: "BBCode" }
     """
     uid, token, err = _auth(request)
     if err:
@@ -249,11 +249,11 @@ async def buy_sig(request: Request):
     return {"ok": True}
 
 
-# ?? Analytics ??????????????????????????????????????????????????????????????????
+# ── Analytics ──────────────────────────────────────────────────────────────────
 #
 # Fetches post FID distribution + thread views for any user.
 # Uses requesting user's token (all data is public via Posts/Users scope).
-# Cached 1hr per target UID under __system__ key ? any viewer benefits from the
+# Cached 1hr per target UID under __system__ key — any viewer benefits from the
 # same cached result.
 
 @router.get("/analytics/{target_uid}")
@@ -275,7 +275,7 @@ async def _user_analytics(target_uid: str, request: Request):
 
     force = request.query_params.get("force") == "true"
 
-    # Rate limit pre-check ? bail before attempting the multi-call fetch
+    # Rate limit pre-check — bail before attempting the multi-call fetch
     from HFClient import get_rate_limit_remaining
     remaining = get_rate_limit_remaining(token)
     if remaining < 30:
@@ -305,10 +305,10 @@ async def _user_analytics(target_uid: str, request: Request):
     }
 
 
-# ?? Browse market listings ?????????????????????????????????????????????????????????????
+# ── Browse market listings ─────────────────────────────────────────────────────────────
 #
 # Cache is pre-warmed by a background task every 25 min (called from main.py).
-# Users NEVER trigger the scan ? they always hit the in-memory cache.
+# Users NEVER trigger the scan — they always hit the in-memory cache.
 # Cost: ~10 calls every 25 min, regardless of traffic. Zero per user request.
 
 BROWSE_CACHE_TTL = 1800  # 30 min
@@ -471,7 +471,7 @@ async def browse_listings(request: Request):
     return result
 
 
-# ?? Exported helpers for main.py scheduler ?????????????????????????????????????
+# ── Exported helpers for main.py scheduler ─────────────────────────────────────
 
 async def warm_sigmarket_status(uid: str, token: str) -> None:
     """
@@ -481,13 +481,13 @@ async def warm_sigmarket_status(uid: str, token: str) -> None:
     No duplicate parse logic. In-flight dedup prevents double-fetch if route
     and warmer both fire at the same time.
 
-    Only fetches if cache is not already fresh ? if the route already refreshed
+    Only fetches if cache is not already fresh — if the route already refreshed
     within the TTL window, this is a no-op (zero HF calls).
     """
     import hf_cache as hfc
     cache_key = _SIG_STATUS_CACHE_KEY.format(uid=uid)
 
-    # Skip if still fresh ? saves 3 calls when warmer and route overlap
+    # Skip if still fresh — saves 3 calls when warmer and route overlap
     if hfc.get_fresh(cache_key) is not None:
         log.debug("Sigmarket status warm skipped uid=%s (still fresh)", uid)
         return
@@ -511,5 +511,5 @@ async def warm_sigmarket_status(uid: str, token: str) -> None:
 
 
 def load_browse_cache_from_db() -> bool:
-    """Public wrapper ? called from main.py lifespan startup."""
+    """Public wrapper — called from main.py lifespan startup."""
     return _load_browse_cache_from_db()

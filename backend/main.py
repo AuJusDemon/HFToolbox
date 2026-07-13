@@ -1,5 +1,5 @@
 """
-main.py ? HF Dash entry point.
+main.py — HF Dash entry point.
 
 Start (Windows):
     run_backend.bat
@@ -26,7 +26,7 @@ try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv optional ? set env vars manually if not installed
+    pass  # python-dotenv optional — set env vars manually if not installed
 
 import db
 import auth
@@ -46,7 +46,7 @@ logging.basicConfig(
 log = logging.getLogger("main")
 
 
-# Global semaphore ? limits concurrent live HF API calls
+# Global semaphore — limits concurrent live HF API calls
 _hf_sem = asyncio.Semaphore(4)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
 
@@ -67,20 +67,20 @@ def _handle_auth_expired(request: Request, uid: str) -> JSONResponse:
         loop = asyncio.get_running_loop()
         loop.create_task(asyncio.to_thread(db.clear_token, uid))
     except RuntimeError:
-        pass  # no running loop ? shouldn't happen from a FastAPI handler
+        pass  # no running loop — shouldn't happen from a FastAPI handler
     return JSONResponse({"error": "hf_token_revoked"}, status_code=401)
 
 
-# ?? Dynamic throttle ???????????????????????????????????????????????????????????
+# ── Dynamic throttle ───────────────────────────────────────────────────────────
 # Levels based on lowest remaining calls across all active user tokens.
-#   normal   > 150  ? everything runs at full speed
-#   caution  100-150 ? skip non-critical background work (username cache, tid backfill, browse warm)
-#   low       50-100 ? skip bytes crawl, double reply poll interval
-#   critical  < 50   ? skip everything except autobump and scheduled posts
+#   normal   > 150  — everything runs at full speed
+#   caution  100-150 — skip non-critical background work (username cache, tid backfill, browse warm)
+#   low       50-100 — skip bytes crawl, double reply poll interval
+#   critical  < 50   — skip everything except autobump and scheduled posts
 
-# ?? Throttle level ? fully in-memory, never blocks the event loop ?????????????
+# ── Throttle level — fully in-memory, never blocks the event loop ─────────────
 # HFClient._rate_limits is a module-level dict {token: remaining} updated from
-# every API response header. We read it directly ? zero DB calls, zero blocking.
+# every API response header. We read it directly — zero DB calls, zero blocking.
 
 def _throttle_level() -> str:
     """Return throttle level from HFClient in-memory rate limit data. Never blocks."""
@@ -116,13 +116,13 @@ async def _crawl_if_active(uid: str, token: str) -> bool:
     import time as _t
     from HFClient import get_rate_limit_remaining
 
-    # ?? API floor check ? hard stop if budget is too low ??????????????????
+    # ── API floor check — hard stop if budget is too low ──────────────────
     settings      = await asyncio.to_thread(db.get_user_settings, uid)
     floor_enabled = settings.get("apiFloorEnabled", False)
     floor_value   = int(settings.get("apiFloor", 30))
     remaining     = get_rate_limit_remaining(token)
     if floor_enabled and remaining < floor_value:
-        log.warning("Crawl: uid=%s paused ? %d calls remaining, floor=%d", uid, remaining, floor_value)
+        log.warning("Crawl: uid=%s paused — %d calls remaining, floor=%d", uid, remaining, floor_value)
         return False
 
     last_active = await asyncio.to_thread(db.get_last_active, uid)
@@ -150,7 +150,7 @@ async def _trigger_listener() -> None:
             last = seen_recently.get(uid, 0)
             if _t.time() - last < 30:
                 _crawl_trigger.task_done()
-                continue  # debounce ? don't spam crawls if many requests fire at once
+                continue  # debounce — don't spam crawls if many requests fire at once
             seen_recently[uid] = _t.time()
             token = await asyncio.to_thread(db.get_token, uid)
             if token:
@@ -159,7 +159,7 @@ async def _trigger_listener() -> None:
                     await refresh_user_dashboard(uid, token, reason="trigger")
                     await asyncio.to_thread(db.set_needs_refresh, uid, 0)
                 except _AuthExpired:
-                    log.warning("Crawl: AuthExpired uid=%s ? attempting refresh before clearing", uid)
+                    log.warning("Crawl: AuthExpired uid=%s — attempting refresh before clearing", uid)
                     from token_manager import try_refresh_token
                     new_tok = await try_refresh_token(uid)
                     if not new_tok:
@@ -179,7 +179,7 @@ async def _bytes_crawl_loop() -> None:
     maintenance crawls and are flagged for a full refresh on return.
     """
     import time as _t
-    # Smart startup delay ? don't blindly sleep, check actual last_crawl
+    # Smart startup delay — don't blindly sleep, check actual last_crawl
     try:
         uids = await asyncio.to_thread(db.get_all_uids)
         if uids:
@@ -213,10 +213,10 @@ async def _bytes_crawl_loop() -> None:
                         try:
                             did_crawl = await asyncio.wait_for(_crawl_if_active(uid, token), timeout=90)
                         except asyncio.TimeoutError:
-                            log.warning("Bytes crawl: timed out after 90s uid=%s ? skipping", uid)
+                            log.warning("Bytes crawl: timed out after 90s uid=%s — skipping", uid)
                             did_crawl = False
                         except _AuthExpired:
-                            log.warning("Bytes crawl: token revoked for uid=%s ? clearing token", uid)
+                            log.warning("Bytes crawl: token revoked for uid=%s — clearing token", uid)
                             await asyncio.to_thread(db.clear_token, uid)
                             did_crawl = False
                         if did_crawl:
@@ -226,24 +226,24 @@ async def _bytes_crawl_loop() -> None:
         except Exception as e:
             log.exception("Bytes crawl loop error: %s", e)
         _touch_heartbeat()  # watchdog: we completed a crawl cycle
-        await asyncio.sleep(300)  # 5 minutes ? timer unchanged, activity gate does the work
+        await asyncio.sleep(300)  # 5 minutes — timer unchanged, activity gate does the work
 
 
-# ?? Activity tracking middleware ???????????????????????????????????????????????
+# ── Activity tracking middleware ───────────────────────────────────────────────
 # Touches last_seen on every authenticated request.
 # Also triggers an immediate crawl if user was idle (needs_refresh=1).
 
 _crawl_trigger: asyncio.Queue = asyncio.Queue(maxsize=10)  # uid queue for immediate crawls
 
-# ?? Event loop watchdog ????????????????????????????????????????????????????????
+# ── Event loop watchdog ────────────────────────────────────────────────────────
 # Two-layer watchdog:
-# 1. Loop ping ? detects a fully frozen event loop (rare)
-# 2. Activity heartbeat ? detects stuck coroutines while the loop is alive
+# 1. Loop ping — detects a fully frozen event loop (rare)
+# 2. Activity heartbeat — detects stuck coroutines while the loop is alive
 import threading
 import os as _os
 import time as _time
 
-# Shared heartbeat timestamp ? updated by crawl/scheduler loops every cycle
+# Shared heartbeat timestamp — updated by crawl/scheduler loops every cycle
 _last_heartbeat: float = 0.0
 
 def _touch_heartbeat() -> None:
@@ -270,14 +270,14 @@ def _start_watchdog(loop: asyncio.AbstractEventLoop) -> None:
             try:
                 fut.result(timeout=LOOP_HANG_TIMEOUT)
             except Exception:
-                log.error("WATCHDOG: event loop frozen ? killing for restart")
+                log.error("WATCHDOG: event loop frozen — killing for restart")
                 _dump_tasks(loop)
                 _os._exit(1)
 
             # Layer 2: is any work actually happening- (stuck coroutine detection)
             idle = _time.time() - _last_heartbeat
             if idle > HEARTBEAT_TIMEOUT:
-                log.error("WATCHDOG: no crawl activity for %.0fs ? stuck coroutine, killing for restart", idle)
+                log.error("WATCHDOG: no crawl activity for %.0fs — stuck coroutine, killing for restart", idle)
                 _dump_tasks(loop)
                 _os._exit(1)
 
@@ -297,15 +297,15 @@ def _start_watchdog(loop: asyncio.AbstractEventLoop) -> None:
 
 async def _username_resolve_loop() -> None:
     """Resolve unknown counterparty UIDs to usernames in the background.
-    Completely separate from the crawl ? runs every 10 minutes, resolves
+    Completely separate from the crawl — runs every 10 minutes, resolves
     30 UIDs per user per cycle. Becomes a no-op once all are cached."""
     await asyncio.sleep(120)  # wait 2 min after startup before first run
     while True:
         try:
-            # Skip at caution or worse ? this is non-critical background work
+            # Skip at caution or worse — this is non-critical background work
             _tl = _throttle_level()
             if _tl in ("caution", "low", "critical"):
-                log.debug("Username resolver: skipping ? throttle=%s", _tl)
+                log.debug("Username resolver: skipping — throttle=%s", _tl)
                 await asyncio.sleep(600)
                 continue
             uids = await asyncio.to_thread(db.get_all_uids)
@@ -317,7 +317,7 @@ async def _username_resolve_loop() -> None:
                     unknown = await asyncio.to_thread(db.get_unknown_uids_from_contracts, uid, 30)
                     chunk    = [int(u) for u in (unknown or []) if str(u).isdigit()]
 
-                    # ?? Bundle UID and TID lookups into one read call ????????????????
+                    # ── Bundle UID and TID lookups into one read call ────────────────
                     unknown_tids = await asyncio.to_thread(db.get_unknown_tids_from_contracts, uid, 30)
                     tid_ints     = [int(t) for t in (unknown_tids or []) if str(t).isdigit()]
 
@@ -378,7 +378,7 @@ async def _username_resolve_loop() -> None:
                     await asyncio.sleep(2)  # brief pause between users
 
                 except _AuthExpired:
-                    log.warning("Username cache: token revoked for uid=%s ? clearing token", uid)
+                    log.warning("Username cache: token revoked for uid=%s — clearing token", uid)
                     await asyncio.to_thread(db.clear_token, uid)
                 except Exception as e:
                     log.debug("Username cache: skip uid=%s: %s", uid, e)
@@ -397,7 +397,7 @@ async def _tid_backfill_loop() -> None:
     from HFClient import HFClient
     import time as _t
 
-    MAX_BACKFILL_PAGES = 20  # hard cap: 600 contracts max ? prevents runaway API spend
+    MAX_BACKFILL_PAGES = 20  # hard cap: 600 contracts max — prevents runaway API spend
 
     if _throttle_level() != "normal":
         log.info("TID backfill: skipped because API throttle is not normal")
@@ -406,7 +406,7 @@ async def _tid_backfill_loop() -> None:
     all_uids = await asyncio.to_thread(db.get_all_uids)
     for uid in all_uids:
         try:
-            # Quick check ? skip if all tids already populated
+            # Quick check — skip if all tids already populated
             needs_backfill = await asyncio.to_thread(db.get_contracts_with_empty_tid, uid)
             if not needs_backfill:
                 continue
@@ -453,7 +453,7 @@ async def _tid_backfill_loop() -> None:
                 page += 1
 
             if page > MAX_BACKFILL_PAGES:
-                log.warning("TID backfill: hit page cap (%d) for uid=%s ? will resume next restart",
+                log.warning("TID backfill: hit page cap (%d) for uid=%s — will resume next restart",
                             MAX_BACKFILL_PAGES, uid)
             log.info("TID backfill: done uid=%s updated=%d pages=%d", uid, total, page)
         except Exception as e:
@@ -497,7 +497,7 @@ async def _telegram_delivery_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Expand thread pool ? default is too small for concurrent DB + crawl on Windows
+    # Expand thread pool — default is too small for concurrent DB + crawl on Windows
     import concurrent.futures
     loop = asyncio.get_event_loop()
     # 32 workers: enough for concurrent HF API calls + DB ops, but well below
@@ -517,13 +517,13 @@ async def lifespan(app: FastAPI):
     from modules.merchant.merchant_db import init_merchant_db
     init_merchant_db()
 
-    # ?? Startup DB cleanup ??????????????????????????????????????????????????
+    # ── Startup DB cleanup ──────────────────────────────────────────────────
     # 1. Reset NULL last_pid rows so cursor comparisons work cleanly.
     # 2. Reset any 'sending' threads to 'failed'.
     #    If the server crashed between mark_thread_sending() and mark_thread_sent(),
-    #    those rows stay 'sending' forever ? get_due_threads() only fetches 'pending',
+    #    those rows stay 'sending' forever — get_due_threads() only fetches 'pending',
     #    so the scheduled thread silently disappears. We reset to 'failed' rather than
-    #    'pending' because we can't know if the API write went through ? auto-retrying
+    #    'pending' because we can't know if the API write went through — auto-retrying
     #    could create a duplicate post on HF. User sees it in their failed list and can
     #    verify on HF before deciding to resend.
     try:
@@ -537,17 +537,17 @@ async def lifespan(app: FastAPI):
             if stuck_count:
                 _pc.execute(
                     "UPDATE scheduled_threads SET status='failed', "
-                    "error='Server restarted during send ? check HF to verify if posted before resending' "
+                    "error='Server restarted during send — check HF to verify if posted before resending' "
                     "WHERE status='sending'"
                 )
                 log.warning(
-                    "Startup: reset %d stuck 'sending' thread(s) to 'failed' ? "
+                    "Startup: reset %d stuck 'sending' thread(s) to 'failed' — "
                     "users should verify on HF before resending",
                     stuck_count,
                 )
     except Exception as e:
         log.warning("Startup DB cleanup failed: %s", e)
-    import modules  # noqa ? triggers all register() calls
+    import modules  # noqa — triggers all register() calls
     log.info("Modules loaded: %s", [m.id for m in all_modules()])
 
     # Mount module routers
@@ -557,7 +557,7 @@ async def lifespan(app: FastAPI):
 
     _disable_crawl = os.environ.get("DEV_DISABLE_CRAWL") == "1"
     if _disable_crawl:
-        log.warning("DEV_DISABLE_CRAWL=1 ? all background crawl/scheduler tasks disabled")
+        log.warning("DEV_DISABLE_CRAWL=1 — all background crawl/scheduler tasks disabled")
     else:
         _start_watchdog(loop)
 
@@ -580,7 +580,7 @@ async def lifespan(app: FastAPI):
     from modules.wire.router import router as wire_router
     app.include_router(wire_router)
 
-    # ?? Unified 5-minute scheduler ??????????????????????????????????????????
+    # ── Unified 5-minute scheduler ──────────────────────────────────────────
     # Handles: scheduled thread posting (every tick), autobump (every 30 min),
     # and reply queue polling (every 15 min). All in one loop, batched per user.
     from modules.autobump import poll_autobump
@@ -590,7 +590,7 @@ async def lifespan(app: FastAPI):
 
     async def _unified_loop():
         import time as _t
-        import hf_service  # noqa ? used for pick_best_token in global jobs
+        import hf_service  # noqa — used for pick_best_token in global jobs
         _last_autobump      = 0.0
         _last_reply_poll    = 0.0
         _last_browse_warm    = _t.time()
@@ -605,7 +605,7 @@ async def lifespan(app: FastAPI):
         RATING_SYNC_INTERVAL   = 21600
         TICK                   =   60
 
-        # Smart startup for autobump ? check when it last ran
+        # Smart startup for autobump — check when it last ran
         try:
             from modules.autobump.autobump_db import get_last_log_ts
             last_ab = get_last_log_ts() or 0
@@ -623,18 +623,18 @@ async def lifespan(app: FastAPI):
         while True:
             now = _t.time()
             try:
-                # ?? 0. Compute throttle level once per tick ?????????????
+                # ── 0. Compute throttle level once per tick ─────────────
                 _tl = _throttle_level()
                 if _tl != "normal":
                     log.debug("Unified scheduler: throttle=%s", _tl)
 
-                # ?? 1. Fire any due scheduled threads (always ? user-facing) ??
+                # ── 1. Fire any due scheduled threads (always — user-facing) ──
                 try:
                     await asyncio.wait_for(fire_due_threads(), timeout=60)
                 except asyncio.TimeoutError:
                     log.warning("Unified scheduler: fire_due_threads timed out")
 
-                # ?? 2. Autobump (every 30 min ? always runs) ????????????????
+                # ── 2. Autobump (every 30 min — always runs) ────────────────
                 if now - _last_autobump >= AUTOBUMP_INTERVAL:
                     try:
                         from token_manager import try_refresh_token
@@ -643,10 +643,10 @@ async def lifespan(app: FastAPI):
                             token = await asyncio.to_thread(db.get_token, uid)
                             # If token is dead, try to refresh it first
                             if not token or await asyncio.to_thread(db.is_token_dead, uid):
-                                log.info("Scheduler: uid=%s token dead/missing ? attempting refresh", uid)
+                                log.info("Scheduler: uid=%s token dead/missing — attempting refresh", uid)
                                 token = await try_refresh_token(uid)
                                 if not token:
-                                    log.warning("Scheduler: uid=%s refresh failed ? skipping autobump", uid)
+                                    log.warning("Scheduler: uid=%s refresh failed — skipping autobump", uid)
                                     continue
                             # Warn if token expiring within 72 hours
                             try:
@@ -671,7 +671,7 @@ async def lifespan(app: FastAPI):
                             except asyncio.TimeoutError:
                                 log.warning("Scheduler: autobump/sigrotation timed out uid=%s", uid)
                             except _AuthExpired:
-                                log.warning("Scheduler: AuthExpired uid=%s ? attempting refresh", uid)
+                                log.warning("Scheduler: AuthExpired uid=%s — attempting refresh", uid)
                                 new_tok = await try_refresh_token(uid)
                                 if new_tok:
                                     log.info("Scheduler: uid=%s token refreshed, retrying autobump", uid)
@@ -680,13 +680,13 @@ async def lifespan(app: FastAPI):
                                     except asyncio.TimeoutError:
                                         log.warning("Scheduler: uid=%s retry autobump timed out after refresh", uid)
                                     except _AuthExpired:
-                                        log.warning("Scheduler: uid=%s refresh succeeded but still AuthExpired ? clearing", uid)
+                                        log.warning("Scheduler: uid=%s refresh succeeded but still AuthExpired — clearing", uid)
                                         await asyncio.to_thread(db.clear_token, uid)
                                 else:
-                                    log.warning("Scheduler: uid=%s refresh failed ? clearing token", uid)
+                                    log.warning("Scheduler: uid=%s refresh failed — clearing token", uid)
                                     await asyncio.to_thread(db.clear_token, uid)
                         _last_autobump = _t.time()
-                        # Daily bump digest ? once per day per user if bumps ran
+                        # Daily bump digest — once per day per user if bumps ran
                         try:
                             from modules.autobump.autobump_db import get_bumped_since
                             import time as _tdig
@@ -715,15 +715,15 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         log.exception("Unified scheduler: autobump error: %s", e)
 
-                # ?? 3. Reply queue poll (5 min normal, 10 min at low/critical) ??
+                # ── 3. Reply queue poll (5 min normal, 10 min at low/critical) ──
                 _reply_interval = REPLY_POLL_INTERVAL * (2 if _tl in ("low", "critical") else 1)
                 if now - _last_reply_poll >= _reply_interval:
                     if _tl == "critical":
-                        log.info("Unified scheduler: reply poll skipped ? throttle=critical")
+                        log.info("Unified scheduler: reply poll skipped — throttle=critical")
                         _last_reply_poll = now
                     else:
                         try:
-                            # Build active UID set ? same idle gate used by bytes crawler.
+                            # Build active UID set — same idle gate used by bytes crawler.
                             # Idle users' tracked threads are skipped; they get caught
                             # on the next poll cycle after they return.
                             all_uids = await asyncio.to_thread(db.get_all_uids)
@@ -742,7 +742,7 @@ async def lifespan(app: FastAPI):
                         except Exception as e:
                             log.exception("Unified scheduler: reply poll error: %s", e)
 
-                # ?? 4. Sigmarket browse pre-warm (every 25 min, skip at caution+) ??
+                # ── 4. Sigmarket browse pre-warm (every 25 min, skip at caution+) ──
                 if now - _last_browse_warm >= BROWSE_WARM_INTERVAL and _tl == "normal":
                     try:
                         # pick_best_token: highest remaining budget, skip dead tokens
@@ -760,7 +760,7 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         log.warning("Sigmarket browse pre-warm error: %s", e)
 
-                # ?? 5. Sigmarket status per-user warm (every 15 min, skip at caution+) ??
+                # ── 5. Sigmarket status per-user warm (every 15 min, skip at caution+) ──
                 if now - _last_sigmarket_warm >= SIGMARKET_WARM_INTERVAL and _tl == "normal":
                     try:
                         uids = await asyncio.to_thread(db.get_all_uids)
@@ -778,28 +778,28 @@ async def lifespan(app: FastAPI):
                     except Exception as e:
                         log.warning("Sigmarket status warm error: %s", e)
 
-                # ?? 6. Wire thread sync (every 6 hr ? keeps stats fresh) ??????????
+                # ── 6. Wire thread sync (every 6 hr — keeps stats fresh) ──────────
                 if now - _last_wire_sync >= WIRE_SYNC_INTERVAL and _tl == "normal":
                     try:
                         from modules.wire.router import sync_wire_threads
-                        # Try all users' tokens ?
+                        # Try all users' tokens —
                         # so wire sync still works if that token has expired.
                         # pick_best_token: highest remaining budget, skip dead tokens
                         _, _wire_token = await hf_service.pick_best_token()
                         if _wire_token:
-                            # Hard 120s cap ? prevents watchdog heartbeat starvation
+                            # Hard 120s cap — prevents watchdog heartbeat starvation
                             # when there are many Wire threads (each batch costs ~12s worst-case)
                             await asyncio.wait_for(sync_wire_threads(_wire_token), timeout=120)
                         else:
-                            log.warning("Wire sync: no valid token available ? skipping")
+                            log.warning("Wire sync: no valid token available — skipping")
                         _last_wire_sync = _t.time()
                     except asyncio.TimeoutError:
-                        log.warning("Wire sync: timed out after 120s ? will retry in 6h")
+                        log.warning("Wire sync: timed out after 120s — will retry in 6h")
                         _last_wire_sync = _t.time()  # still advance so we don't spam retries
                     except Exception as e:
                         log.warning("Wire sync error: %s", e)
 
-                # ?? 7. Ratings auto-sync (every 6h, normal throttle only) ??????
+                # ── 7. Ratings auto-sync (every 6h, normal throttle only) ──────
                 if now - _last_rating_sync >= RATING_SYNC_INTERVAL and _tl == "normal":
                     try:
                         from HFClient import HFClient as _HFC_r
@@ -845,7 +845,7 @@ async def lifespan(app: FastAPI):
                 log.exception("Unified scheduler: unexpected error: %s", e)
 
             _touch_heartbeat()  # watchdog: unified scheduler is still ticking
-            # Stretch the tick when budget is low ? less overhead, fewer wasted cycles
+            # Stretch the tick when budget is low — less overhead, fewer wasted cycles
             _tick = TICK * (2 if _tl in ("low", "critical") else 1)
             await asyncio.sleep(_tick)
 
@@ -1054,7 +1054,7 @@ async def rate_limit(request: Request):
 @app.get("/api/shell-data")
 async def shell_data(request: Request):
     """Single endpoint that replaces 3 separate Shell polls (profile, notifications,
-    reply count). All DB reads ? zero HF API calls. Reduces HTTP chatter by 2/min."""
+    reply count). All DB reads — zero HF API calls. Reduces HTTP chatter by 2/min."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -1074,7 +1074,7 @@ async def shell_data(request: Request):
     }
 
 
-# ?? Dash data endpoints ?????????????????????????????????????????????????????????
+# ── Dash data endpoints ─────────────────────────────────────────────────────────
 
 
 @app.get("/api/dashboard/snapshot")
@@ -1082,15 +1082,15 @@ async def dashboard_snapshot(request: Request):
     """
     Single call for the full dashboard initial load and 60s polling.
 
-    Returns all dashboard sections from DB/cache ? zero HF API calls under normal
+    Returns all dashboard sections from DB/cache — zero HF API calls under normal
     operation. Replaces the old pattern of 4+ separate polling endpoints.
 
     Response envelope:
-      profile, notifications, unseen, reply_count   ? shell data
-      bytes, contracts                              ? from crawl cache
-      job_count, sig_status, sig_stale, sig_age     ? from hf_resource_cache
-      rate_limit                                    ? from HFClient memory
-      ts                                            ? server unix timestamp
+      profile, notifications, unseen, reply_count   — shell data
+      bytes, contracts                              — from crawl cache
+      job_count, sig_status, sig_stale, sig_age     — from hf_resource_cache
+      rate_limit                                    — from HFClient memory
+      ts                                            — server unix timestamp
 
     Frontend shows "updated X ago" using the ts + age fields.
     """
@@ -1103,7 +1103,7 @@ async def dashboard_snapshot(request: Request):
 
     from modules.posting.posting_db import get_unread_count as _get_unread
 
-    # ?? DB-only reads (zero HF calls) ????????????????????????????????????????
+    # ── DB-only reads (zero HF calls) ────────────────────────────────────────
     profile      = await asyncio.to_thread(db.get_cached_profile, uid)
     notifs       = await asyncio.to_thread(db.get_notifications, uid, 30)
     unseen       = await asyncio.to_thread(db.get_unseen_count, uid)
@@ -1159,19 +1159,19 @@ async def dashboard_snapshot(request: Request):
 @app.get("/api/dash/bytes")
 async def dash_bytes(request: Request, force: bool = False):
     """Bytes balance from DB + recent transactions from bytes_history DB.
-    Zero API calls ? crawler updates both every 5 minutes.
+    Zero API calls — crawler updates both every 5 minutes.
     Falls back to a live API fetch only if DB has no history at all.
     """
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
 
-    # Always read balance from profile cache ? crawler keeps it fresh every 5min
+    # Always read balance from profile cache — crawler keeps it fresh every 5min
     profile = await asyncio.to_thread(db.get_cached_profile, uid)
     balance = str(profile.get("myps")  or "0") if profile else "0"
     vault   = str(profile.get("vault") or "0") if profile else "0"
 
-    # Transactions from local DB (populated by crawler) ? zero API calls
+    # Transactions from local DB (populated by crawler) — zero API calls
     txns_raw, _ = await asyncio.to_thread(db.get_bytes_history, uid, 30, 0)
     if txns_raw:
         txns = [{"id": str(t["id"]), "amount": str(t["amount"]),
@@ -1179,7 +1179,7 @@ async def dash_bytes(request: Request, force: bool = False):
                  "sent": bool(t["sent"])} for t in txns_raw]
         return {"balance": balance, "vault": vault, "transactions": txns}
 
-    # No history in DB yet ? do a live fetch so first-time users see something
+    # No history in DB yet — do a live fetch so first-time users see something
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
         return {"balance": balance, "vault": vault, "transactions": []}
@@ -1261,12 +1261,12 @@ async def dash_contracts(request: Request, force: bool = False):
             "value":    _contract_value(c),
         }
 
-    # ?? Try DB first (crawler keeps this populated) ???????????????????????????
+    # ── Try DB first (crawler keeps this populated) ───────────────────────────
     total_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
     if total_count > 0 and not force:
         rows = await asyncio.to_thread(db.get_contracts_history, uid, total_count, 0, None, "dateline", "desc")
         contracts = [_fmt(dict(r)) for r in rows]
-        # Enrich with cached counterparty usernames ? zero HF API calls
+        # Enrich with cached counterparty usernames — zero HF API calls
         all_cp_uids = list({str(c["inituid"]) for c in contracts if c.get("inituid")} |
                            {str(c["otheruid"]) for c in contracts if c.get("otheruid")})
         username_map = {uid: info["username"] for uid, info in (await asyncio.to_thread(db.get_uid_usernames, all_cp_uids)).items()} if all_cp_uids else {}
@@ -1277,7 +1277,7 @@ async def dash_contracts(request: Request, force: bool = False):
             c["counterparty_username"] = username_map.get(cp_uid, "")
         return {"contracts": contracts, "uid": uid, "total_count": total_count, "username_map": username_map}
 
-    # ?? DB empty or force refresh ? fall back to HF API (page 1 only) ?????????
+    # ── DB empty or force refresh — fall back to HF API (page 1 only) ─────────
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
         return JSONResponse({"error": "no token"}, status_code=401)
@@ -1344,7 +1344,7 @@ def _perspective_type_row(c, uid: str) -> str:
 async def contracts_history_db(request: Request, page: int = 1, perpage: int = 10,
                                 status: str | None = None,
                                 sort_col: str = "dateline", sort_dir: str = "desc"):
-    """Contracts history from local DB ? grows as crawler runs. No API calls."""
+    """Contracts history from local DB — grows as crawler runs. No API calls."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -1491,8 +1491,8 @@ async def contracts_export(
             "created_at": _created_at(r.get("dateline")),
             "dateline": r.get("dateline") or "",
             "tid": tid,
-            "thread_url":  f"https://hackforums.net/showthread.php-tid={tid}" if tid else "",
-            "contract_url": f"https://hackforums.net/contracts.php-action=view&cid={cid}",
+            "thread_url":  f"https://hackforums.net/showthread.php?tid={tid}" if tid else "",
+            "contract_url": f"https://hackforums.net/contracts.php?action=view&cid={cid}",
             "initiator_uid": init_uid,
             "other_uid": other_uid,
             "raw_type": r.get("type_n") or "",
@@ -1670,7 +1670,7 @@ async def dash_vault(request: Request):
     except _AuthExpired:
         return _handle_auth_expired(request, uid)
     if result is None:
-        return JSONResponse({"error": f"{action} failed ? check you have enough bytes"}, status_code=500)
+        return JSONResponse({"error": f"{action} failed — check you have enough bytes"}, status_code=500)
 
     # Immediately fetch fresh balance + vault from HF and update profile cache
     # so the frontend sees the new values right away without waiting for the crawler
@@ -2250,7 +2250,7 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
         recv_count = cached_to.get("count", 0)   if cached_to   else 0
         sent_count = cached_from.get("count", 0) if cached_from else 0
 
-        # Ratings received by me (_to) ? skip if recently cached
+        # Ratings received by me (_to) — skip if recently cached
         recv_ok = bool(cached_to)
         if not cached_to:
             try:
@@ -2270,13 +2270,13 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
 
                 if recv_count == 0:
                     # Zero rows from _to is suspicious when local DB already has received
-                    # ratings ? the API probably returned empty due to a transient error.
+                    # ratings — the API probably returned empty due to a transient error.
                     # Don't cache or mark fresh in that case.
                     from modules.merchant.merchant_db import has_local_received_ratings as _hlrr
                     if await asyncio.to_thread(_hlrr, uid):
                         log.warning(
                             "merchant ratings: _to returned 0 rows but local received "
-                            "ratings exist uid=%s ? treating as failed/suspicious", uid
+                            "ratings exist uid=%s — treating as failed/suspicious", uid
                         )
                         recv_count = 0
                     else:
@@ -2292,7 +2292,7 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
             except Exception as e:
                 log.warning("merchant ratings refresh: recv fetch failed uid=%s: %s", uid, e)
 
-        # Ratings sent by me (_from) ? skip if recently cached
+        # Ratings sent by me (_from) — skip if recently cached
         sent_ok = bool(cached_from)
         if not cached_from:
             try:
@@ -2345,19 +2345,19 @@ async def merchant_ratings_refresh(request: Request, force: bool = False):
 @app.get("/api/uimg/{image_id}")
 async def fetch_uimg(request: Request, image_id: str, key: str = ""):
     """Fetch raw encrypted bytes from uploadimages.org/api/image/{id}-key={gwKey}.
-    The server only ever sees opaque ciphertext ? no E2E key, no plaintext."""
+    The server only ever sees opaque ciphertext — no E2E key, no plaintext."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     import re as _re
     if not _re.fullmatch(r"[a-f0-9]{6,32}", image_id):
         return JSONResponse({"error": "invalid id"}, status_code=400)
-    # key is the uploadimages.org gwKey (base64url, ~43 chars) ? required
+    # key is the uploadimages.org gwKey (base64url, ~43 chars) — required
     if not key or not _re.fullmatch(r"[A-Za-z0-9+/=_\-]{10,100}", key):
         return JSONResponse({"error": "invalid key"}, status_code=400)
     import aiohttp as _aiohttp
     from fastapi.responses import Response as _Response
-    url = f"https://uploadimages.org/api/image/{image_id}-key={key}"
+    url = f"https://uploadimages.org/api/image/{image_id}?key={key}"
     try:
         timeout = _aiohttp.ClientTimeout(total=15)
         async with _aiohttp.ClientSession(timeout=timeout) as session:
@@ -2571,7 +2571,7 @@ async def telegram_link_code(request: Request):
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     code = await asyncio.to_thread(integration_db.generate_link_code, uid)
     bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "")
-    link = f"https://t.me/{bot_username}-start=tb_{code}" if bot_username else ""
+    link = f"https://t.me/{bot_username}?start=tb_{code}" if bot_username else ""
     return {
         "code":    code,
         "link":    link,
