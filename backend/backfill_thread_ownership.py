@@ -14,10 +14,32 @@ deletes the ones that don't match.
 import asyncio, sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 import db
+import HFClient as _hfc
 from HFClient import HFClient
 from modules.posting.posting_db import get_all_tracked_threads, delete_my_thread
 
-TIDS_PER_CALL = 4  # HF API max TIDs per _tid list
+TIDS_PER_CALL  = 4  # HF API max TIDs per _tid list
+CHUNK_RETRIES  = 3  # this is a one-shot maintenance script - a stray 503 shouldn't
+                    # kill the whole run the way the server's circuit breaker intends
+
+
+async def _read_with_retry(client, ask, label):
+    """Reset the process-global circuit breaker between attempts. It's the right
+    call for the live server (don't hammer a struggling HF), but wrong for a
+    single maintenance run - one early hiccup shouldn't skip everything after it."""
+    for attempt in range(1, CHUNK_RETRIES + 1):
+        _hfc._hf_blocked_until = 0.0
+        try:
+            data = await client.read(ask)
+        except Exception as e:
+            data = None
+            print(f"{label}: attempt {attempt}/{CHUNK_RETRIES} raised {e}")
+        if data:
+            return data
+        if attempt < CHUNK_RETRIES:
+            print(f"{label}: attempt {attempt}/{CHUNK_RETRIES} empty, retrying in 5s")
+            await asyncio.sleep(5)
+    return None
 
 
 async def main():
@@ -44,13 +66,10 @@ async def main():
 
         for i in range(0, len(tids), TIDS_PER_CALL):
             chunk = tids[i:i + TIDS_PER_CALL]
-            try:
-                data = await client.read({"threads": {"_tid": chunk, "tid": True, "uid": True}})
-            except Exception as e:
-                print(f"uid={uid} chunk={chunk}: fetch failed ({e}), leaving as-is")
-                continue
+            label = f"uid={uid} chunk={chunk}"
+            data = await _read_with_retry(client, {"threads": {"_tid": chunk, "tid": True, "uid": True}}, label)
             if not data:
-                print(f"uid={uid} chunk={chunk}: no data returned, leaving as-is")
+                print(f"{label}: no data after {CHUNK_RETRIES} attempts, leaving as-is")
                 continue
             thread_rows = data.get("threads", [])
             if isinstance(thread_rows, dict):
