@@ -123,7 +123,7 @@ async def refresh_user_dashboard(uid: str, token: str,
         },
         "threads": {
             "_uid": [uid_int], "_page": 1, "_perpage": 30,
-            "tid": True, "subject": True, "fid": True,
+            "tid": True, "uid": True, "subject": True, "fid": True,
             "lastpost": True, "lastposteruid": True, "numreplies": True,
             "firstpost": True, "closed": True,
         },
@@ -565,6 +565,13 @@ async def _section_threads(uid: str, data1, active: bool) -> None:
         t_firstpost  = str(th.get("firstpost") or "0")
         t_closed     = int(th.get("closed") or 0)
         if not t_tid or not t_lastpost:
+            continue
+
+        # HF's threads._uid filter isn't reliable enough alone (see HF_API_REFERENCE.md) -
+        # threads where this uid was only a contract counterparty, not the real author,
+        # have leaked through before. Verify real authorship before treating it as "my thread"
+        # for anything, including reply tracking.
+        if str(th.get("uid") or "") != uid:
             continue
 
         try:

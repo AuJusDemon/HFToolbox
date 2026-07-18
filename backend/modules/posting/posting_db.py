@@ -283,6 +283,11 @@ def add_my_thread(uid: str, tid: str, fid: str, title: str,
         )
 
 
+def delete_my_thread(uid: str, tid: str) -> None:
+    with _db() as conn:
+        conn.execute("DELETE FROM my_threads WHERE uid=? AND tid=?", (uid, tid))
+
+
 def get_my_threads(uid: str) -> list[dict]:
     with _db() as conn:
         rows = conn.execute(
