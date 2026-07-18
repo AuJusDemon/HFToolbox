@@ -1085,7 +1085,7 @@ function BrowseSection({ myUid }) {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function SigmarketPage() {
-  const [tab,        setTab]        = useState('mine')
+  const [tab,        setTab]        = useState('browse')
   const [refreshing, setRefreshing] = useState(false)
 
   const myUid            = useStore(s => s.user?.uid)
