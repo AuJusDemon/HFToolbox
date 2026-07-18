@@ -3,11 +3,13 @@
 export function relTime(ts) {
   if (!ts) return '—'
   const diff = Math.floor(Date.now() / 1000) - ts
-  if (diff < 60)     return 'just now'
-  if (diff < 3600)   return `${Math.floor(diff/60)}m ago`
-  if (diff < 86400)  return `${Math.floor(diff/3600)}h ago`
-  if (diff < 604800) return `${Math.floor(diff/86400)}d ago`
-  return new Date(ts * 1000).toLocaleDateString()
+  if (diff < 60)      return 'just now'
+  if (diff < 3600)    return `${Math.floor(diff/60)}m ago`
+  if (diff < 86400)   return `${Math.floor(diff/3600)}h ago`
+  if (diff < 604800)  return `${Math.floor(diff/86400)}d ago`
+  if (diff < 2629800) return `${Math.floor(diff/604800)}w ago`
+  if (diff < 31557600)return `${Math.floor(diff/2629800)}mo ago`
+  return `${Math.floor(diff/31557600)}y ago`
 }
 
 export function absDate(ts) {

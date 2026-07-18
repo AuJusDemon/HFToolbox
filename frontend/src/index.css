@@ -15,6 +15,7 @@
   --acc:    #39ff14;
   --acc2:   rgba(57,255,20,.07);
   --acc3:   rgba(57,255,20,.18);
+  --green:  #7fff5e;
   --red:    #ff4444;
   --red2:   rgba(255,68,68,.09);
   --yellow: #ffbb00;
@@ -453,6 +454,7 @@ select.inp,select.input{
   --acc:    #00d4b4;
   --acc2:   rgba(0,212,180,.07);
   --acc3:   rgba(0,212,180,.18);
+  --green:  #22c55e;
   --red:    #ff4757;
   --red2:   rgba(255,71,87,.09);
   --yellow: #ffa502;

@@ -1012,18 +1012,22 @@ def get_contracts_preview(uid: str, status_n: str | None = None,
             f"SELECT * FROM contracts_history WHERE {where} ORDER BY dateline DESC LIMIT ?",
             params + [limit]
         ).fetchall()
-        # Top SALES threads — counterparty delivering a product, or exchanges
+        # Top SALES threads — counterparty delivering a product, or exchanges.
+        # Also require the thread itself to be one the user authored (my_threads),
+        # not just a thread where they happened to be the delivering party in a
+        # contract — otherwise threads owned by other HF users show up here.
         _sell_cond = "otheruid=? AND (type_n IN ('3','5') OR (oproduct IS NOT NULL AND LOWER(TRIM(oproduct)) NOT IN ('','other','n/a','none','null')))"
+        _own_cond  = "EXISTS (SELECT 1 FROM my_threads mt WHERE mt.uid=? AND mt.tid=contracts_history.tid)"
         thread_rows = conn.execute(
             f"""SELECT tid, COUNT(*) as cnt FROM contracts_history
                 WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0'
-                AND {_sell_cond}
+                AND {_sell_cond} AND {_own_cond}
                 GROUP BY tid ORDER BY cnt DESC LIMIT 10""",
-            params + [uid]
+            params + [uid, uid]
         ).fetchall()
         with_thread = conn.execute(
-            f"SELECT COUNT(*) FROM contracts_history WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0' AND {_sell_cond}",
-            params + [uid]
+            f"SELECT COUNT(*) FROM contracts_history WHERE {where} AND tid IS NOT NULL AND tid != '' AND tid != '0' AND {_sell_cond} AND {_own_cond}",
+            params + [uid, uid]
         ).fetchone()[0]
         # Type breakdown per top thread
         top_tids = [r["tid"] for r in thread_rows]
