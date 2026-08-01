@@ -2365,6 +2365,7 @@ async def fetch_uimg(request: Request, image_id: str, key: str = ""):
 
 _MANIFEST_EXCLUDE_DIRS = {
     ".git",
+    ".agents",
     "__pycache__",
     ".venv",
     "venv",
@@ -2373,10 +2374,13 @@ _MANIFEST_EXCLUDE_DIRS = {
     "dist",
     "build",
     "data",
+    "db_data",
     "logs",
+    "secrets",
 }
 _MANIFEST_EXCLUDE_FILES = {
     "agent.md",
+    "AGENT_RUNTIME.md",
     "backend/.env",
     "backend/deploy_info.json",
 }
@@ -2507,8 +2511,35 @@ def _manifest_for(paths: list[Path], root: Path) -> dict:
 
 def _public_repo_manifest() -> dict:
     root = _repo_root()
-    paths = [p for p in root.rglob("*") if _is_manifest_file(p, root)]
+    # The verification contract is the public Git source, not every runtime
+    # file beside the checkout. Enumerating tracked files prevents secrets,
+    # databases, deploy notes, and local agent memory from entering manifests.
+    paths: list[Path] = []
+    try:
+        import subprocess as _subprocess
+        tracked = _subprocess.run(
+            ["git", "-C", str(root), "ls-files", "-z"],
+            capture_output=True,
+            timeout=5,
+        )
+        if tracked.returncode == 0:
+            for raw in tracked.stdout.split(b"\0"):
+                if not raw:
+                    continue
+                path = root / raw.decode("utf-8", errors="surrogateescape")
+                if _is_manifest_file(path, root):
+                    paths.append(path)
+    except Exception:
+        paths = []
+    if not paths:
+        paths = [p for p in root.rglob("*") if _is_manifest_file(p, root)]
     return _manifest_for(paths, root)
+
+
+def _reported_commit(deploy_info: dict, git_info: dict) -> str:
+    if git_info.get("available") and git_info.get("commit"):
+        return str(git_info["commit"])
+    return str(deploy_info.get("commit", "unknown"))
 
 
 def _frontend_manifest() -> dict:
@@ -2624,15 +2655,23 @@ async def telegram_webhook(request: Request):
 async def health():
     deploy_info = _load_deploy_info()
     git_info = await asyncio.to_thread(_git_runtime_info)
-    return {"ok": True, **deploy_info, "git": git_info}
+    commit = _reported_commit(deploy_info, git_info)
+    return {
+        "ok": True,
+        **deploy_info,
+        "commit": commit,
+        "commit_short": commit[:7] if commit != "unknown" else "unknown",
+        "git": git_info,
+    }
 
 
 @app.get("/health/integrity")
 async def health_integrity():
     deploy_info = _load_deploy_info()
+    git_info = await asyncio.to_thread(_git_runtime_info)
     manifest = await asyncio.to_thread(_public_repo_manifest)
     return {
-        "commit": deploy_info.get("commit", "unknown"),
+        "commit": _reported_commit(deploy_info, git_info),
         "deployed_at": deploy_info.get("deployed_at", "unknown"),
         "algorithm": manifest["algorithm"],
         "file_count": manifest["file_count"],
@@ -2648,7 +2687,7 @@ async def health_manifest():
     git_info = await asyncio.to_thread(_git_runtime_info)
     manifest = await asyncio.to_thread(_public_repo_manifest)
     return {
-        "commit": deploy_info.get("commit", "unknown"),
+        "commit": _reported_commit(deploy_info, git_info),
         "deployed_at": deploy_info.get("deployed_at", "unknown"),
         "git": git_info,
         **manifest,
@@ -2659,9 +2698,10 @@ async def health_manifest():
 @app.get("/health/frontend")
 async def health_frontend():
     deploy_info = _load_deploy_info()
+    git_info = await asyncio.to_thread(_git_runtime_info)
     manifest = await asyncio.to_thread(_frontend_manifest)
     return {
-        "commit": deploy_info.get("commit", "unknown"),
+        "commit": _reported_commit(deploy_info, git_info),
         "deployed_at": deploy_info.get("deployed_at", "unknown"),
         **manifest,
     }
