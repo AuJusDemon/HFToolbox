@@ -718,29 +718,16 @@ async def lifespan(app: FastAPI):
                 # ── 3. Reply queue poll (5 min normal, 10 min at low/critical) ──
                 _reply_interval = REPLY_POLL_INTERVAL * (2 if _tl in ("low", "critical") else 1)
                 if now - _last_reply_poll >= _reply_interval:
-                    if _tl == "critical":
-                        log.info("Unified scheduler: reply poll skipped — throttle=critical")
-                        _last_reply_poll = now
-                    else:
-                        try:
-                            # Build active UID set — same idle gate used by bytes crawler.
-                            # Idle users' tracked threads are skipped; they get caught
-                            # on the next poll cycle after they return.
-                            all_uids = await asyncio.to_thread(db.get_all_uids)
-                            active_uids: set[str] = set()
-                            for _uid in all_uids:
-                                _last = await asyncio.to_thread(db.get_last_active, _uid)
-                                if _last and (_t.time() - _last) <= IDLE_THRESHOLD:
-                                    active_uids.add(_uid)
-                            if active_uids:
-                                await asyncio.wait_for(poll_reply_queues(active_uids), timeout=60)
-                            else:
-                                log.debug("Reply poll: all users idle, skipping")
-                            _last_reply_poll = _t.time()
-                        except asyncio.TimeoutError:
-                            log.warning("Unified scheduler: poll_reply_queues timed out")
-                        except Exception as e:
-                            log.exception("Unified scheduler: reply poll error: %s", e)
+                    try:
+                        # This queue is user-facing and costs zero HF calls when
+                        # empty. Drain it while the owner is away so Telegram
+                        # reply alerts continue to work unattended.
+                        await asyncio.wait_for(poll_reply_queues(), timeout=60)
+                        _last_reply_poll = _t.time()
+                    except asyncio.TimeoutError:
+                        log.warning("Unified scheduler: poll_reply_queues timed out")
+                    except Exception as e:
+                        log.exception("Unified scheduler: reply poll error: %s", e)
 
                 # ── 4. Sigmarket browse pre-warm (every 25 min, skip at caution+) ──
                 if now - _last_browse_warm >= BROWSE_WARM_INTERVAL and _tl == "normal":

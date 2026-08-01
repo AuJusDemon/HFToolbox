@@ -14,7 +14,6 @@ Reply queue auto-dismiss logic:
 """
 
 import asyncio
-import math
 import re
 import logging
 import time
@@ -29,12 +28,14 @@ from .posting_db import (
     add_my_thread,
     get_all_tracked_threads,
     update_thread_last_checked,
+    update_thread_numreplies,
     upsert_reply,
     auto_dismiss_by_pid,
     get_unread_count,
 )
 import db
 import integration_db
+from .reply_pagination import fetch_changed_thread_posts
 
 log = logging.getLogger("posting")
 
@@ -182,8 +183,9 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
     The crawl (every 5 min) compares lastpost vs stored cursor and puts TIDs needing
     a check into _reply_check_queue. This function just drains that queue.
 
-    Cost: 0 calls if nothing flagged. 1 call/thread with new replies + 1 users batch.
-    Never polls old/inactive threads. Never polls threads where we or Stanley posted last.
+    Cost: 0 calls if nothing is flagged. Changed threads use one shared metadata
+    lookup plus their final post pages. Owner and Stanley posts are filtered only
+    after the changed thread has been inspected.
     """
     from HFClient import HFClient
 
@@ -211,6 +213,25 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
 
         client = HFClient(token)
 
+        # threads._uid frequently omits numreplies. Resolve changed TIDs through
+        # threads._tid in one batch before calculating their final posts pages.
+        targeted_counts: dict[str, int | None] = {}
+        try:
+            meta_data = await client.read({"threads": {
+                "_tid": [int(t) for t in tids],
+                "tid": True, "numreplies": True,
+            }})
+            meta_rows = (meta_data or {}).get("threads", [])
+            if isinstance(meta_rows, dict):
+                meta_rows = [meta_rows]
+            for row in (meta_rows or []):
+                meta_tid = str(row.get("tid") or "")
+                raw_count = row.get("numreplies")
+                if meta_tid:
+                    targeted_counts[meta_tid] = int(raw_count) if raw_count is not None else None
+        except Exception as exc:
+            log.warning("Reply poll: targeted thread metadata failed uid=%s: %s", uid, exc)
+
         # Load last_pid cursors for these specific tids only
         all_tracked = await asyncio.to_thread(get_all_tracked_threads)
         tid_map = {str(t["tid"]): t for t in all_tracked if str(t["uid"]) == uid}
@@ -232,41 +253,21 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             seed_only    = tid_str in seed_tids
             thread_title = titles.get(tid_str, tracked.get("title", ""))
 
-            nr = numreplies.get(tid_str, 0)
-            last_page = max(1, math.ceil((nr + 1) / 30))
-            pages_to_fetch = list(dict.fromkeys([max(1, last_page - 1), last_page]))
+            nr = targeted_counts.get(tid_str)
+            if nr == 0 and last_pid_int > 0:
+                # A populated cursor and a zero count is the known bad API shape.
+                nr = None
 
             try:
-                collected_posts: list = []
-                hf_failed = False
-                for fetch_page in pages_to_fetch:
-                    page_data = await client.read({
-                        "posts": {
-                            "_tid":     [int(tid_str)],
-                            "_page":    fetch_page,
-                            "_perpage": 30,
-                            "pid":      True,
-                            "uid":      True,
-                            "dateline": True,
-                            "message":  True,
-                            "subject":  True,
-                        }
-                    })
-                    if page_data is None:
-                        hf_failed = True
-                        continue
-                    page_raw = page_data.get("posts", [])
-                    if isinstance(page_raw, dict): page_raw = [page_raw]
-                    collected_posts.extend(page_raw or [])
+                collected_posts, verified_replies = await fetch_changed_thread_posts(
+                    client, tid_str, nr,
+                )
+                await asyncio.to_thread(
+                    update_thread_numreplies, uid, tid_str, verified_replies,
+                )
 
                 if not collected_posts:
-                    if hf_failed:
-                        failed_tids.add(tid_str)
-                        log.info("Reply poll: uid=%s tid=%s - HF returned None, requeueing",
-                                 uid, tid_str)
-                    else:
-                        log.info("Reply poll: uid=%s tid=%s nr=%d pages=%s - no posts returned",
-                                 uid, tid_str, nr, pages_to_fetch)
+                    log.info("Reply poll: uid=%s tid=%s - no posts returned", uid, tid_str)
                     continue
 
                 # Dedupe by pid (pages can overlap at boundaries)
@@ -292,8 +293,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                     tid_max_pid[tid_str] = max_pid
 
                 log.info(
-                    "Reply poll: uid=%s tid=%s nr=%d pages=%s collected=%d new=%d seed=%s cursor_adv=%s",
-                    uid, tid_str, nr, pages_to_fetch, len(collected_posts), len(new_posts),
+                    "Reply poll: uid=%s tid=%s replies=%d collected=%d new=%d seed=%s cursor_adv=%s",
+                    uid, tid_str, verified_replies, len(collected_posts), len(new_posts),
                     seed_only, cursor_advanced,
                 )
 

@@ -585,24 +585,17 @@ async def _section_threads(uid: str, data1, active: bool) -> None:
         if t_lastpost <= stored_lastpost:
             continue
 
-        if stored_lastpost == 0:
+        stored_last_pid = str((_cursor_map.get(t_tid) or {}).get("last_pid") or "0")
+        if stored_lastpost == 0 and stored_last_pid == "0":
             try:
                 await asyncio.to_thread(update_thread_last_checked, uid, t_tid, "0", t_lastpost)
             except Exception:
                 pass
             seed_tids_uid.add(t_tid)
 
-        # We or Stanley posted last: advance cursor without queuing a reply check.
-        # Do NOT advance last_checked for other-poster threads here; the reply poll
-        # advances it after successful post fetch so re-flags survive a failed poll.
-        if t_lastposter in (uid, STANLEY_UID):
-            try:
-                last_pid = (_cursor_map.get(t_tid) or {}).get("last_pid") or "0"
-                await asyncio.to_thread(update_thread_last_checked, uid, t_tid, last_pid, t_lastpost)
-            except Exception:
-                pass
-            continue
-
+        # Always inspect a changed owned thread. The owner or Stanley may be the
+        # latest poster after another member replied, so lastposter alone cannot
+        # prove that there are no unseen replies before it.
         needs_check.add(t_tid)
         titles_map[t_tid]     = t_subject
         numreplies_map[t_tid] = t_numreplies
