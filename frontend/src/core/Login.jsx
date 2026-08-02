@@ -37,16 +37,34 @@ const BOOT_MSGS = [
 const PROMPT_DELAY = 2400
 const AUTH_DELAY   = 2700
 
+const AUTH_ERROR_MESSAGES = {
+  cancelled: 'Authorization was cancelled. No changes were made.',
+  session_expired: 'Your sign-in session expired. Start again.',
+  oauth_failed: 'Hack Forums did not complete sign-in. Try again.',
+  hf_unavailable: 'Hack Forums is temporarily unavailable. Wait a moment and try again.',
+  invalid_response: 'Hack Forums returned an incomplete sign-in response. Try again.',
+  login_failed: 'Sign-in could not be completed. Try again.',
+}
+
 export default function Login() {
   const { user, authLoading } = useStore()
   const nav = useNavigate()
 
-  const [shown,      setShown]      = useState(0)   // how many boot msgs revealed
-  const [showPrompt, setShowPrompt] = useState(false)
-  const [showAuth,   setShowAuth]   = useState(false)
+  const query = new URLSearchParams(window.location.search)
+  const authErrorCode = query.get('auth_error') || ''
+  const authReference = query.get('auth_ref') || ''
+  const requestedReturn = query.get('next') || ''
+  const authError = authErrorCode
+    ? (AUTH_ERROR_MESSAGES[authErrorCode] || AUTH_ERROR_MESSAGES.login_failed)
+    : ''
+  const hasAuthError = Boolean(authError)
+
+  const [shown,      setShown]      = useState(hasAuthError ? BOOT_MSGS.length : 0)
+  const [showPrompt, setShowPrompt] = useState(hasAuthError)
+  const [showAuth,   setShowAuth]   = useState(hasAuthError)
   const [cursorOn,   setCursorOn]   = useState(true)
-  const [typed,      setTyped]      = useState('')
-  const [typeDone,   setTypeDone]   = useState(false)
+  const [typed,      setTyped]      = useState(hasAuthError ? 'authenticate --provider=hackforums' : '')
+  const [typeDone,   setTypeDone]   = useState(hasAuthError)
   const bottomRef = useRef(null)
 
   const CMD = 'authenticate --provider=hackforums'
@@ -57,16 +75,17 @@ export default function Login() {
 
   /* Reveal boot messages one by one */
   useEffect(() => {
+    if (hasAuthError) return
     BOOT_MSGS.forEach((_, i) => {
       setTimeout(() => setShown(n => Math.max(n, i + 1)), BOOT_MSGS[i].delay)
     })
     setTimeout(() => setShowPrompt(true), PROMPT_DELAY)
     setTimeout(() => setShowAuth(true),   AUTH_DELAY)
-  }, [])
+  }, [hasAuthError])
 
   /* Typewriter effect for the command */
   useEffect(() => {
-    if (!showPrompt) return
+    if (!showPrompt || typeDone) return
     let i = 0
     const id = setInterval(() => {
       i++
@@ -74,7 +93,7 @@ export default function Login() {
       if (i >= CMD.length) { clearInterval(id); setTypeDone(true) }
     }, 28)
     return () => clearInterval(id)
-  }, [showPrompt])
+  }, [showPrompt, typeDone])
 
   /* Blinking cursor */
   useEffect(() => {
@@ -282,6 +301,27 @@ export default function Login() {
           text-transform: uppercase;
           margin-bottom: 10px;
         }
+        .login-auth-error {
+          border-left: 2px solid #ff4d4d;
+          background: rgba(255,77,77,.05);
+          padding: 12px 14px;
+          margin-bottom: 14px;
+          color: #f2dede;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+        .login-auth-error-title {
+          color: #ff6b6b;
+          font-size: 11px;
+          letter-spacing: .1em;
+          text-transform: uppercase;
+          margin-bottom: 4px;
+        }
+        .login-auth-error-reference {
+          color: #6f8a6f;
+          font-size: 10px;
+          margin-top: 6px;
+        }
         .login-auth-btn {
           display: block;
           width: 100%;
@@ -405,17 +445,26 @@ export default function Login() {
             {/* Auth panel — appears after typewriter done */}
             {showAuth && (
               <div className="login-auth-panel">
+                {authError && (
+                  <div className="login-auth-error" role="alert">
+                    <div className="login-auth-error-title">Sign-in was not completed</div>
+                    <div>{authError}</div>
+                    {authReference && (
+                      <div className="login-auth-error-reference">Reference: {authReference}</div>
+                    )}
+                  </div>
+                )}
                 <div className="login-auth-header">// oauth2 authentication required</div>
                 <button
                   className="login-auth-btn"
                   onClick={() => {
-                    const returnTo = sessionStorage.getItem('auth_return_to') || ''
+                    const returnTo = requestedReturn || sessionStorage.getItem('auth_return_to') || ''
                     sessionStorage.removeItem('auth_return_to')
                     const url = returnTo ? `/auth/login?next=${encodeURIComponent(returnTo)}` : '/auth/login'
                     window.location.href = url
                   }}
                 >
-                  Continue with HackForums
+                  {authError ? 'Try Hack Forums sign-in again' : 'Continue with HackForums'}
                 </button>
                 <div className="login-auth-sub">
                   {'// No passwords stored. Authorization via official HF API v2 OAuth2.'}<br/>
