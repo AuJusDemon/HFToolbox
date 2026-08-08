@@ -26,6 +26,10 @@ services:
     environment:
       HFT_MANIFEST_ROOT: /manifest-src
       HFT_FRONTEND_DIST_ROOT: /manifest-src/frontend/dist
+      HF_CONTROL_PLANE_URL: ${HF_CONTROL_PLANE_URL:-http://host.docker.internal:38311}
+      HF_CONTROL_PLANE_CALLER: ${HF_CONTROL_PLANE_CALLER:-prod}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: ["python", "-m", "uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--log-level", "info"]
     volumes:
       - ./data:/app/data

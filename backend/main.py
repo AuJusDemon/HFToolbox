@@ -2671,13 +2671,15 @@ async def health_integrity():
     git_info = await asyncio.to_thread(_git_runtime_info)
     manifest = await asyncio.to_thread(_public_repo_manifest)
     return {
+        "ok": True,
+        "kind": "release_attestation",
         "commit": _reported_commit(deploy_info, git_info),
         "deployed_at": deploy_info.get("deployed_at", "unknown"),
+        "git": git_info,
         "algorithm": manifest["algorithm"],
         "file_count": manifest["file_count"],
-        "manifest_hash": manifest["manifest_hash"],
-        "checksums": {rel: meta["sha256"] for rel, meta in manifest["files"].items()},
-        "excluded": _manifest_exclusions(),
+        "release_hash": manifest["manifest_hash"],
+        "frontend_checksums": "/health/frontend",
     }
 
 
@@ -2685,13 +2687,14 @@ async def health_integrity():
 async def health_manifest():
     deploy_info = _load_deploy_info()
     git_info = await asyncio.to_thread(_git_runtime_info)
-    manifest = await asyncio.to_thread(_public_repo_manifest)
     return {
+        "ok": True,
+        "deprecated": True,
+        "message": "The public source manifest endpoint has been deprecated. Use /health/integrity for release attestation and /health/frontend for frontend asset checksums.",
         "commit": _reported_commit(deploy_info, git_info),
         "deployed_at": deploy_info.get("deployed_at", "unknown"),
         "git": git_info,
-        **manifest,
-        "excluded": _manifest_exclusions(),
+        "replacement": "/health/integrity",
     }
 
 

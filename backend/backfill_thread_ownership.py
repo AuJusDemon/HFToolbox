@@ -28,7 +28,8 @@ async def _read_with_retry(client, ask, label):
     call for the live server (don't hammer a struggling HF), but wrong for a
     single maintenance run - one early hiccup shouldn't skip everything after it."""
     for attempt in range(1, CHUNK_RETRIES + 1):
-        _hfc._hf_blocked_until = 0.0
+        if hasattr(_hfc, "_hf_blocked_until"):
+            _hfc._hf_blocked_until = 0.0
         try:
             data = await client.read(ask)
         except Exception as e:
