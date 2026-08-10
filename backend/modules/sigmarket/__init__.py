@@ -95,14 +95,22 @@ async def poll_sigmarket_rotations(uid: str, token: str) -> None:
         next_idx = (rot["current_idx"] + 1) % len(sigs)
         next_sig = sigs[next_idx]
 
-        hf = HFClient(token)
+        hf = HFClient(
+            token,
+            owner_uid=uid,
+            feature="sigmarket.rotation",
+            priority=3,
+            background=False,
+            route_class="high",
+            egress_lane="critical",
+        )
         result = await hf.write({
             "sigmarket": {
                 "_type": "changesig",
                 "_smid": "all",
                 "_sig":  next_sig,
             }
-        })
+        }, feature="sigmarket.rotation", priority=3)
 
         if result is not None:
             await asyncio.to_thread(advance_rotation, uid, next_idx, now)

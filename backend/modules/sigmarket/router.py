@@ -47,9 +47,18 @@ def _auth(request: Request):
 # Previously duplicated between get_status() and warm_sigmarket_status().
 # Now one function, called by both the route and the scheduler warmer.
 
-async def _do_status_fetch(uid: str, token: str) -> dict | None:
+async def _do_status_fetch(uid: str, token: str, *, feature: str = "sigmarket.status",
+                           background: bool = False) -> dict | None:
     from HFClient import HFClient, AuthExpired
-    hf      = HFClient(token)
+    hf      = HFClient(
+        token,
+        owner_uid=uid,
+        feature=feature,
+        priority=8 if background else 3,
+        background=background,
+        route_class="background" if background else "normal",
+        egress_lane="background" if background else "critical",
+    )
     uid_int = int(uid)
 
     # Keep these sequential. HF has shown 503/challenge behavior when the same
@@ -497,7 +506,9 @@ async def warm_sigmarket_status(uid: str, token: str) -> None:
         data, _ = await hf_service.get_or_fetch(
             cache_key     = cache_key,
             resource_type = "sigmarket_status",
-            fetch_fn      = lambda: _do_status_fetch(uid, token),
+            fetch_fn      = lambda: _do_status_fetch(
+                uid, token, feature="sigmarket.status_warm", background=True
+            ),
             uid           = uid,
             force         = True,
         )

@@ -87,7 +87,15 @@ async def fire_due_threads() -> None:
             continue
 
         try:
-            client = HFClient(token)
+            client = HFClient(
+                token,
+                owner_uid=uid,
+                feature="posting.fire_due",
+                priority=2,
+                background=False,
+                route_class="high",
+                egress_lane="critical",
+            )
             result = await client.write({
                 "threads": {
                     "_fid":     int(fid),
@@ -120,7 +128,11 @@ async def fire_due_threads() -> None:
             # Overflow replies — post immediately after thread (up to 2 replies)
             async def _post_overflow(msg, label):
                 try:
-                    r = await client.write({"posts": {"_tid": int(tid), "_message": msg}})
+                    r = await client.write(
+                        {"posts": {"_tid": int(tid), "_message": msg}},
+                        feature="posting.overflow_reply",
+                        priority=2,
+                    )
                     if r:
                         rp = r.get("posts") or {}
                         if isinstance(rp, list): rp = rp[0] if rp else {}
@@ -211,7 +223,15 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
         if not token:
             continue
 
-        client = HFClient(token)
+        client = HFClient(
+            token,
+            owner_uid=uid,
+            feature="posting.reply_poll",
+            priority=7,
+            background=True,
+            route_class="background",
+            egress_lane="background",
+        )
 
         # threads._uid frequently omits numreplies. Resolve changed TIDs through
         # threads._tid in one batch before calculating their final posts pages.
@@ -220,7 +240,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             meta_data = await client.read({"threads": {
                 "_tid": [int(t) for t in tids],
                 "tid": True, "numreplies": True,
-            }})
+            }}, feature="posting.reply_poll.metadata", background=True,
+                priority=7, cache_ttl=5, stale_ttl=300)
             meta_rows = (meta_data or {}).get("threads", [])
             if isinstance(meta_rows, dict):
                 meta_rows = [meta_rows]
@@ -327,7 +348,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                     "uid": True, "username": True, "avatar": True,
                     "usertitle": True, "reputation": True,
                     "displaygroup": True, "additionalgroups": True,
-                }})
+                }}, feature="posting.reply_poll.users", background=True,
+                    priority=8, cache_ttl=60, stale_ttl=3600)
                 users_raw = (u_data or {}).get("users", [])
                 if isinstance(users_raw, dict): users_raw = [users_raw]
                 uid_profile_map: dict = {}

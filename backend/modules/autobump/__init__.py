@@ -136,7 +136,15 @@ async def poll_autobump(polling_uid: str, polling_token: str) -> None:
                 pass
             return
 
-        client = HFClient(token)
+        client = HFClient(
+            token,
+            owner_uid=uid,
+            feature="autobump",
+            priority=2,
+            background=False,
+            route_class="high",
+            egress_lane="critical",
+        )
 
         # No separate token probe — the thread batch calls below act as the implicit
         # liveness check. If all chunks return no data, _process_timer_jobs marks the
@@ -164,7 +172,8 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
     try:
         # Fire the bump
         bump_result = await asyncio.wait_for(
-            client.write({"bytes": {"_bump": int(tid_str)}}),
+            client.write({"bytes": {"_bump": int(tid_str)}},
+                         feature="autobump.bump", priority=2),
             timeout=12,
         )
 
@@ -188,7 +197,7 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
                         "_amount": str(MY_FEE),
                         "_reason": f"HFToolbox | Bump Fee | TID: {tid_str}",
                     }
-                }), timeout=12)
+                }, feature="autobump.fee", priority=2), timeout=12)
             except asyncio.TimeoutError:
                 fee_result = None
                 log.warning("Fee write timed out uid=%s tid=%s", uid, tid_str)

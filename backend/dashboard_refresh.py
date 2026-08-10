@@ -82,7 +82,15 @@ async def refresh_user_dashboard(uid: str, token: str,
                                  reason: str = "scheduler") -> None:
     from HFClient import HFClient
 
-    client  = HFClient(token)
+    client  = HFClient(
+        token,
+        owner_uid=uid,
+        feature="dashboard_refresh",
+        priority=7,
+        background=True,
+        route_class="background",
+        egress_lane="background",
+    )
     uid_int = int(uid)
 
     state  = await asyncio.to_thread(db.get_crawl_state, uid)
@@ -127,7 +135,8 @@ async def refresh_user_dashboard(uid: str, token: str,
             "lastpost": True, "lastposteruid": True, "numreplies": True,
             "firstpost": True, "closed": True,
         },
-    }), timeout=35)
+    }, feature="dashboard_refresh.primary", background=True, priority=7,
+       cache_ttl=5, stale_ttl=300), timeout=35)
 
     c_page2    = c_page_check + 1
     call2_ask: dict = {
@@ -149,7 +158,11 @@ async def refresh_user_dashboard(uid: str, token: str,
             "timeout_days": True, "timeout": True, "public": True,
             "dateline": True, "tid": True, "brating": True,
         }
-    data2 = await asyncio.wait_for(client.read(call2_ask), timeout=35)
+    data2 = await asyncio.wait_for(
+        client.read(call2_ask, feature="dashboard_refresh.secondary",
+                    background=True, priority=8, cache_ttl=5, stale_ttl=300),
+        timeout=35,
+    )
 
     try:
         await _section_bytes(uid, state, recv_done, sent_done, recv_page, sent_page, data1, data2)
@@ -398,7 +411,8 @@ async def _section_contracts(uid, cstate, c_done, c_page_check, c_page2,
                         "terms": True, "timeout_days": True, "timeout": True,
                         "public": True, "idispute": True, "odispute": True,
                         "dateline": True, "tid": True, "brating": True,
-                    }}), timeout=12)
+                    }}, feature="dashboard_refresh.contract_recheck",
+                       background=True, priority=8, cache_ttl=5, stale_ttl=300), timeout=12)
                 except asyncio.TimeoutError:
                     log.warning("Contracts re-check: API timeout uid=%s", uid)
                     r = None
@@ -471,7 +485,8 @@ async def _section_contracts(uid, cstate, c_done, c_page_check, c_page2,
                                     "_cid": _completed_cids[:8],
                                     "crid": True, "contractid": True, "fromid": True, "toid": True,
                                     "dateline": True, "amount": True, "message": True,
-                                }}), timeout=8)
+                                }}, feature="dashboard_refresh.brating_check",
+                                   background=True, priority=8, cache_ttl=5, stale_ttl=300), timeout=8)
                                 if _br_resp and _br_resp.get("success") is not False:
                                     await store_bratings(uid, parse_brating_rows(
                                         (_br_resp or {}).get("bratings", []), uid))

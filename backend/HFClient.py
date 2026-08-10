@@ -183,23 +183,33 @@ def get_circuit_status(token: str | None = None, route: str = "read") -> dict:
 
 class HFClient:
     def __init__(self, token: str, *, owner_uid: str = "", feature: str = "interactive",
-                 priority: int = 3, background: bool = False):
+                 priority: int = 3, background: bool = False,
+                 route_class: str = "", egress_lane: str = ""):
         self.token = token
         self.owner_uid = owner_uid
         self.feature = feature
         self.priority = priority
         self.background = background
+        self.route_class = route_class
+        self.egress_lane = egress_lane
         self.last_error = ""
 
     async def read(self, asks: dict, **options) -> dict | None:
         owner_uid = str(options.get("owner_uid", self.owner_uid) or "")
         background = bool(options.get("background", self.background))
         floor = await _user_background_floor(owner_uid) if background else 0
+        route_class = str(options.get("route_class", self.route_class) or "")
+        egress_lane = str(options.get("egress_lane", self.egress_lane) or "")
+        if background:
+            route_class = route_class or "background"
+            egress_lane = egress_lane or "background"
         response = await _submit({
             "token": self.token, "owner_uid": owner_uid,
             "app": _app_name(),
             "feature": options.get("feature", self.feature), "route": "read",
             "payload": asks, "priority": options.get("priority", self.priority),
+            "route_class": route_class or "normal",
+            "egress_lane": egress_lane or "critical",
             "background": background, "background_floor": floor,
             "privacy_scope": options.get("privacy_scope", "private"),
             "cache_ttl": options.get("cache_ttl", 5),
@@ -220,11 +230,18 @@ class HFClient:
         owner_uid = str(options.get("owner_uid", self.owner_uid) or "")
         background = bool(options.get("background", self.background))
         floor = await _user_background_floor(owner_uid) if background else 0
+        route_class = str(options.get("route_class", self.route_class) or "")
+        egress_lane = str(options.get("egress_lane", self.egress_lane) or "")
+        if background:
+            route_class = route_class or "background"
+            egress_lane = egress_lane or "background"
         response = await _submit({
             "token": self.token, "owner_uid": owner_uid,
             "app": _app_name(),
             "feature": options.get("feature", self.feature), "route": "write",
             "payload": asks, "priority": options.get("priority", min(self.priority, 2)),
+            "route_class": route_class or "high",
+            "egress_lane": egress_lane or "critical",
             "background": background, "background_floor": floor,
             "privacy_scope": "private", "cache_ttl": 0, "stale_ttl": 0,
             "idempotency_key": options.get("idempotency_key") or fallback_key,

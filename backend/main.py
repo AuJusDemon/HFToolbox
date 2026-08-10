@@ -325,7 +325,15 @@ async def _username_resolve_loop() -> None:
                         continue
 
                     from HFClient import HFClient, get_rate_limit_remaining
-                    client = HFClient(token)
+                    client = HFClient(
+                        token,
+                        owner_uid=uid,
+                        feature="username_resolver",
+                        priority=8,
+                        background=True,
+                        route_class="background",
+                        egress_lane="background",
+                    )
                     ask: dict = {}
                     if chunk:
                         ask["users"] = {
@@ -338,7 +346,12 @@ async def _username_resolve_loop() -> None:
                         ask["threads"] = {"_tid": tid_ints[:30], "tid": True, "subject": True}
 
                     import time as _tr_t; _tr0 = _tr_t.time()
-                    combined = await asyncio.wait_for(client.read(ask), timeout=15)
+                    combined = await asyncio.wait_for(
+                        client.read(ask, feature="username_resolver",
+                                    background=True, priority=8,
+                                    cache_ttl=60, stale_ttl=3600),
+                        timeout=15,
+                    )
                     import hf_cache as _hfc2
                     _tr_ms = int((_tr_t.time() - _tr0) * 1000)
                     await asyncio.to_thread(
@@ -416,7 +429,15 @@ async def _tid_backfill_loop() -> None:
                 continue
 
             log.info("TID backfill: starting for uid=%s", uid)
-            client   = HFClient(token)
+            client   = HFClient(
+                token,
+                owner_uid=uid,
+                feature="tid_backfill",
+                priority=9,
+                background=True,
+                route_class="history",
+                egress_lane="background",
+            )
             uid_int  = int(uid)
             page     = 1
             total    = 0
@@ -427,7 +448,9 @@ async def _tid_backfill_loop() -> None:
                         client.read({"contracts": {
                             "_uid": [uid_int], "_page": page, "_perpage": 30,
                             "cid": True, "tid": True,
-                        }}),
+                        }}, feature="tid_backfill", background=True,
+                           priority=9, route_class="history",
+                           egress_lane="background", cache_ttl=0, stale_ttl=0),
                         timeout=20
                     )
                 except Exception as e:
@@ -804,7 +827,15 @@ async def lifespan(app: FastAPI):
                                 _r_last = await asyncio.to_thread(_grf_r, _r_uid)
                                 if _r_last and (_t.time() - _r_last) < 4 * 3600:
                                     continue
-                                _r_client = _HFC_r(_r_tok)
+                                _r_client = _HFC_r(
+                                    _r_tok,
+                                    owner_uid=_r_uid,
+                                    feature="ratings_sync",
+                                    priority=9,
+                                    background=True,
+                                    route_class="history",
+                                    egress_lane="background",
+                                )
                                 _r_int    = int(_r_uid)
                                 _r_rows: list = []
                                 for _r_pg in range(1, 31):
@@ -812,7 +843,10 @@ async def lifespan(app: FastAPI):
                                         "_from": [_r_int], "_page": _r_pg, "_perpage": 30,
                                         "crid": True, "contractid": True, "fromid": True, "toid": True,
                                         "dateline": True, "amount": True, "message": True,
-                                    }}), timeout=10)
+                                    }}, feature="ratings_sync", background=True,
+                                        priority=9, route_class="history",
+                                        egress_lane="background",
+                                        cache_ttl=60, stale_ttl=3600), timeout=10)
                                     _r_raw = (_r_d or {}).get("bratings", [])
                                     if isinstance(_r_raw, dict): _r_raw = [_r_raw]
                                     _r_rows.extend(_parse_brating_rows(_r_raw, _r_uid))
