@@ -48,8 +48,8 @@ def encrypt_token(token: str) -> str:
     try:
         f = _primary_fernet() or _session_fernet()
         return ENC_PREFIX + f.encrypt(token.encode()).decode()
-    except Exception:
-        return token  # never lose data
+    except Exception as exc:
+        raise RuntimeError("token encryption failed") from exc
 
 
 def decrypt_token(value: str) -> str:

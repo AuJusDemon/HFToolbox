@@ -393,7 +393,9 @@ async def get_recents_route(request: Request):
 
 @router.post("/imagehost/upload")
 async def imagehost_upload(request: Request):
-    _auth(request)
+    uid, err = _auth(request)
+    if err:
+        return err
     import httpx as _httpx
 
     form       = await request.form()
@@ -401,14 +403,28 @@ async def imagehost_upload(request: Request):
     if not file_field:
         return JSONResponse({"error": "no file"}, status_code=400)
 
-    file_bytes = await file_field.read()
+    content_type = str(getattr(file_field, "content_type", "") or "")
+    filename = str(getattr(file_field, "filename", "") or "upload.bin")
+    allowed_ext = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+    if not content_type.startswith("image/") and not filename.lower().endswith(allowed_ext):
+        return JSONResponse({"error": "unsupported file type"}, status_code=400)
+
+    max_bytes = 8 * 1024 * 1024
+    file_bytes = bytearray()
+    while True:
+        chunk = await file_field.read(1024 * 1024)
+        if not chunk:
+            break
+        file_bytes.extend(chunk)
+        if len(file_bytes) > max_bytes:
+            return JSONResponse({"error": "file too large"}, status_code=413)
     fwd_data   = {k: v for k, v in form.items() if k != "file"}
 
     try:
         async with _httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
                 "https://uploadimages.org/api/upload",
-                files={"file": (file_field.filename or "upload.bin", file_bytes, "application/octet-stream")},
+                files={"file": (filename, bytes(file_bytes), content_type or "application/octet-stream")},
                 data=fwd_data,
             )
         return JSONResponse(resp.json(), status_code=resp.status_code)

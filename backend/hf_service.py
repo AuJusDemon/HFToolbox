@@ -327,7 +327,7 @@ _WRITE_INVALIDATIONS: dict[str, list[str]] = {
         "me:{uid}",
     ],
     "contract_action": [
-        "contract:{cid}:detail",
+        "contract:{uid}:{cid}:detail",
         "contracts:{uid}:p1",
     ],
     "sigmarket_listing": [
@@ -535,8 +535,9 @@ async def get_user_activity(target_uid: str, token: str,
     )
 
 
-async def get_contract_detail(cid: int, token: str, force: bool = False) -> tuple[dict | None, bool]:
-    # Caches raw contract + both party usernames globally; route resolves counterparty per viewer.
+async def get_contract_detail(cid: int, token: str, owner_uid: str, force: bool = False) -> tuple[dict | None, bool]:
+    # Contract details are private to the viewer. The cache key must include the
+    # requesting UID so one user's HF-authorized result cannot be replayed to another.
     from HFClient import HFClient
     async def _fetch() -> dict | None:
         client = HFClient(token)
@@ -602,10 +603,10 @@ async def get_contract_detail(cid: int, token: str, force: bool = False) -> tupl
         }
 
     return await get_or_fetch(
-        cache_key     = f"contract:{cid}:detail",
+        cache_key     = f"contract:{owner_uid}:{cid}:detail",
         resource_type = "contract_detail",
         fetch_fn      = _fetch,
-        uid           = "",   # global, not per-viewer
+        uid           = owner_uid,
         force         = force,
         fetch_timeout = 30,   # 2 sequential calls (contract + username); needs more than default 20s
     )

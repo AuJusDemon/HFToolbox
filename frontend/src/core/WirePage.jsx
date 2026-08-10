@@ -291,12 +291,74 @@ function parseBBCode(raw) {
   return s
 }
 
+const BB_ALLOWED_TAGS = new Set(['A','BLOCKQUOTE','BR','CITE','CODE','DETAILS','DIV','EM','HR','I','IFRAME','IMG','LI','OL','PRE','SPAN','STRONG','SUB','SUMMARY','SUP','S','TABLE','TBODY','TD','TH','THEAD','TR','U','UL'])
+const BB_ALLOWED_ATTRS = new Set(['allowfullscreen','alt','class','data-loaded','data-size','data-uid','data-url','height','href','rel','src','style','target','title','type','width'])
+
+function bbSafeUrl(value, image = false) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  try {
+    const url = new URL(raw, window.location.origin)
+    if (image && !['http:', 'https:'].includes(url.protocol)) return ''
+    if (!image && !['http:', 'https:', 'mailto:'].includes(url.protocol)) return ''
+    return url.href
+  } catch {
+    return ''
+  }
+}
+
+function bbSafeStyle(value) {
+  const raw = String(value || '')
+  if (/url\s*\(|expression\s*\(|javascript:|behavior:|-moz-binding/i.test(raw)) return ''
+  return raw
+}
+
+function sanitizeBBCodeHtml(html) {
+  if (typeof document === 'undefined') return ''
+  const tpl = document.createElement('template')
+  tpl.innerHTML = String(html || '')
+  const walk = node => {
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType !== 1) continue
+      if (!BB_ALLOWED_TAGS.has(child.tagName)) {
+        child.replaceWith(document.createTextNode(child.textContent || ''))
+        continue
+      }
+      for (const attr of [...child.attributes]) {
+        const name = attr.name.toLowerCase()
+        if (name.startsWith('on') || !BB_ALLOWED_ATTRS.has(name)) {
+          child.removeAttribute(attr.name)
+          continue
+        }
+        if (name === 'href') {
+          const safe = bbSafeUrl(attr.value)
+          safe ? child.setAttribute('href', safe) : child.removeAttribute('href')
+          if (safe) child.setAttribute('rel', 'noopener noreferrer')
+        } else if (name === 'src') {
+          const safe = bbSafeUrl(attr.value, true)
+          safe ? child.setAttribute('src', safe) : child.removeAttribute('src')
+        } else if (name === 'style') {
+          const safe = bbSafeStyle(attr.value)
+          safe ? child.setAttribute('style', safe) : child.removeAttribute('style')
+        } else if (name === 'class' && !/^[A-Za-z0-9_\-\s]+$/.test(attr.value)) {
+          child.removeAttribute('class')
+        } else if (name === 'target' && attr.value !== '_blank') {
+          child.removeAttribute('target')
+        }
+      }
+      walk(child)
+    }
+  }
+  walk(tpl.content)
+  return tpl.innerHTML
+}
+
 // BBCode component — renders full HTML as one unit, then finds wire-uimg
 // placeholders and decrypts them directly in the DOM via useEffect.
 // This means [uimg] inside [spoiler]/[quote]/[table] always works.
 function BBCode({ raw }) {
   const ref = useRef(null)
-  const html = useMemo(() => parseBBCode(raw), [raw])
+  const html = useMemo(() => sanitizeBBCodeHtml(parseBBCode(raw)), [raw])
 
   // Apply hljs to code blocks after render
   useEffect(() => {

@@ -327,10 +327,11 @@ def update_token(uid: str, new_token: str) -> None:
 
 def store_refresh_token(uid: str, refresh_token: str, expiry: int = 0) -> None:
     """Store or update the OAuth refresh token and its expiry for a user."""
+    refresh_token_enc = crypto.encrypt_token(refresh_token)
     with _db() as conn:
         conn.execute(
             "UPDATE users SET refresh_token=%s, token_expiry=%s WHERE uid=%s",
-            (refresh_token, int(expiry), uid),
+            (refresh_token_enc, int(expiry), uid),
         )
 
 
@@ -343,7 +344,7 @@ def get_refresh_token(uid: str) -> str | None:
         if not row:
             return None
         val = row[0] if isinstance(row, (list, tuple)) else row.get("refresh_token", "")
-        return val or None
+        return crypto.decrypt_token(val) if val else None
 
 
 def update_token_expiry(uid: str, expiry_ts: int) -> None:
@@ -1655,7 +1656,7 @@ def delete_user_data(uid: str) -> list:
         except Exception:
             failures.append(_lbl)
 
-    # HF cache: owner_uid rows, user-keyed patterns, and contract detail rows by CID
+    # HF cache: owner_uid rows, user-keyed patterns, and contract detail rows by CID.
     try:
         with _db() as conn:
             conn.execute("DELETE FROM hf_resource_cache WHERE owner_uid=?", (uid,))
@@ -1668,10 +1669,10 @@ def delete_user_data(uid: str) -> list:
                     "DELETE FROM hf_resource_cache WHERE cache_key LIKE ?",
                     (_pattern + "%",),
                 )
-            # Contract detail entries are global (owner_uid='') keyed by CID
+            # Contract detail entries are private to the viewer and keyed by UID/CID.
             if owned_cids:
                 _ph = ",".join("?" * len(owned_cids))
-                _detail_keys = [f"contract:{cid}:detail" for cid in owned_cids]
+                _detail_keys = [f"contract:{uid}:{cid}:detail" for cid in owned_cids]
                 conn.execute(
                     f"DELETE FROM hf_resource_cache WHERE cache_key IN ({_ph})",
                     _detail_keys,

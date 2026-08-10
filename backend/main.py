@@ -1995,7 +1995,7 @@ async def mark_seen(request: Request):
 
 @app.get("/api/contracts/{cid}")
 async def get_contract_detail(request: Request, cid: int):
-    """Fetch contract detail. Cached globally per CID with stale-while-revalidate."""
+    """Fetch contract detail. Cached per requesting HF UID with stale-while-revalidate."""
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
@@ -2006,7 +2006,7 @@ async def get_contract_detail(request: Request, cid: int):
     import hf_cache as _hfc
     force = request.query_params.get("force") == "true"
     try:
-        data, is_stale = await hf_service.get_contract_detail(cid, token, force=force)
+        data, is_stale = await hf_service.get_contract_detail(cid, token, owner_uid=uid, force=force)
     except _AuthExpired:
         return _handle_auth_expired(request, uid)
     if data is None:
@@ -2039,11 +2039,13 @@ async def get_contract_detail(request: Request, cid: int):
 
     init_uid  = str(contract.get("inituid")  or "")
     other_uid = str(contract.get("otheruid") or "")
+    if uid not in (init_uid, other_uid):
+        return JSONResponse({"error": "Contract not found"}, status_code=404)
     if uid == init_uid:
         counterparty_username = data.get("other_username") or None
     else:
         counterparty_username = data.get("init_username") or None
-    cache_key = f"contract:{cid}:detail"
+    cache_key = f"contract:{uid}:{cid}:detail"
     return {
         "contract":              contract,
         "counterparty_username": counterparty_username,

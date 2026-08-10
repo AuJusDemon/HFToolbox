@@ -445,6 +445,9 @@ def save_draft(uid: str, fid: str, forum_name: str, subject: str, message: str) 
 def delete_draft(draft_id: int, uid: str) -> bool:
     """Owner-only hard delete."""
     with _db() as conn:
+        row = conn.execute("SELECT uid FROM thread_drafts WHERE id=?", (draft_id,)).fetchone()
+        if not row or row["uid"] != uid:
+            return False
         conn.execute("DELETE FROM draft_collaborators WHERE draft_id=?", (draft_id,))
         conn.execute("DELETE FROM draft_edit_log WHERE draft_id=?", (draft_id,))
         conn.execute("DELETE FROM draft_presence WHERE draft_id=?", (draft_id,))
@@ -573,6 +576,22 @@ def save_draft_collab(draft_id: int, uid: str, fid: str, forum_name: str,
 
         new_version = current_version + 1
 
+        cur = conn.execute(
+            """UPDATE thread_drafts
+               SET fid=?, forum_name=?, subject=?, message=?, reply1=?, reply2=?,
+                   version=?, last_editor_uid=?, last_editor_name=?, updated_at=?
+               WHERE id=? AND version=?""",
+            (fid, forum_name, subject, message, reply1 or "", reply2 or "",
+             new_version, uid, editor_name, now, draft_id, current_version)
+        )
+        if cur.rowcount == 0:
+            fresh = conn.execute("SELECT * FROM thread_drafts WHERE id=?", (draft_id,)).fetchone()
+            if not fresh:
+                return ("notfound", None)
+            current = dict(fresh)
+            current["is_owner"] = is_owner
+            return ("conflict", current)
+
         conn.execute(
             """INSERT INTO draft_edit_log
                (draft_id, editor_uid, editor_name,
@@ -582,15 +601,6 @@ def save_draft_collab(draft_id: int, uid: str, fid: str, forum_name: str,
             (draft_id, uid, editor_name,
              d["subject"], subject, d["message"], message,
              new_version, now)
-        )
-
-        conn.execute(
-            """UPDATE thread_drafts
-               SET fid=?, forum_name=?, subject=?, message=?, reply1=?, reply2=?,
-                   version=?, last_editor_uid=?, last_editor_name=?, updated_at=?
-               WHERE id=?""",
-            (fid, forum_name, subject, message, reply1 or "", reply2 or "",
-             new_version, uid, editor_name, now, draft_id)
         )
 
         updated             = dict(conn.execute("SELECT * FROM thread_drafts WHERE id=?", (draft_id,)).fetchone())
