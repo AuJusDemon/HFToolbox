@@ -61,6 +61,10 @@ def _settings() -> tuple[str, str, str]:
     )
 
 
+def _app_name() -> str:
+    return os.environ.get("HF_CONTROL_PLANE_APP", "toolbox-prod")
+
+
 def _headers(body: bytes) -> dict[str, str]:
     _, caller, secret = _settings()
     timestamp = str(int(time.time()))
@@ -133,7 +137,7 @@ def submit_sync(data: dict, timeout: int = 42) -> dict:
 def read_sync(token: str, asks: dict, *, owner_uid: str = "",
               feature: str = "maintenance_probe", priority: int = 8) -> dict | None:
     response = submit_sync({
-        "token": token, "owner_uid": owner_uid, "feature": feature,
+        "token": token, "owner_uid": owner_uid, "app": _app_name(), "feature": feature,
         "route": "read", "payload": asks, "priority": priority,
         "background": True, "background_floor": _user_background_floor_sync(owner_uid),
         "privacy_scope": "private", "cache_ttl": 0,
@@ -147,7 +151,7 @@ async def submit_background(token: str, asks: dict, *, owner_uid: str,
                             privacy_scope: str = "private") -> dict:
     floor = await _user_background_floor(owner_uid)
     return await _submit({
-        "token": token, "owner_uid": owner_uid, "feature": feature,
+        "token": token, "owner_uid": owner_uid, "app": _app_name(), "feature": feature,
         "route": "read", "payload": asks, "priority": priority,
         "background": True, "background_floor": floor, "privacy_scope": privacy_scope,
         "cache_ttl": 0, "stale_ttl": 0,
@@ -193,6 +197,7 @@ class HFClient:
         floor = await _user_background_floor(owner_uid) if background else 0
         response = await _submit({
             "token": self.token, "owner_uid": owner_uid,
+            "app": _app_name(),
             "feature": options.get("feature", self.feature), "route": "read",
             "payload": asks, "priority": options.get("priority", self.priority),
             "background": background, "background_floor": floor,
@@ -217,6 +222,7 @@ class HFClient:
         floor = await _user_background_floor(owner_uid) if background else 0
         response = await _submit({
             "token": self.token, "owner_uid": owner_uid,
+            "app": _app_name(),
             "feature": options.get("feature", self.feature), "route": "write",
             "payload": asks, "priority": options.get("priority", min(self.priority, 2)),
             "background": background, "background_floor": floor,
@@ -237,7 +243,7 @@ class HFClient:
 
 async def exchange_code_for_token(code: str, cfg: dict):
     response = await _submit({
-        "token": "oauth-exchange-placeholder", "owner_uid": "", "feature": "oauth",
+        "token": "oauth-exchange-placeholder", "owner_uid": "", "app": _app_name(), "feature": "oauth",
         "route": "oauth", "payload": {"code": code, "config": cfg}, "priority": 1,
         "background": False, "background_floor": 0, "privacy_scope": "private", "cache_ttl": 0,
         "stale_ttl": 0,
@@ -248,7 +254,7 @@ async def exchange_code_for_token(code: str, cfg: dict):
 
 async def refresh_access_token(refresh_token: str, cfg: dict):
     response = await _submit({
-        "token": "oauth-refresh-placeholder", "owner_uid": "", "feature": "oauth_refresh",
+        "token": "oauth-refresh-placeholder", "owner_uid": "", "app": _app_name(), "feature": "oauth_refresh",
         "route": "oauth", "payload": {"grant_type": "refresh_token",
         "refresh_token": refresh_token, "config": cfg}, "priority": 1,
         "background": True, "background_floor": 0, "privacy_scope": "private", "cache_ttl": 0,
