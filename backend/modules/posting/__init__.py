@@ -185,8 +185,39 @@ _reply_check_titles:      dict[str, dict[str, str]] = {}  # uid -> {tid -> title
 _reply_check_numreplies:  dict[str, dict[str, int]] = {}  # uid -> {tid -> numreplies}
 # tids that were first discovered this crawl cycle - seed cursor without queuing replies
 _reply_check_seed_tids:   dict[str, set[str]]       = {}  # uid -> {tid}
+_reply_poll_backoff_until: dict[str, int]            = {}
 
 STANLEY_UID = "1337"
+
+_HF_BACKOFF_ERRORS = {
+    "global_circuit_open",
+    "control_plane_unavailable",
+    "upstream_unavailable",
+    "token_cooldown",
+    "rate_limited",
+    "http_403",
+    "http_429",
+    "http_502_503",
+    "html_challenge",
+    "cloudflare_challenge",
+}
+
+
+def _is_hf_backoff_error(error: str) -> bool:
+    error = (error or "").strip().lower()
+    return bool(error) and any(marker in error for marker in _HF_BACKOFF_ERRORS)
+
+
+def _restore_reply_checks(uid: str, tids: set[str], titles: dict[str, str],
+                          numreplies: dict[str, int], seed_tids: set[str]) -> None:
+    if tids:
+        _reply_check_queue.setdefault(uid, set()).update(tids)
+    if titles:
+        _reply_check_titles.setdefault(uid, {}).update(titles)
+    if numreplies:
+        _reply_check_numreplies.setdefault(uid, {}).update(numreplies)
+    if seed_tids:
+        _reply_check_seed_tids.setdefault(uid, set()).update(seed_tids)
 
 
 async def poll_reply_queues(active_uids: set | None = None) -> None:
@@ -210,6 +241,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
 
     for uid in uids_to_process:
         if active_uids is not None and uid not in active_uids:
+            continue
+        if now < _reply_poll_backoff_until.get(uid, 0):
             continue
 
         tids       = _reply_check_queue.pop(uid, set())
@@ -250,6 +283,14 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 raw_count = row.get("numreplies")
                 if meta_tid:
                     targeted_counts[meta_tid] = int(raw_count) if raw_count is not None else None
+            if not meta_rows and _is_hf_backoff_error(getattr(client, "last_error", "")):
+                _restore_reply_checks(uid, tids, titles, numreplies, seed_tids)
+                _reply_poll_backoff_until[uid] = now + 900
+                log.warning(
+                    "Reply poll: uid=%s backing off 900s after controller error=%s",
+                    uid, getattr(client, "last_error", ""),
+                )
+                continue
         except Exception as exc:
             log.warning("Reply poll: targeted thread metadata failed uid=%s: %s", uid, exc)
 
@@ -328,15 +369,19 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 failed_tids.add(tid_str)
 
         if failed_tids:
-            _reply_check_queue.setdefault(uid, set()).update(failed_tids)
             failed_titles = {t: titles[t] for t in failed_tids if t in titles}
-            if failed_titles:
-                _reply_check_titles.setdefault(uid, {}).update(failed_titles)
             failed_nr = {t: numreplies[t] for t in failed_tids if t in numreplies}
-            if failed_nr:
-                _reply_check_numreplies.setdefault(uid, {}).update(failed_nr)
-            log.info("Reply poll: uid=%s re-queued %d tid(s) for retry (transient HF failure)",
-                     uid, len(failed_tids))
+            failed_seed_tids = {t for t in failed_tids if t in seed_tids}
+            _restore_reply_checks(uid, failed_tids, failed_titles, failed_nr, failed_seed_tids)
+            if _is_hf_backoff_error(getattr(client, "last_error", "")):
+                _reply_poll_backoff_until[uid] = now + 900
+                log.warning(
+                    "Reply poll: uid=%s parked %d tid(s) for 900s after controller error=%s",
+                    uid, len(failed_tids), getattr(client, "last_error", ""),
+                )
+            else:
+                log.info("Reply poll: uid=%s re-queued %d tid(s) for retry (transient HF failure)",
+                         uid, len(failed_tids))
 
         # ── Batch username resolution ────────────────────────────────────────
         username_map: dict[str, str] = {}
