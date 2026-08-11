@@ -301,8 +301,13 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
         pending: list[dict] = []
         tid_max_pid: dict[str, str] = {}
         failed_tids: set[str] = set()
+        stop_due_to_backoff = False
 
         for tid_str in tids:
+            if stop_due_to_backoff:
+                failed_tids.add(tid_str)
+                continue
+
             tracked  = tid_map.get(tid_str, {})
             last_pid = tracked.get("last_pid")
 
@@ -367,6 +372,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             except Exception as e:
                 log.warning("Reply poll: post fetch failed uid=%s tid=%s: %s", uid, tid_str, e)
                 failed_tids.add(tid_str)
+                if _is_hf_backoff_error(getattr(client, "last_error", "")):
+                    stop_due_to_backoff = True
 
         if failed_tids:
             failed_titles = {t: titles[t] for t in failed_tids if t in titles}

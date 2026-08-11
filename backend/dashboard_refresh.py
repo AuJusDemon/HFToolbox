@@ -24,6 +24,24 @@ _TYPE_LABEL = {
     "4": "Trading", "5": "Vouch Copy",
 }
 
+_HF_BACKOFF_ERRORS = {
+    "global_circuit_open",
+    "control_plane_unavailable",
+    "upstream_unavailable",
+    "token_cooldown",
+    "rate_limited",
+    "http_403",
+    "http_429",
+    "http_502_503",
+    "html_challenge",
+    "cloudflare_challenge",
+}
+
+
+def _is_hf_backoff_error(error: str) -> bool:
+    error = (error or "").strip().lower()
+    return bool(error) and any(marker in error for marker in _HF_BACKOFF_ERRORS)
+
 
 def contract_value(c: dict) -> str:
     iprice   = str(c.get("iprice")    or "0").strip()
@@ -137,6 +155,10 @@ async def refresh_user_dashboard(uid: str, token: str,
         },
     }, feature="dashboard_refresh.primary", background=True, priority=7,
        cache_ttl=5, stale_ttl=300), timeout=35)
+    if _is_hf_backoff_error(getattr(client, "last_error", "")):
+        log.warning("refresh uid=%s halted after primary controller error=%s",
+                    uid, getattr(client, "last_error", ""))
+        return
 
     c_page2    = c_page_check + 1
     call2_ask: dict = {
@@ -163,6 +185,10 @@ async def refresh_user_dashboard(uid: str, token: str,
                     background=True, priority=8, cache_ttl=5, stale_ttl=300),
         timeout=35,
     )
+    if _is_hf_backoff_error(getattr(client, "last_error", "")):
+        log.warning("refresh uid=%s halted after secondary controller error=%s",
+                    uid, getattr(client, "last_error", ""))
+        return
 
     try:
         await _section_bytes(uid, state, recv_done, sent_done, recv_page, sent_page, data1, data2)

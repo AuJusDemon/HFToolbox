@@ -25,6 +25,24 @@ _last_circuit = {"available": True, "retry_after_seconds": 0, "reason": "",
                  "last_status": 0, "failure_count": 0}
 _floor_cache: dict[str, tuple[float, int]] = {}
 
+_CIRCUIT_ERRORS = {
+    "global_circuit_open",
+    "control_plane_unavailable",
+    "upstream_unavailable",
+    "token_cooldown",
+    "rate_limited",
+    "http_403",
+    "http_429",
+    "http_502_503",
+    "html_challenge",
+    "cloudflare_challenge",
+}
+
+
+def _is_circuit_error(error: str) -> bool:
+    error = (error or "").strip().lower()
+    return bool(error) and any(marker in error for marker in _CIRCUIT_ERRORS)
+
 
 def _user_background_floor_sync(owner_uid: str) -> int:
     uid = str(owner_uid or "").strip()
@@ -102,8 +120,15 @@ async def _submit(data: dict, timeout: int = 42, endpoint: str = "/internal/v1/r
             async with session.post(base + endpoint, data=body,
                                     headers=_headers(body)) as response:
                 if response.status >= 400:
-                    return {"state": "failed", "result": None,
-                            "error_code": f"control_plane_http_{response.status}"}
+                    error = f"control_plane_http_{response.status}"
+                    _last_circuit = {
+                        "available": False,
+                        "retry_after_seconds": 60 if response.status == 429 else 30,
+                        "reason": error,
+                        "last_status": response.status,
+                        "failure_count": 1,
+                    }
+                    return {"state": "failed", "result": None, "error_code": error}
                 value = await response.json()
             remaining = value.get("remaining")
             token = str(data.get("token") or "")
@@ -113,6 +138,10 @@ async def _submit(data: dict, timeout: int = 42, endpoint: str = "/internal/v1/r
             error = str(value.get("error_code") or "")
             if error == "global_circuit_open":
                 _last_circuit = {"available": False, "retry_after_seconds": 1,
+                                 "reason": error, "last_status": 0,
+                                 "failure_count": 1}
+            elif _is_circuit_error(error):
+                _last_circuit = {"available": False, "retry_after_seconds": 60,
                                  "reason": error, "last_status": 0,
                                  "failure_count": 1}
             elif value.get("state") == "succeeded":
