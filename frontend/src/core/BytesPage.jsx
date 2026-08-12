@@ -287,74 +287,38 @@ function BytesHistory({ data }) {
 
       {filtered.length > PERPAGE && (
         <div className="pg">
-          <button className="pg-btn" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>←</button>
+          <button className="pg-btn" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>&lt;</button>
           <span className="pg-info">{safePage} / {totalPages}
             <span style={{color:'var(--dim)'}}> ({filtered.length.toLocaleString()} txns)</span>
           </span>
-          <button className="pg-btn" disabled={safePage>=totalPages} onClick={()=>setPage(safePage+1)}>→</button>
+          <button className="pg-btn" disabled={safePage>=totalPages} onClick={()=>setPage(safePage+1)}>&gt;</button>
         </div>
       )}
     </div>
   )
 }
 
-function SendVault({ onDone }) {
+function SendBytes({ onDone }) {
   const [sf,setSf]=useState({to_uid:'',amount:'',reason:''})
-  const [vf,setVf]=useState({action:'deposit',amount:''})
-  const [sd,setSd]=useState(false),[vd,setVd]=useState(false),[msg,setMsg]=useState(null)
+  const [sd,setSd]=useState(false),[msg,setMsg]=useState(null)
   const send=async()=>{
     if(!sf.to_uid||!sf.amount)return
     setSd(true);setMsg(null)
     try{await api.post('/api/dash/bytes/send',sf);setMsg({ok:true,t:`Sent ${sf.amount} bytes to UID ${sf.to_uid}`});setSf({to_uid:'',amount:'',reason:''});onDone?.()}
-    catch(e){setMsg({ok:false,t:e.message||'Send failed — check UID and balance'})}finally{setSd(false)}
-  }
-  const vault=async()=>{
-    const amt=Number(vf.amount)
-    if(!amt||amt<100)return setMsg({ok:false,t:'Minimum vault amount is 100 bytes'})
-    setVd(true);setMsg(null)
-    try{
-      const res=await api.post('/api/dash/bytes/vault',{action:vf.action,amount:amt})
-      setMsg({ok:true,t:`${vf.action==='deposit'?'Deposited':'Withdrew'} ${amt.toLocaleString()} bytes`})
-      setVf(v=>({...v,amount:''}))
-      // Use freshbalance returned directly from the endpoint — no extra poll needed
-      onDone?.(res?.balance, res?.vault)
-    }
-    catch(e){setMsg({ok:false,t:e.message||`${vf.action} failed`})}finally{setVd(false)}
+    catch(e){setMsg({ok:false,t:e.message||'Send failed - check UID and balance'})}finally{setSd(false)}
   }
   return (
     <div>
       {msg&&<div style={{fontSize:12,color:msg.ok?'var(--acc)':'var(--red)',marginBottom:14,padding:'7px 10px',background:msg.ok?'var(--acc2)':'var(--red2)',border:`1px solid ${msg.ok?'rgba(0,212,180,.2)':'rgba(255,71,87,.2)'}`,borderRadius:'var(--r)'}}>{msg.t}</div>}
-      <div className="grid2">
-        <div>
-          <div style={{fontSize:10,color:'var(--sub)',textTransform:'uppercase',letterSpacing:'.08em',fontFamily:'var(--mono)',marginBottom:8,fontWeight:600}}>Send Bytes</div>
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            <input className="inp" placeholder="Recipient UID or URL" value={sf.to_uid} onChange={e=>setSf(f=>({...f,to_uid:parseHfId(e.target.value,'uid')}))}/>
-            <input className="inp" placeholder="Amount" type="number" min="1" value={sf.amount} onChange={e=>setSf(f=>({...f,amount:e.target.value}))}/>
-            <input className="inp" placeholder="Reason (optional)" value={sf.reason} onChange={e=>setSf(f=>({...f,reason:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&send()}/>
-            <button className="btn btn-acc" onClick={send} disabled={sd||!sf.to_uid||!sf.amount}>{sd?<span className="spin"/>:'Send →'}</button>
-          </div>
-        </div>
-        <div>
-          <div style={{fontSize:10,color:'var(--sub)',textTransform:'uppercase',letterSpacing:'.08em',fontFamily:'var(--mono)',marginBottom:8,fontWeight:600}}>Vault</div>
-          <div style={{display:'flex',flexDirection:'column',gap:6}}>
-            <div style={{display:'flex',gap:4}}>
-              {['deposit','withdraw'].map(a=>(
-                <button key={a} onClick={()=>setVf(f=>({...f,action:a}))}
-                  style={{flex:1,padding:'5px',borderRadius:'var(--r)',cursor:'pointer',border:`1px solid ${vf.action===a?'rgba(0,212,180,.3)':'var(--b2)'}`,background:vf.action===a?'var(--acc2)':'transparent',color:vf.action===a?'var(--acc)':'var(--sub)',fontSize:12,fontFamily:'var(--sans)',transition:'all var(--ease)'}}>
-                  {a[0].toUpperCase()+a.slice(1)}
-                </button>
-              ))}
-            </div>
-            <input className="inp" placeholder="Amount" type="number" min="1" value={vf.amount} onChange={e=>setVf(f=>({...f,amount:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&vault()}/>
-            <div style={{fontSize:9,color:'var(--dim)',fontFamily:'var(--mono)',marginBottom:2}}>Min 100 bytes</div>
-            <button className="btn btn-acc" onClick={vault} disabled={vd||!vf.amount||Number(vf.amount)<100}>{vd?<span className="spin"/>:vf.action[0].toUpperCase()+vf.action.slice(1)}</button>
-          </div>
-        </div>
+      <div style={{display:'flex',flexDirection:'column',gap:6,maxWidth:360}}>
+        <input className="inp" placeholder="Recipient UID or URL" value={sf.to_uid} onChange={e=>setSf(f=>({...f,to_uid:parseHfId(e.target.value,'uid')}))}/>
+        <input className="inp" placeholder="Amount" type="number" min="1" value={sf.amount} onChange={e=>setSf(f=>({...f,amount:e.target.value}))}/>
+        <input className="inp" placeholder="Reason (optional)" value={sf.reason} onChange={e=>setSf(f=>({...f,reason:e.target.value}))} onKeyDown={e=>e.key==='Enter'&&send()}/>
+        <button className="btn btn-acc" onClick={send} disabled={sd||!sf.to_uid||!sf.amount}>{sd?<span className="spin"/>:'Send'}</button>
       </div>
     </div>
   )
 }
-
 function Section({ title, children }) {
   return (
     <div className="card">
@@ -385,24 +349,12 @@ export default function BytesPage() {
               {data?fmt(data.balance):<span className="spin"/>}
             </div>
           </div>
-          {data&&(
-            <div style={{marginLeft:32}}>
-              <div style={{fontSize:9.5,color:'var(--sub)',textTransform:'uppercase',letterSpacing:'.1em',fontFamily:'var(--mono)',marginBottom:5}}>Vault</div>
-              <div style={{fontFamily:'var(--mono)',fontSize:20,fontWeight:600,color:Number(data.vault||0)>0?'var(--muted)':'var(--dim)',letterSpacing:'-.02em',lineHeight:1}}>{fmt(data.vault)}</div>
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Send / Vault — first thing under balance */}
-      <Section title="Send / Vault">
-        <SendVault onDone={(newBal, newVault)=>{
-          // If the vault endpoint returned fresh values, update state immediately
-          if(newBal!=null||newVault!=null){
-            setData(d=>d?{...d,balance:newBal??d.balance,vault:newVault??d.vault}:d)
-          }
-          loadBalance()
-        }}/>
+      {/* Send bytes */}
+      <Section title="Send Bytes">
+        <SendBytes onDone={loadBalance}/>
       </Section>
 
       <Section title="History"><BytesHistory data={data}/></Section>

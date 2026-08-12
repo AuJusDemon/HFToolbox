@@ -34,7 +34,7 @@ register(
     ModuleMeta(
         id="bytes",
         name="Bytes",
-        description="Balance, transaction history, analytics, send, and vault tools.",
+        description="Balance, transaction history, analytics, and send tools.",
         icon="BYT",
         category="dashboard",
         api_cost="medium",

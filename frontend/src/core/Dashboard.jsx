@@ -205,11 +205,6 @@ function BytesOverview() {
         icon="💰" title="Bytes" to="/dashboard/bytes"
         badge={data ? fmt(data.balance) : null}
         badgeColor="var(--blue)"
-        extra={
-          data && Number(data.vault||0) > 0
-            ? <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)'}}>+ {fmt(data.vault)} vault</span>
-            : null
-        }
       />
       <div style={{display:'flex',gap:5,padding:'6px 13px',borderBottom:'1px solid var(--b1)',minWidth:0}}
            onClick={e => e.stopPropagation()}>

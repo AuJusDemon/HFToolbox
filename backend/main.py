@@ -1673,46 +1673,7 @@ async def dash_vault(request: Request):
     uid = request.session.get("uid")
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
-    body = await request.json()
-    action = body.get("action")  # "deposit" or "withdraw"
-    amount = int(body.get("amount", 0))
-    if amount < 100:
-        return JSONResponse({"error": "Minimum vault amount is 100 bytes"}, status_code=400)
-    token = await asyncio.to_thread(db.get_token, uid)
-    if not token:
-        return JSONResponse({"error": "no token"}, status_code=401)
-    from HFClient import HFClient
-    client = HFClient(token)
-    try:
-        if action == "deposit":
-            result = await client.write({"bytes": {"_deposit": amount}})
-        else:
-            result = await client.write({"bytes": {"_withdraw": amount}})
-    except _AuthExpired:
-        return _handle_auth_expired(request, uid)
-    if result is None:
-        return JSONResponse({"error": f"{action} failed — check you have enough bytes"}, status_code=500)
-
-    # Immediately fetch fresh balance + vault from HF and update profile cache
-    # so the frontend sees the new values right away without waiting for the crawler
-    try:
-        me_data = await client.read({"me": {"bytes": True, "vault": True}})
-        if me_data:
-            me = me_data.get("me", {})
-            await asyncio.to_thread(db.update_profile_cache, uid, {
-                "myps":  me.get("bytes"),
-                "vault": me.get("vault"),
-            })
-            return {
-                "ok":      True,
-                "balance": str(me.get("bytes") or "0"),
-                "vault":   str(me.get("vault")  or "0"),
-            }
-    except Exception:
-        pass
-
-    await asyncio.to_thread(db.clear_dash_cache, uid, "bytes")
-    return {"ok": True, "balance": None, "vault": None}
+    return JSONResponse({"error": "Vault actions are disabled"}, status_code=410)
 
 
 @app.get("/api/bytes/history")
