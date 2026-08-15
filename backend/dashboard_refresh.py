@@ -580,10 +580,9 @@ async def _section_contracts(uid, cstate, c_done, c_page_check, c_page2,
 
 async def _section_threads(uid: str, data1, active: bool) -> None:
     from modules.posting.posting_db import (
-        add_my_thread, update_thread_last_checked, get_all_tracked_threads)
-    from modules.posting import (
-        _reply_check_queue, _reply_check_titles, _reply_check_numreplies,
-        _reply_check_seed_tids, STANLEY_UID)
+        add_my_thread, update_thread_last_checked, get_all_tracked_threads,
+        enqueue_owned_reply_check)
+    from modules.posting import STANLEY_UID
 
     raw_threads = (data1 or {}).get("threads", [])
     if isinstance(raw_threads, dict): raw_threads = [raw_threads]
@@ -591,10 +590,7 @@ async def _section_threads(uid: str, data1, active: bool) -> None:
     _tracked_rows = await asyncio.to_thread(get_all_tracked_threads)
     _cursor_map   = {str(t["tid"]): t for t in _tracked_rows if str(t["uid"]) == uid}
 
-    needs_check:    set[str]       = set()
-    titles_map:     dict[str, str] = {}
-    numreplies_map: dict[str, int] = {}
-    seed_tids_uid:  set[str]       = set()
+    needs_check: set[str] = set()
 
     for th in (raw_threads or []):
         t_tid        = str(th.get("tid") or "")
@@ -626,28 +622,31 @@ async def _section_threads(uid: str, data1, active: bool) -> None:
         if t_lastpost <= stored_lastpost:
             continue
 
-        stored_last_pid = str((_cursor_map.get(t_tid) or {}).get("last_pid") or "0")
-        if stored_lastpost == 0 and stored_last_pid == "0":
+        if stored_lastpost == 0:
             try:
                 await asyncio.to_thread(update_thread_last_checked, uid, t_tid, "0", t_lastpost)
             except Exception:
                 pass
-            seed_tids_uid.add(t_tid)
 
-        # Always inspect a changed owned thread. The owner or Stanley may be the
-        # latest poster after another member replied, so lastposter alone cannot
-        # prove that there are no unseen replies before it.
+        # We or Stanley posted last: advance cursor without queuing a reply check.
+        # Do NOT advance last_checked for other-poster threads here; the reply poll
+        # advances it after successful post fetch so re-flags survive a failed poll.
+        if t_lastposter in (uid, STANLEY_UID):
+            try:
+                last_pid = (_cursor_map.get(t_tid) or {}).get("last_pid") or "0"
+                await asyncio.to_thread(update_thread_last_checked, uid, t_tid, last_pid, t_lastpost)
+            except Exception:
+                pass
+            continue
+
         needs_check.add(t_tid)
-        titles_map[t_tid]     = t_subject
-        numreplies_map[t_tid] = t_numreplies
+        await asyncio.to_thread(
+            enqueue_owned_reply_check, uid, t_tid, t_subject, t_numreplies,
+            stored_lastpost == 0, t_lastpost,
+        )
         log.info("refresh uid=%s reply-check flagged tid=%s numreplies=%d", uid, t_tid, t_numreplies)
 
     if needs_check:
-        _reply_check_queue.setdefault(uid, set()).update(needs_check)
-        _reply_check_titles.setdefault(uid, {}).update(titles_map)
-        _reply_check_numreplies.setdefault(uid, {}).update(numreplies_map)
-        if seed_tids_uid:
-            _reply_check_seed_tids.setdefault(uid, set()).update(seed_tids_uid)
         log.debug("refresh uid=%s flagged %d thread(s) for reply check", uid, len(needs_check))
 
         if active:
