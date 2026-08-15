@@ -29,6 +29,7 @@ from .posting_db import (
     add_my_thread,
     get_all_tracked_threads,
     update_thread_last_checked,
+    update_thread_numreplies,
     claim_owned_reply_checks,
     finish_owned_reply_check,
     retry_owned_reply_check,
@@ -264,6 +265,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             thread_title = titles.get(tid_str, tracked.get("title", ""))
 
             nr = numreplies.get(tid_str, 0)
+            await asyncio.to_thread(update_thread_numreplies, uid, tid_str, nr)
             last_page = max(1, math.ceil((nr + 1) / 30))
             pages_to_fetch = list(dict.fromkeys([max(1, last_page - 1), last_page]))
 

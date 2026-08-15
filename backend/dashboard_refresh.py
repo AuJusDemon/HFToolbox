@@ -5,6 +5,7 @@ import time as _time
 
 import db
 import integration_db
+from hf_thread_stats import thread_reply_count
 
 log = logging.getLogger("dashboard_refresh")
 
@@ -151,7 +152,7 @@ async def refresh_user_dashboard(uid: str, token: str,
             "_uid": [uid_int], "_page": 1, "_perpage": 30,
             "tid": True, "uid": True, "subject": True, "fid": True,
             "lastpost": True, "lastposteruid": True, "numreplies": True,
-            "firstpost": True, "closed": True,
+            "replies": True, "firstpost": True, "closed": True,
         },
     }, feature="dashboard_refresh.primary", background=True, priority=7,
        cache_ttl=5, stale_ttl=300), timeout=35)
@@ -598,7 +599,7 @@ async def _section_threads(uid: str, data1, active: bool) -> None:
         t_fid        = str(th.get("fid") or "")
         t_lastpost   = int(th.get("lastpost") or 0)
         t_lastposter = str(th.get("lastposteruid") or "")
-        t_numreplies = int(th.get("numreplies") or 0)
+        t_numreplies = thread_reply_count(th, int(th.get("numreplies") or 0))
         t_firstpost  = str(th.get("firstpost") or "0")
         t_closed     = int(th.get("closed") or 0)
         if not t_tid or not t_lastpost:
