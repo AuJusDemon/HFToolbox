@@ -27,6 +27,7 @@ import logging
 from .router import router
 from scheduler import on_poll
 import db
+from hf_thread_stats import thread_reply_count
 
 log = logging.getLogger("autobump")
 
@@ -256,6 +257,7 @@ async def _process_timer_jobs(uid, user_jobs, client,
                     "lastpost":     True,
                     "lastposteruid": True,
                     "lastposter":   True,
+                    "replies":      True,
                     "numreplies":   True,
                 }
             })
@@ -302,7 +304,7 @@ async def _process_timer_jobs(uid, user_jobs, client,
         last_poster_uid = str(thread.get("lastposteruid") or "")
         fid             = str(thread.get("fid")            or "")
         thread_title    = str(thread.get("subject")        or "")
-        numreplies      = int(thread.get("numreplies")     or 0) or None
+        numreplies      = thread_reply_count(thread) or None
         interval_secs   = job["interval_h"] * 3600
         time_since_last = now - last_post_ts if last_post_ts else interval_secs + 1
 
@@ -411,6 +413,7 @@ async def _process_page1_jobs(uid, user_jobs, client,
                     "tid":        True,
                     "subject":    True,
                     "numreplies": True,
+                    "replies":    True,
                     "lastpost":   True,
                 }
             })
@@ -423,8 +426,8 @@ async def _process_page1_jobs(uid, user_jobs, client,
                     if tid_str:
                         page1_tids.add(tid_str)
                         nr = t.get("numreplies")
-                        if nr is not None:
-                            page1_replies[tid_str] = int(nr)
+                        if nr is not None or t.get("replies") is not None:
+                            page1_replies[tid_str] = thread_reply_count(t)
                 log.info("Page1 check fid=%s uid=%s — %d threads on page 1", fid, uid, len(page1_tids))
         except Exception as e:
             log.warning("Page1 FID fetch failed uid=%s fid=%s: %s", uid, fid, e)

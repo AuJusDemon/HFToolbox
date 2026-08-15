@@ -8,6 +8,7 @@ import asyncio
 from fastapi import APIRouter, Request, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from hf_thread_stats import thread_reply_count
 
 router = APIRouter(prefix="/api/merchant", tags=["merchant"])
 
@@ -249,7 +250,8 @@ async def merchant_create_op_draft(tid: str, request: Request):
                 "threads": {
                     "_tid": [int(tid)],
                     "tid": True, "fid": True, "subject": True, "firstpost": True,
-                    "views": True, "numreplies": True, "lastpost": True,
+                    "views": True, "numreplies": True, "replies": True,
+                    "lastpost": True,
                 }
             }, cache_ttl=0)
             thread_row = (thread_result or {}).get("threads")
@@ -259,6 +261,7 @@ async def merchant_create_op_draft(tid: str, request: Request):
                 firstpost = str(thread_row.get("firstpost") or firstpost)
                 thread["fid"] = str(thread_row.get("fid") or thread.get("fid") or "")
                 thread["title"] = str(thread_row.get("subject") or thread.get("title") or "")
+                thread["numreplies"] = thread_reply_count(thread_row, thread.get("numreplies", 0))
 
         if firstpost in ("", "0"):
             raise HTTPException(404, "Opening post was not found")

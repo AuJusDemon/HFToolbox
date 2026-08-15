@@ -6,6 +6,7 @@ import json
 import time
 from collections import Counter
 from typing import Any
+from hf_thread_stats import has_thread_reply_count, thread_reply_count
 
 from _db_compat import _db
 from modules.marketplace_defs import MARKET_FORUMS, MARKET_CATEGORIES
@@ -666,12 +667,11 @@ def upsert_thread(row: dict, market_type: str, category: str) -> dict:
     previous = get_thread(tid)
     firstpost = row.get("firstpost")
     pid = firstpost.get("pid") if isinstance(firstpost, dict) else firstpost
-    native_replies = (
-        _as_int(row.get("numreplies"))
-        if row.get("numreplies") is not None
-        else _as_int((previous or {}).get("replies"))
+    reply_count_present = has_thread_reply_count(row)
+    native_replies = thread_reply_count(
+        row, _as_int((previous or {}).get("replies"))
     )
-    reply_checked_at = now if row.get("numreplies") is not None else _as_int(
+    reply_checked_at = now if reply_count_present else _as_int(
         (previous or {}).get("last_reply_checked_at")
     )
     previous_views = _as_int((previous or {}).get("views"))
@@ -693,7 +693,7 @@ def upsert_thread(row: dict, market_type: str, category: str) -> dict:
         tier, cadence = "cooling", 21600
     else:
         tier, cadence = "dormant", 86400 if not closed else 604800
-    confidence = "native" if row.get("numreplies") is not None else str(
+    confidence = "native" if reply_count_present else str(
         (previous or {}).get("reply_confidence") or "unknown"
     )
     values = (
@@ -742,7 +742,7 @@ def upsert_thread(row: dict, market_type: str, category: str) -> dict:
             (tid, heat_score, "activity" if lastpost_changed else "scheduled",
              0 if lastpost_changed else now + cadence, now),
         )
-        if row.get("numreplies") is None and (previous is None or lastpost_changed):
+        if not reply_count_present and (previous is None or lastpost_changed):
             start_page = max(1, (_as_int((previous or {}).get("replies")) + 1) // 30)
             conn.execute(
                 "INSERT INTO market_reply_verify_queue "

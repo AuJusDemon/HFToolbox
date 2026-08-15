@@ -409,7 +409,8 @@ async def get_thread_meta(tid: str, token: str,
             "_tid":          [int(tid)],
             "tid":           True, "fid":   True, "subject":      True,
             "lastpost":      True, "lastposteruid": True,
-            "numreplies":    True, "firstpost": True, "closed":   True,
+            "numreplies":    True, "replies": True,
+            "firstpost": True, "closed":   True,
         }})
 
     return await get_or_fetch(

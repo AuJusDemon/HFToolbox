@@ -38,6 +38,7 @@ import time
 import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from hf_thread_stats import thread_reply_count
 import db
 try:
     from hf_gateway_client import AuthExpired as _AuthExpired
@@ -281,6 +282,7 @@ async def get_hf_threads(request: Request, page: int = 1):
                 "_uid": [int(uid)], "_page": page, "_perpage": 30,
                 "tid": True, "subject": True, "fid": True,
                 "dateline": True, "lastpost": True, "numreplies": True,
+                "replies": True,
             }
         }), timeout=35)
         if not data:
@@ -288,6 +290,9 @@ async def get_hf_threads(request: Request, page: int = 1):
         rows = data.get("threads", [])
         if isinstance(rows, dict):
             rows = [rows]
+        for row in rows:
+            if isinstance(row, dict):
+                row["numreplies"] = thread_reply_count(row)
         return {"threads": rows or [], "page": page}
     except asyncio.TimeoutError:
         return JSONResponse({"error": "HF API timeout"}, status_code=503)

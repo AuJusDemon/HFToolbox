@@ -62,6 +62,19 @@ class MarketTests(unittest.TestCase):
             "dispute",
         )
 
+    def test_thread_replies_use_native_replies_field(self):
+        market_db.upsert_thread({
+            "tid": "900020", "fid": "107", "uid": "12345",
+            "subject": "Reply count native field", "dateline": "100",
+            "lastpost": "100", "views": "25", "replies": "5",
+            "numreplies": "0", "closed": "0", "firstpost": {"pid": "800020"},
+        }, "wts", "other")
+        row = market_db.get_thread(900020)
+        self.assertEqual(row["replies"], 5)
+        self.assertEqual(row["reply_confidence"], "native")
+        self.assertGreater(row["last_reply_checked_at"], 0)
+        market_db.remove_thread(900020)
+
     def test_disputes_are_retained_but_excluded_from_market_demand(self):
         market_db.upsert_thread({
             "tid": "900003", "fid": "111", "uid": "12345",
