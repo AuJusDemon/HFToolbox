@@ -40,7 +40,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 import db
 try:
-    from HFClient import AuthExpired as _AuthExpired
+    from hf_gateway_client import AuthExpired as _AuthExpired
 except ImportError:
     class _AuthExpired(Exception):
         pass
@@ -109,7 +109,7 @@ async def _lookup_collab_username(collab_uid: str, owner_uid: str) -> str:
     try:
         token = await asyncio.to_thread(db.get_token, owner_uid)
         if token:
-            from HFClient import HFClient
+            from hf_gateway_client import HFClient
             client = HFClient(token)
             data = await asyncio.wait_for(
                 client.read({"users": {"_uid": [int(collab_uid)], "uid": True, "username": True}}),
@@ -274,7 +274,7 @@ async def get_hf_threads(request: Request, page: int = 1):
     if not token:
         return JSONResponse({"error": "no token"}, status_code=401)
     try:
-        from HFClient import HFClient
+        from hf_gateway_client import HFClient
         client = HFClient(token)
         data   = await asyncio.wait_for(client.read({
             "threads": {
@@ -339,7 +339,7 @@ async def post_reply(request: Request):
     if not token:
         return JSONResponse({"error": "No token"}, status_code=401)
 
-    from HFClient import HFClient
+    from hf_gateway_client import HFClient
     client = HFClient(token)
 
     try:
@@ -393,9 +393,7 @@ async def get_recents_route(request: Request):
 
 @router.post("/imagehost/upload")
 async def imagehost_upload(request: Request):
-    uid, err = _auth(request)
-    if err:
-        return err
+    _auth(request)
     import httpx as _httpx
 
     form       = await request.form()
@@ -403,28 +401,14 @@ async def imagehost_upload(request: Request):
     if not file_field:
         return JSONResponse({"error": "no file"}, status_code=400)
 
-    content_type = str(getattr(file_field, "content_type", "") or "")
-    filename = str(getattr(file_field, "filename", "") or "upload.bin")
-    allowed_ext = (".jpg", ".jpeg", ".png", ".gif", ".webp")
-    if not content_type.startswith("image/") and not filename.lower().endswith(allowed_ext):
-        return JSONResponse({"error": "unsupported file type"}, status_code=400)
-
-    max_bytes = 8 * 1024 * 1024
-    file_bytes = bytearray()
-    while True:
-        chunk = await file_field.read(1024 * 1024)
-        if not chunk:
-            break
-        file_bytes.extend(chunk)
-        if len(file_bytes) > max_bytes:
-            return JSONResponse({"error": "file too large"}, status_code=413)
+    file_bytes = await file_field.read()
     fwd_data   = {k: v for k, v in form.items() if k != "file"}
 
     try:
-        async with _httpx.AsyncClient(timeout=30) as client:
+        async with _httpx.AsyncClient(timeout=30, trust_env=True) as client:
             resp = await client.post(
                 "https://uploadimages.org/api/upload",
-                files={"file": (filename, bytes(file_bytes), content_type or "application/octet-stream")},
+                files={"file": (file_field.filename or "upload.bin", file_bytes, "application/octet-stream")},
                 data=fwd_data,
             )
         return JSONResponse(resp.json(), status_code=resp.status_code)

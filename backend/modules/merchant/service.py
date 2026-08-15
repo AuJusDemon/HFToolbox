@@ -40,21 +40,15 @@ from modules.merchant.merchant_db import (
     get_all_contract_workflows,
     get_bratings_by_cid,
     get_sent_brating_cids,
+    list_thread_updates,
+    mark_thread_update_result,
 )
+from modules.marketplace_defs import MARKET_FORUMS
 
 
 # ── Marketplace FID whitelist ──────────────────────────────────────────────────
 # Only threads in HF Marketplace sections are treated as seller offers.
-MARKETPLACE_FIDS: frozenset[str] = frozenset({
-    # Bazaar
-    '163', '402', '186', '205', '217', '111',
-    # Premium Marketplace
-    '107', '374', '299', '136', '182', '218',
-    # Services Marketplace
-    '145', '263', '106', '219', '171', '308',
-    # Auxiliary Marketplace
-    '44', '176', '291', '404', '339', '255', '225',
-})
+MARKETPLACE_FIDS: frozenset[str] = frozenset(str(fid) for fid in MARKET_FORUMS)
 
 
 # ── Low-level fetchers ─────────────────────────────────────────────────────────
@@ -75,6 +69,43 @@ def _get_my_threads(uid: str) -> list[dict]:
             (uid,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def _get_tid_titles(uid: str, tids: set[str] | None = None) -> dict[str, str]:
+    """Resolve contract thread titles from owned, shared-title, and market caches."""
+    titles: dict[str, str] = {}
+    wanted = sorted({str(tid) for tid in (tids or set()) if str(tid)})
+    with _db() as conn:
+        queries = [("my_threads", "uid=?", (uid,))]
+        if wanted:
+            placeholders = ",".join("?" for _ in wanted)
+            queries.extend([
+                ("tid_titles", f"tid IN ({placeholders})", tuple(wanted)),
+                ("market_threads", f"tid IN ({placeholders})", tuple(wanted)),
+            ])
+        for table, where, params in queries:
+            try:
+                rows = conn.execute(
+                    f"SELECT tid,title FROM {table} WHERE {where}", params
+                ).fetchall()
+                for row in rows:
+                    tid = str(row.get("tid") or "")
+                    title = str(row.get("title") or "").strip()
+                    if tid and title:
+                        titles.setdefault(tid, title)
+            except Exception:
+                continue
+    return titles
+
+
+def _contract_product(c: dict, tid_titles: dict[str, str]) -> str:
+    """Use explicit contract products first, then the linked thread title."""
+    trivial = {"", "other", "n/a", "none", "null"}
+    for value in (c.get("iproduct"), c.get("oproduct")):
+        product = str(value or "").strip()
+        if product.lower() not in trivial:
+            return product
+    return tid_titles.get(str(c.get("tid") or ""), "")
 
 
 def _get_reply_queue(uid: str) -> list[dict]:
@@ -232,6 +263,115 @@ def _get_crawl_freshness(uid: str) -> dict:
 
 # ── Public service functions ───────────────────────────────────────────────────
 
+def _to_int(value, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except Exception:
+        return default
+
+
+def _market_thread_stats(tid: str) -> dict:
+    with _db() as conn:
+        try:
+            row = conn.execute(
+                "SELECT views,replies,lastpost_at,closed FROM market_threads WHERE tid=?",
+                (str(tid),),
+            ).fetchone()
+            if row:
+                row = dict(row)
+                replies = _to_int(row.get("replies"))
+                return {
+                    "views": _to_int(row.get("views")),
+                    "replies": replies,
+                    "posts": replies + 1,
+                    "lastpost": _to_int(row.get("lastpost_at")),
+                    "closed": bool(_to_int(row.get("closed"))),
+                    "source": "market",
+                }
+        except Exception:
+            pass
+    return {}
+
+
+def _observed_thread_stats(thread: dict, cstats: dict | None = None) -> dict:
+    cstats = cstats or {}
+    market = _market_thread_stats(str(thread.get("tid") or ""))
+    replies = _to_int(market.get("replies"), _to_int(thread.get("numreplies")))
+    return {
+        "views": _to_int(market.get("views")),
+        "replies": replies,
+        "posts": replies + 1,
+        "lastpost": max(_to_int(thread.get("lastpost")), _to_int(market.get("lastpost"))),
+        "lastposteruid": str(thread.get("lastposteruid") or ""),
+        "closed": bool(thread.get("closed")) or bool(market.get("closed")),
+        "contracts_total": _to_int(cstats.get("total")),
+        "contracts_active": _to_int(cstats.get("active")) + _to_int(cstats.get("awaiting")),
+        "contracts_complete": _to_int(cstats.get("complete")),
+        "source": market.get("source") or "local",
+    }
+
+
+def _owned_thread(uid: str, tid: str) -> dict | None:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT * FROM my_threads WHERE uid=? AND tid=?",
+            (uid, str(tid)),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _stale_days(goals: dict) -> int:
+    return max(1, _to_int(goals.get('max_stale_offer_days'), 30))
+
+
+def _offer_last_activity(thread: dict, cstats: dict, rstats: dict, bstats: dict) -> int:
+    return max(
+        _to_int(thread.get('lastpost')),
+        _to_int(rstats.get('latest_reply_at')),
+        _to_int(cstats.get('last_contract_at')),
+        _to_int(bstats.get('latest_bump_at')),
+    )
+
+
+def _is_recent(ts: int, now: int, days: int) -> bool:
+    return bool(ts and ts >= now - (days * 86400))
+
+
+def _offer_reasons(thread: dict, health: str, cstats: dict, rstats: dict,
+                   bstats: dict, now: int, days: int,
+                   active_bump_job: bool = False) -> list[str]:
+    reasons: list[str] = []
+    active_contracts = _to_int(cstats.get('active')) + _to_int(cstats.get('awaiting'))
+    if _to_int(rstats.get('unread_replies')) > 0:
+        reasons.append('Unread reply')
+    if active_contracts > 0:
+        reasons.append('Active contract')
+    if _is_recent(_to_int(cstats.get('last_contract_at')), now, days):
+        reasons.append('Recent contract')
+    if _is_recent(_to_int(bstats.get('latest_bump_at')), now, days) or _to_int(bstats.get('bumps_7d')) > 0:
+        reasons.append('Bumped recently')
+    if _is_recent(_to_int(thread.get('lastpost')), now, days):
+        reasons.append('Recent thread activity')
+    if health == 'wasting_spend' and _to_int(bstats.get('bumps_30d')) > 0:
+        reasons.append('Bump waste')
+    if active_bump_job:
+        reasons.append('Active bump job')
+    return reasons
+
+
+def _offer_archived(thread: dict, health: str, cstats: dict, rstats: dict,
+                    bstats: dict, now: int, days: int,
+                    active_bump_job: bool = False) -> bool:
+    if health == 'needs_attention':
+        return False
+    active_contracts = _to_int(cstats.get('active')) + _to_int(cstats.get('awaiting'))
+    if active_contracts > 0:
+        return False
+    if _offer_reasons(thread, health, cstats, rstats, bstats, now, days, active_bump_job):
+        return False
+    return True
+
+
 def get_overview(uid: str) -> dict:
     now              = int(time.time())
     marketplace_tids = _get_marketplace_tids(uid)
@@ -240,11 +380,16 @@ def get_overview(uid: str) -> dict:
     threads          = [t for t in all_threads if str(t.get('tid','')) in marketplace_tids]
     # TIDs the user owns - used to filter seller-side contracts (excludes threads user bought on)
     own_thread_tids  = {str(t.get('tid','')) for t in all_threads} - {''}
+    tid_titles       = _get_tid_titles(
+        uid, {str(c.get('tid') or '') for c in contracts}
+    )
 
     replies          = [r for r in _get_reply_queue(uid) if str(r.get('tid','')) in marketplace_tids]
     bump_logs        = _get_bump_log(uid, 200)
+    active_bump_tids = {str(j.get('tid', '')) for j in _get_bump_jobs(uid) if _to_int(j.get('enabled')) == 1}
     goals            = get_goals(uid)
     sla_hours        = goals.get('reply_sla_hours', 24)
+    stale_days       = _stale_days(goals)
     recv_fresh_at    = int(goals.get('received_ratings_fetched_at') or 0)
     recv_is_fresh    = recv_fresh_at > 0 and (now - recv_fresh_at) < 86400
     lead_group_metas = {
@@ -327,13 +472,13 @@ def get_overview(uid: str) -> dict:
         if stage == 'needs_review' and len(_needs_review_raw) < 5:
             _needs_review_raw.append({
                 'cid': cid, 'cp_uid': cp,
-                'product': (c.get('iproduct') or c.get('oproduct') or '').strip(),
+                'product': _contract_product(c, tid_titles),
                 'dateline': dl,
             })
         elif stage == 'needs_rating' and len(_needs_rating_raw) < 5:
             _needs_rating_raw.append({
                 'cid': cid, 'cp_uid': cp,
-                'product': (c.get('iproduct') or c.get('oproduct') or '').strip(),
+                'product': _contract_product(c, tid_titles),
                 'dateline': dl,
             })
 
@@ -374,11 +519,19 @@ def get_overview(uid: str) -> dict:
         rs  = rstats_by_tid.get(tid, {})
         cs  = cstats_by_tid.get(tid, {})
         bs  = bstats_by_tid.get(tid, {})
-        health = offer_health(t, cs, rs, bs, sla_hours)
+        health = offer_health(t, cs, rs, bs, sla_hours, stale_days)
+        has_active_bump = tid in active_bump_tids
+        archived = _offer_archived(t, health, cs, rs, bs, now, stale_days, has_active_bump)
+        reasons = _offer_reasons(t, health, cs, rs, bs, now, stale_days, has_active_bump)
+        if archived:
+            continue
         thread_health_list.append({
             'tid':                tid,
             'title':              t.get('title', '')[:60],
             'health':             health,
+            'reasons':            reasons,
+            'archived':           archived,
+            'last_activity_at':    _offer_last_activity(t, cs, rs, bs),
             'unread_replies':     rs.get('unread_replies', 0),
             'contracts_active':   cs.get('active', 0) + cs.get('awaiting', 0),
             'contracts_complete': cs.get('complete', 0),
@@ -387,6 +540,7 @@ def get_overview(uid: str) -> dict:
         })
     thread_health_list.sort(key=lambda x: (_health_order.get(x['health'], 5), -x['unread_replies']))
     threads_needing_attention = sum(1 for th in thread_health_list if th['health'] == 'needs_attention')
+    archived_thread_count = len(threads) - len(thread_health_list)
     thread_health_list = thread_health_list[:8]
 
     action_queue = overview_action_queue(
@@ -514,7 +668,7 @@ def get_overview(uid: str) -> dict:
             'cp_username': name_cache.get(cp, ''),
             'stage':       rc_stage,
             'bucket':      contract_bucket(s, dl),
-            'product':     (c.get('iproduct') or c.get('oproduct') or '').strip(),
+            'product':     _contract_product(c, tid_titles),
             'dateline':    dl,
             'tid':         str(c.get('tid', '')),
         })
@@ -583,6 +737,8 @@ def get_overview(uid: str) -> dict:
         'needs_review_items':        needs_review_items,
         'needs_rating_items':        needs_rating_items,
         'thread_health':             thread_health_list,
+        'archived_thread_count':     archived_thread_count,
+        'stale_thread_days':         stale_days,
         'needs_action':              needs_action_total,
         'active_pipeline':           active_pipeline_total,
         'threads_needing_attention': threads_needing_attention,
@@ -590,18 +746,22 @@ def get_overview(uid: str) -> dict:
 
 
 def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health') -> list[dict]:
+    effective_filter = status_filter or 'active'
     marketplace_tids = _get_marketplace_tids(uid)
     threads   = [t for t in _get_my_threads(uid) if str(t.get('tid','')) in marketplace_tids]
     contracts = _get_contracts(uid)
     replies   = _get_reply_queue(uid)
     bump_logs = _get_bump_log(uid, 500)
+    active_bump_tids = {str(j.get('tid', '')) for j in _get_bump_jobs(uid) if _to_int(j.get('enabled')) == 1}
     goals     = get_goals(uid)
     offer_meta = get_all_offer_meta(uid)
+    now = int(time.time())
 
     cstats_by_tid = offer_stats_from_contracts(contracts, uid)
     rstats_by_tid = reply_stats_from_queue(replies)
     bstats_by_tid = bump_stats_from_log(bump_logs)
     sla_hours = goals.get('reply_sla_hours', 24)
+    stale_days = _stale_days(goals)
 
     result = []
     for t in threads:
@@ -615,18 +775,23 @@ def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health')
         rs = rstats_by_tid.get(tid, {})
         bs = bstats_by_tid.get(tid, {})
 
-        health = offer_health(t, cs, rs, bs, sla_hours)
+        health = offer_health(t, cs, rs, bs, sla_hours, stale_days)
+        has_active_bump = tid in active_bump_tids
+        archived = _offer_archived(t, health, cs, rs, bs, now, stale_days, has_active_bump)
+        reasons = _offer_reasons(t, health, cs, rs, bs, now, stale_days, has_active_bump)
+        observed = _observed_thread_stats(t, cs)
+        last_activity = max(_offer_last_activity(t, cs, rs, bs), _to_int(observed.get('lastpost')))
 
-        if status_filter:
-            if status_filter == 'active'          and health not in ('healthy', 'needs_attention', 'new'):
+        if effective_filter:
+            if effective_filter == 'active'          and (archived or health not in ('healthy', 'needs_attention', 'new', 'wasting_spend')):
                 continue
-            if status_filter == 'needs_attention' and health != 'needs_attention':
+            if effective_filter == 'needs_attention' and health != 'needs_attention':
                 continue
-            if status_filter == 'wasting_spend'   and health != 'wasting_spend':
+            if effective_filter == 'wasting_spend'   and health != 'wasting_spend':
                 continue
-            if status_filter == 'stale'           and health != 'stale':
+            if effective_filter == 'stale'           and not (archived or health == 'stale'):
                 continue
-            if status_filter == 'no_contracts'    and cs.get('total', 0) > 0:
+            if effective_filter == 'no_contracts'    and cs.get('total', 0) > 0:
                 continue
 
         waste = bump_waste_score(
@@ -641,9 +806,13 @@ def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health')
             'title': meta.get('label') or t.get('title', ''),
             'raw_title': t.get('title', ''),
             'fid': t.get('fid', ''),
-            'closed': bool(t.get('closed')),
-            'lastpost': t.get('lastpost', 0),
-            'numreplies': t.get('numreplies', 0),
+            'closed': observed.get('closed', bool(t.get('closed'))),
+            'lastpost': observed.get('lastpost', t.get('lastpost', 0)),
+            'lastposteruid': observed.get('lastposteruid', ''),
+            'numreplies': observed.get('replies', t.get('numreplies', 0)),
+            'views': observed.get('views', 0),
+            'post_count': observed.get('posts', _to_int(t.get('numreplies')) + 1),
+            'stats_source': observed.get('source', 'local'),
             'reply_count': rs.get('total_replies', 0),
             'unread_leads': rs.get('unread_replies', 0),
             'contracts_total': cs.get('total', 0),
@@ -655,16 +824,19 @@ def get_offers(uid: str, status_filter: str | None = None, sort: str = 'health')
             'bump_count': bs.get('bump_count', 0),
             'bump_waste_score': waste,
             'last_contract_at': cs.get('last_contract_at', 0),
+            'last_activity_at': last_activity,
             'health': health,
+            'reasons': reasons,
+            'archived': archived,
             'category': meta.get('category', ''),
             'status': meta.get('status', 'active'),
         })
 
     health_order = {'needs_attention': 0, 'wasting_spend': 1, 'healthy': 2, 'new': 3, 'stale': 4}
     if sort == 'health':
-        result.sort(key=lambda x: (health_order.get(x['health'], 5), -(x['lastpost'] or 0)))
+        result.sort(key=lambda x: (1 if x.get('archived') else 0, health_order.get(x['health'], 5), -(x['last_activity_at'] or 0)))
     elif sort == 'activity':
-        result.sort(key=lambda x: -(x['lastpost'] or 0))
+        result.sort(key=lambda x: -(x['last_activity_at'] or x['lastpost'] or 0))
     elif sort == 'contracts':
         result.sort(key=lambda x: -x['contracts_total'])
 
@@ -687,7 +859,8 @@ def get_offer_detail(uid: str, tid: str) -> dict | None:
     cs = offer_stats_from_contracts(contracts, uid).get(tid, {})
     rs = reply_stats_from_queue(replies).get(tid, {})
     bs = bump_stats_from_log(bump_log).get(tid, {})
-    health = offer_health(thread, cs, rs, bs, goals.get('reply_sla_hours', 24))
+    observed = _observed_thread_stats(thread, cs)
+    health = offer_health(thread, cs, rs, bs, goals.get('reply_sla_hours', 24), _stale_days(goals))
     waste  = bump_waste_score(bs.get('bump_count',0), rs.get('unread_replies',0), cs.get('complete',0),
                               bumps_30d=bs.get('bumps_30d', 0))
 
@@ -716,9 +889,13 @@ def get_offer_detail(uid: str, tid: str) -> dict | None:
         'title': meta.get('label') or thread.get('title', ''),
         'raw_title': thread.get('title', ''),
         'fid': thread.get('fid', ''),
-        'closed': bool(thread.get('closed')),
-        'lastpost': thread.get('lastpost', 0),
-        'numreplies': thread.get('numreplies', 0),
+        'closed': observed.get('closed', bool(thread.get('closed'))),
+        'lastpost': observed.get('lastpost', thread.get('lastpost', 0)),
+        'lastposteruid': observed.get('lastposteruid', ''),
+        'numreplies': observed.get('replies', thread.get('numreplies', 0)),
+        'views': observed.get('views', 0),
+        'post_count': observed.get('posts', _to_int(thread.get('numreplies')) + 1),
+        'stats_source': observed.get('source', 'local'),
         'health': health,
         'contracts_total': cs.get('total', 0),
         'contracts_complete': cs.get('complete', 0),
@@ -869,19 +1046,9 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
     if recv_is_fresh and len(bratings) < 3 and len(sent_cids) > 20:
         recv_is_fresh = False
 
-    # tid -> title from my_threads + tid_titles cache
-    with _db() as conn:
-        tid_rows = conn.execute(
-            "SELECT tid, title FROM my_threads WHERE uid=?", (uid,)
-        ).fetchall()
-    tid_titles: dict[str, str] = {str(r['tid']): r['title'] for r in tid_rows}
-    with _db() as conn:
-        try:
-            title_rows = conn.execute("SELECT tid, title FROM tid_titles").fetchall()
-            for tr in title_rows:
-                tid_titles.setdefault(str(tr['tid']), tr['title'])
-        except Exception:
-            pass
+    tid_titles = _get_tid_titles(
+        uid, {str(c.get('tid') or '') for c in contracts}
+    )
 
     result = []
     for c in contracts:
@@ -939,6 +1106,7 @@ def get_deals(uid: str, bucket_filter: str | None = None) -> list[dict]:
             'counterparty_username':          names.get(cp, ''),
             'tid':                            tid,
             'thread_title':                   tid_titles.get(tid, ''),
+            'product':                        _contract_product(c, tid_titles),
             'dateline':                       c.get('dateline', 0),
             'iproduct':                       c.get('iproduct', ''),
             'oproduct':                       c.get('oproduct', ''),
@@ -1045,6 +1213,66 @@ def get_customer_detail(uid: str, cp_uid: str) -> dict | None:
         'contracts': enriched,
         'offer_tids': list(tid_set),
     }
+
+
+def get_thread_updates(uid: str) -> dict:
+    offers = get_offers(uid, 'active', 'activity')
+    _refresh_thread_update_observations(uid, offers)
+    editable = []
+    for offer in offers:
+        if offer.get('closed'):
+            continue
+        replies = _to_int(offer.get('numreplies'), _to_int(offer.get('replies')))
+        posts = _to_int(offer.get('post_count'), _to_int(offer.get('posts'), replies + 1))
+        editable.append({
+            'tid': offer['tid'],
+            'title': offer.get('title') or offer.get('raw_title') or f"TID {offer['tid']}",
+            'views': offer.get('views', 0),
+            'replies': replies,
+            'posts': posts,
+            'contracts_total': offer.get('contracts_total', 0),
+            'contracts_active': offer.get('contracts_active', 0) + offer.get('contracts_awaiting', 0),
+            'contracts_complete': offer.get('contracts_complete', 0),
+            'last_activity_at': offer.get('last_activity_at', 0),
+            'closed': offer.get('closed', False),
+            'reasons': offer.get('reasons', []),
+        })
+    updates = list_thread_updates(uid, limit=50)
+    return {
+        'threads': editable,
+        'updates': updates,
+        'summary': {
+            'thread_count': len(editable),
+            'posted_updates': sum(1 for item in updates if item.get('status') == 'posted'),
+            'failed_updates': sum(1 for item in updates if item.get('status') == 'failed'),
+        },
+    }
+
+
+def _refresh_thread_update_observations(uid: str, offers: list[dict] | None = None) -> None:
+    """Refresh posted-update movement from local thread snapshots only."""
+    offers = offers if offers is not None else get_offers(uid, 'active', 'activity')
+    offer_by_tid = {str(offer.get('tid')): offer for offer in offers}
+    for item in list_thread_updates(uid, limit=100):
+        if item.get('status') != 'posted':
+            continue
+        offer = offer_by_tid.get(str(item.get('tid')))
+        if not offer:
+            continue
+        replies = _to_int(offer.get('numreplies'), _to_int(offer.get('replies'), item.get('observed_replies', 0)))
+        posts = _to_int(offer.get('post_count'), _to_int(offer.get('posts'), item.get('observed_posts', replies + 1)))
+        observed = {
+            'views': offer.get('views', item.get('observed_views', 0)),
+            'replies': replies,
+            'posts': posts,
+            'contracts': offer.get('contracts_total', item.get('observed_contracts', 0)),
+            'observed_at': int(time.time()),
+        }
+        mark_thread_update_result(uid, item['id'], status='posted',
+                                  result_message=item.get('result_message', ''),
+                                  hf_pid=item.get('hf_pid', ''),
+                                  posted_at=item.get('posted_at') or item.get('created_at'),
+                                  observed=observed)
 
 
 def get_promotion(uid: str) -> dict:
@@ -1499,6 +1727,7 @@ def get_reports_weekly(uid: str, week_offset: int = 0) -> dict:
     goals     = get_goals(uid)
     lead_metas = _get_lead_metas(uid)
     sla_hours = goals.get('reply_sla_hours', 24)
+    _refresh_thread_update_observations(uid)
 
     week_contracts = [c for c in contracts if week_start <= int(c.get('dateline') or 0) <= week_end]
     week_replies   = [r for r in replies if week_start <= int(r.get('dateline') or 0) <= week_end]
@@ -1526,9 +1755,34 @@ def get_reports_weekly(uid: str, week_offset: int = 0) -> dict:
             sla_count += 1
 
     tid_titles: dict[str, str] = {}
+    week_updates: list[dict] = []
     with _db() as conn:
         for t in conn.execute("SELECT tid, title FROM my_threads WHERE uid=?", (uid,)).fetchall():
             tid_titles[str(t['tid'])] = t['title']
+        try:
+            rows = conn.execute(
+                """SELECT * FROM merchant_thread_updates
+                   WHERE uid=? AND COALESCE(NULLIF(posted_at,0), created_at) BETWEEN ? AND ?
+                   ORDER BY COALESCE(NULLIF(posted_at,0), created_at) DESC""",
+                (uid, week_start, week_end),
+            ).fetchall()
+            week_updates = [dict(row) for row in rows]
+        except Exception:
+            week_updates = []
+
+    update_rows = []
+    for item in week_updates[:12]:
+        update_rows.append({
+            'id': item.get('id'),
+            'tid': str(item.get('tid') or ''),
+            'title': tid_titles.get(str(item.get('tid') or ''), ''),
+            'posted_at': item.get('posted_at') or item.get('created_at') or 0,
+            'status': item.get('status', ''),
+            'views_gained': _to_int(item.get('observed_views')) - _to_int(item.get('baseline_views')),
+            'replies_gained': _to_int(item.get('observed_replies')) - _to_int(item.get('baseline_replies')),
+            'posts_gained': _to_int(item.get('observed_posts')) - _to_int(item.get('baseline_posts')),
+            'contracts_gained': _to_int(item.get('observed_contracts')) - _to_int(item.get('baseline_contracts')),
+        })
 
     return {
         'week_start': week_start,
@@ -1554,6 +1808,11 @@ def get_reports_weekly(uid: str, week_offset: int = 0) -> dict:
                                      cstats.get(str(t.get('tid','')), {}),
                                      {},
                                      bstats.get(str(t.get('tid','')), {})) == 'needs_attention']),
+        'thread_updates': {
+            'posted': sum(1 for item in week_updates if item.get('status') == 'posted'),
+            'failed': sum(1 for item in week_updates if item.get('status') == 'failed'),
+            'rows': update_rows,
+        },
     }
 
 

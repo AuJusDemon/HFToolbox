@@ -38,6 +38,15 @@ _CIRCUIT_ERRORS = {
     "cloudflare_challenge",
 }
 
+_HELD_ERRORS = {
+    "background_budget_exhausted",
+    "background_paused",
+    "background_paused_suspect",
+    "history_paused",
+    "held_by_controller",
+    "queued",
+}
+
 
 def _is_circuit_error(error: str) -> bool:
     error = (error or "").strip().lower()
@@ -62,9 +71,33 @@ def _user_background_floor_sync(owner_uid: str) -> int:
     return floor
 
 
+def _market_operator_floor(owner_uid: str, feature: str, route_class: str) -> int:
+    if str(owner_uid or "").strip() != os.environ.get("MARKET_TOKEN_UID", "").strip():
+        return 0
+    name = (feature or "").lower()
+    if route_class == "history" or "backfill" in name or "backward" in name:
+        return int(os.environ.get("MARKET_HISTORY_PAUSE_REMAINING", "170"))
+    if "forward" in name or "frontier" in name or "market.live" in name:
+        return int(os.environ.get("MARKET_OPERATOR_HARD_FLOOR", "100"))
+    if "market" in name:
+        return int(os.environ.get("MARKET_BACKGROUND_PAUSE_REMAINING", "115"))
+    return 0
+
+
+def _background_floor_sync(owner_uid: str, feature: str, route_class: str) -> int:
+    user_floor = _user_background_floor_sync(owner_uid)
+    operator_floor = _market_operator_floor(owner_uid, feature, route_class)
+    return max(user_floor, operator_floor)
+
+
 async def _user_background_floor(owner_uid: str) -> int:
     import asyncio
     return await asyncio.to_thread(_user_background_floor_sync, owner_uid)
+
+
+async def _background_floor(owner_uid: str, feature: str, route_class: str) -> int:
+    import asyncio
+    return await asyncio.to_thread(_background_floor_sync, owner_uid, feature, route_class)
 
 
 class AuthExpired(Exception):
@@ -98,6 +131,55 @@ def _headers(body: bytes) -> dict[str, str]:
     }
 
 
+def _classify(feature: str, route: str, background: bool) -> tuple[str, str]:
+    name = (feature or "").lower()
+    if route == "oauth" or name in {"oauth", "oauth_refresh"}:
+        return "critical", "critical"
+    if route == "write" or name in {"autobump", "sigmarket", "market.pass.purchase"}:
+        return "high", "critical"
+    if name.startswith("market_history") or name.endswith(".history") or "history" in name:
+        return "history", "background"
+    if (
+        name.startswith("market_forward")
+        or name.startswith("market.forward")
+        or "frontier" in name
+        or "market.live" in name
+    ):
+        return "high", "background"
+    if background or name.startswith("market_") or name.startswith("market."):
+        return "background", "background"
+    return "normal", "critical"
+
+
+def _with_metadata(data: dict) -> dict:
+    route_class, lane = _classify(
+        str(data.get("feature") or ""),
+        str(data.get("route") or "read"),
+        bool(data.get("background")),
+    )
+    data.setdefault("app", _app_name())
+    data.setdefault("route_class", route_class)
+    data.setdefault("egress_lane", lane)
+    if str(data.get("owner_uid") or "") == os.environ.get("MARKET_TOKEN_UID", "").strip():
+        data.setdefault("operator_hard_floor", int(os.environ.get("MARKET_OPERATOR_HARD_FLOOR", "100")))
+        data.setdefault("operator_forward_slow_at", int(os.environ.get("MARKET_FORWARD_SLOW_REMAINING", "140")))
+        data.setdefault("operator_history_pause_at", int(os.environ.get("MARKET_HISTORY_PAUSE_REMAINING", "170")))
+        data.setdefault("operator_background_pause_at", int(os.environ.get("MARKET_BACKGROUND_PAUSE_REMAINING", "115")))
+    data.setdefault("cache_key", "")
+    data.setdefault("cache_scope", data.get("privacy_scope") or "private")
+    return data
+
+
+def _seed_public_cache(result: object) -> None:
+    if not isinstance(result, dict):
+        return
+    try:
+        import hf_public_cache
+        hf_public_cache.seed_from_response(result)
+    except Exception:
+        pass
+
+
 async def _get(path: str, timeout: int = 15) -> dict:
     base, _, _ = _settings()
     try:
@@ -113,6 +195,7 @@ async def _get(path: str, timeout: int = 15) -> dict:
 async def _submit(data: dict, timeout: int = 42, endpoint: str = "/internal/v1/request") -> dict:
     global _last_circuit
     base, _, _ = _settings()
+    data = _with_metadata(dict(data))
     body = json.dumps(data, separators=(",", ":")).encode()
     client_timeout = aiohttp.ClientTimeout(total=timeout)
     try:
@@ -148,6 +231,7 @@ async def _submit(data: dict, timeout: int = 42, endpoint: str = "/internal/v1/r
                 _last_circuit = {"available": True, "retry_after_seconds": 0,
                                  "reason": "", "last_status": 0,
                                  "failure_count": 0}
+                _seed_public_cache(value.get("result"))
             return value
     except Exception:
         return {"state": "failed", "result": None,
@@ -156,21 +240,27 @@ async def _submit(data: dict, timeout: int = 42, endpoint: str = "/internal/v1/r
 
 def submit_sync(data: dict, timeout: int = 42) -> dict:
     base, _, _ = _settings()
+    data = _with_metadata(dict(data))
     body = json.dumps(data, separators=(",", ":")).encode()
     response = requests.post(base + "/internal/v1/request", data=body,
                              headers=_headers(body), timeout=timeout)
     response.raise_for_status()
-    return response.json()
+    value = response.json()
+    if isinstance(value, dict) and value.get("state") == "succeeded":
+        _seed_public_cache(value.get("result"))
+    return value
 
 
 def read_sync(token: str, asks: dict, *, owner_uid: str = "",
               feature: str = "maintenance_probe", priority: int = 8) -> dict | None:
+    route_class, _ = _classify(feature, "read", True)
     response = submit_sync({
         "token": token, "owner_uid": owner_uid, "app": _app_name(), "feature": feature,
         "route": "read", "payload": asks, "priority": priority,
-        "background": True, "background_floor": _user_background_floor_sync(owner_uid),
+        "background": True, "background_floor": _background_floor_sync(owner_uid, feature, route_class),
         "privacy_scope": "private", "cache_ttl": 0,
-        "stale_ttl": 0,
+        "stale_ttl": 0, "cache_key": "", "cache_scope": "private",
+        "safe_to_replay": True,
     })
     return response.get("result") if response.get("state") == "succeeded" else None
 
@@ -178,12 +268,14 @@ def read_sync(token: str, asks: dict, *, owner_uid: str = "",
 async def submit_background(token: str, asks: dict, *, owner_uid: str,
                             feature: str, priority: int = 8,
                             privacy_scope: str = "private") -> dict:
-    floor = await _user_background_floor(owner_uid)
+    route_class, _ = _classify(feature, "read", True)
+    floor = await _background_floor(owner_uid, feature, route_class)
     return await _submit({
         "token": token, "owner_uid": owner_uid, "app": _app_name(), "feature": feature,
         "route": "read", "payload": asks, "priority": priority,
         "background": True, "background_floor": floor, "privacy_scope": privacy_scope,
-        "cache_ttl": 0, "stale_ttl": 0,
+        "cache_ttl": 0, "stale_ttl": 0, "cache_key": "",
+        "cache_scope": privacy_scope, "safe_to_replay": True,
     }, endpoint="/internal/v1/background")
 
 
@@ -222,31 +314,34 @@ class HFClient:
         self.route_class = route_class
         self.egress_lane = egress_lane
         self.last_error = ""
+        self.last_state = ""
 
     async def read(self, asks: dict, **options) -> dict | None:
         owner_uid = str(options.get("owner_uid", self.owner_uid) or "")
         background = bool(options.get("background", self.background))
-        floor = await _user_background_floor(owner_uid) if background else 0
+        feature = str(options.get("feature", self.feature) or "")
         route_class = str(options.get("route_class", self.route_class) or "")
-        egress_lane = str(options.get("egress_lane", self.egress_lane) or "")
-        if background:
-            route_class = route_class or "background"
-            egress_lane = egress_lane or "background"
+        route_class = route_class or _classify(feature, "read", background)[0]
+        floor = await _background_floor(owner_uid, feature, route_class) if background else 0
         response = await _submit({
             "token": self.token, "owner_uid": owner_uid,
             "app": _app_name(),
-            "feature": options.get("feature", self.feature), "route": "read",
+            "feature": feature, "route": "read",
             "payload": asks, "priority": options.get("priority", self.priority),
-            "route_class": route_class or "normal",
-            "egress_lane": egress_lane or "critical",
             "background": background, "background_floor": floor,
             "privacy_scope": options.get("privacy_scope", "private"),
             "cache_ttl": options.get("cache_ttl", 5),
             "stale_ttl": options.get("stale_ttl", 300),
+            "cache_key": options.get("cache_key", ""),
+            "cache_scope": options.get("cache_scope", options.get("privacy_scope", "private")),
+            "safe_to_replay": True,
         }, timeout=310 if background else 52)
         if response.get("error_code") == "auth_expired":
             raise AuthExpired()
         self.last_error = str(response.get("error_code") or "")
+        self.last_state = str(response.get("state") or "")
+        if any(marker in self.last_error for marker in _HELD_ERRORS):
+            self.last_state = "held_by_controller"
         return response.get("result") if response.get("state") == "succeeded" else None
 
     async def write(self, asks: dict, **options) -> dict | None:
@@ -258,25 +353,28 @@ class HFClient:
         ).hexdigest()
         owner_uid = str(options.get("owner_uid", self.owner_uid) or "")
         background = bool(options.get("background", self.background))
-        floor = await _user_background_floor(owner_uid) if background else 0
+        feature = str(options.get("feature", self.feature) or "")
         route_class = str(options.get("route_class", self.route_class) or "")
-        egress_lane = str(options.get("egress_lane", self.egress_lane) or "")
-        if background:
-            route_class = route_class or "background"
-            egress_lane = egress_lane or "background"
+        route_class = route_class or _classify(feature, "write", background)[0]
+        floor = await _background_floor(owner_uid, feature, route_class) if background else 0
         response = await _submit({
             "token": self.token, "owner_uid": owner_uid,
             "app": _app_name(),
-            "feature": options.get("feature", self.feature), "route": "write",
+            "feature": feature, "route": "write",
             "payload": asks, "priority": options.get("priority", min(self.priority, 2)),
-            "route_class": route_class or "high",
-            "egress_lane": egress_lane or "critical",
             "background": background, "background_floor": floor,
             "privacy_scope": "private", "cache_ttl": 0, "stale_ttl": 0,
             "idempotency_key": options.get("idempotency_key") or fallback_key,
+            "cache_key": options.get("cache_key", ""),
+            "cache_scope": options.get("cache_scope", "private"),
+            "safe_to_replay": bool(options.get("safe_to_replay", True)),
         })
         if response.get("error_code") == "auth_expired":
             raise AuthExpired()
+        self.last_error = str(response.get("error_code") or "")
+        self.last_state = str(response.get("state") or "")
+        if any(marker in self.last_error for marker in _HELD_ERRORS):
+            self.last_state = "held_by_controller"
         return response.get("result") if response.get("state") == "succeeded" else None
 
     async def ping(self) -> bool:
@@ -292,7 +390,8 @@ async def exchange_code_for_token(code: str, cfg: dict):
         "token": "oauth-exchange-placeholder", "owner_uid": "", "app": _app_name(), "feature": "oauth",
         "route": "oauth", "payload": {"code": code, "config": cfg}, "priority": 1,
         "background": False, "background_floor": 0, "privacy_scope": "private", "cache_ttl": 0,
-        "stale_ttl": 0,
+        "stale_ttl": 0, "cache_key": "", "cache_scope": "private",
+        "safe_to_replay": False,
     })
     result = response.get("result") or {}
     return result.get("access_token"), result.get("expires_in"), result.get("refresh_token")
@@ -304,7 +403,8 @@ async def refresh_access_token(refresh_token: str, cfg: dict):
         "route": "oauth", "payload": {"grant_type": "refresh_token",
         "refresh_token": refresh_token, "config": cfg}, "priority": 1,
         "background": True, "background_floor": 0, "privacy_scope": "private", "cache_ttl": 0,
-        "stale_ttl": 0,
+        "stale_ttl": 0, "cache_key": "", "cache_scope": "private",
+        "safe_to_replay": True,
     })
     result = response.get("result") or {}
     return result.get("access_token"), result.get("expires_in"), result.get("refresh_token")

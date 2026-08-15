@@ -87,4 +87,5 @@ _metadata_only(
     api_cost="low",
 )
 
-import modules.merchant  # noqa — registers Merchant HQ
+import modules.merchant  # noqa: F401 - registers My Business
+import modules.market  # noqa: F401 - registers Marketplace

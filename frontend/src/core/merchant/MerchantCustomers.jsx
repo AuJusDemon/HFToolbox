@@ -97,7 +97,7 @@ function CustomerDetail({ cpUid, onBack }) {
       })
       .catch(() => setLoading(false))
   }
-  useEffect(load, [cpUid])
+  useEffect(() => { load() }, [cpUid])
 
   const save = () => {
     setSaving(true)
@@ -261,8 +261,8 @@ export default function MerchantCustomers() {
     : customers
 
   return (
-    <div>
-      <div style={{display:'flex', gap:6, marginBottom:10, alignItems:'center', flexWrap:'wrap'}}>
+    <div className="mhq-shell">
+      <div className="mhq-filterbar">
         {[
           { val: true,  label: 'My Buyers' },
           { val: false, label: 'All Counterparties' },
@@ -277,7 +277,7 @@ export default function MerchantCustomers() {
       </div>
       <input
         className="inp"
-        style={{width:'100%', marginBottom:12, fontSize:12, boxSizing:'border-box'}}
+        style={{flex:1, minWidth:260}}
         placeholder="Search by username, UID, or label…"
         value={search}
         onChange={e => setSearch(e.target.value)}
@@ -286,13 +286,15 @@ export default function MerchantCustomers() {
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : filtered.length === 0
-          ? <div className="empty" style={{color:'var(--dim)'}}>No buyers found.</div>
+          ? <div className="mhq-empty">No buyers found.</div>
           : (
-            <div className="mhq-card-list">
-              {filtered.map(c => (
-                <CustomerCard key={c.uid} c={c} onSelect={setSelected} />
-              ))}
-            </div>
+            <div className="mhq-table-wrap"><table className="mhq-table"><thead><tr><th>Buyer</th><th>Completed</th><th>Active</th><th>Total</th><th>Latest Purchase</th><th>Products</th><th>Follow-up</th></tr></thead><tbody>
+              {filtered.map(c => <tr key={c.uid} onClick={() => setSelected(c.uid)} style={{cursor:'pointer'}}>
+                <td><span className="mhq-table-primary">{c.username || c.uid}</span><span className="mhq-table-meta">UID {c.uid}{c.label ? ` · ${c.label}` : ''}{c.is_repeat ? ' · Repeat buyer' : ''}</span></td>
+                <td>{c.completed_deals || 0}</td><td>{c.active_deals || 0}</td><td>{c.total_deals || 0}</td><td>{relTime(c.last_deal_at)}</td>
+                <td>{(c.top_products || []).slice(0,2).join(', ') || 'No product recorded'}</td><td>{c.followup_at ? absDate(c.followup_at) : 'Not scheduled'}</td>
+              </tr>)}
+            </tbody></table></div>
           )
       }
     </div>

@@ -14,6 +14,7 @@ Reply queue auto-dismiss logic:
 """
 
 import asyncio
+import math
 import re
 import logging
 import time
@@ -28,14 +29,15 @@ from .posting_db import (
     add_my_thread,
     get_all_tracked_threads,
     update_thread_last_checked,
-    update_thread_numreplies,
+    claim_owned_reply_checks,
+    finish_owned_reply_check,
+    retry_owned_reply_check,
     upsert_reply,
     auto_dismiss_by_pid,
     get_unread_count,
 )
 import db
 import integration_db
-from .reply_pagination import fetch_changed_thread_posts
 
 log = logging.getLogger("posting")
 
@@ -60,7 +62,7 @@ def _extract_quoted_pids(message: str) -> list[str]:
 
 async def fire_due_threads() -> None:
     """Fire all threads whose fire_at <= now. Called every scheduler tick."""
-    from HFClient import HFClient
+    from hf_gateway_client import HFClient
 
     due = await asyncio.to_thread(get_due_threads)
     if not due:
@@ -87,15 +89,8 @@ async def fire_due_threads() -> None:
             continue
 
         try:
-            client = HFClient(
-                token,
-                owner_uid=uid,
-                feature="posting.fire_due",
-                priority=2,
-                background=False,
-                route_class="high",
-                egress_lane="critical",
-            )
+            client = HFClient(token, owner_uid=uid, feature="scheduled_post",
+                              priority=4, background=True)
             result = await client.write({
                 "threads": {
                     "_fid":     int(fid),
@@ -128,11 +123,7 @@ async def fire_due_threads() -> None:
             # Overflow replies — post immediately after thread (up to 2 replies)
             async def _post_overflow(msg, label):
                 try:
-                    r = await client.write(
-                        {"posts": {"_tid": int(tid), "_message": msg}},
-                        feature="posting.overflow_reply",
-                        priority=2,
-                    )
+                    r = await client.write({"posts": {"_tid": int(tid), "_message": msg}})
                     if r:
                         rp = r.get("posts") or {}
                         if isinstance(rp, list): rp = rp[0] if rp else {}
@@ -176,28 +167,14 @@ async def fire_due_threads() -> None:
 
 # ── Reply queue poller ─────────────────────────────────────────────────────────
 
-# In-memory: populated by crawl, consumed by reply poller each cycle.
-# Key: uid, Value: set of tids where lastpost changed and lastposter != us/Stanley
-_reply_check_queue:       dict[str, set[str]]       = {}
-# Thread titles for queued tids
-_reply_check_titles:      dict[str, dict[str, str]] = {}  # uid -> {tid -> title}
-# numreplies hint for queued tids - used to calculate which page to fetch
-_reply_check_numreplies:  dict[str, dict[str, int]] = {}  # uid -> {tid -> numreplies}
-# tids that were first discovered this crawl cycle - seed cursor without queuing replies
-_reply_check_seed_tids:   dict[str, set[str]]       = {}  # uid -> {tid}
-_reply_poll_backoff_until: dict[str, int]            = {}
-_reply_poll_global_backoff_until: int                = 0
-
 STANLEY_UID = "1337"
+_reply_poll_backoff_until: dict[str, int] = {}
 
 _HF_BACKOFF_ERRORS = {
     "global_circuit_open",
     "control_plane_unavailable",
     "upstream_unavailable",
     "token_cooldown",
-    "background_budget_exhausted",
-    "history_disabled",
-    "background_paused_manual",
     "rate_limited",
     "http_403",
     "http_429",
@@ -206,40 +183,10 @@ _HF_BACKOFF_ERRORS = {
     "cloudflare_challenge",
 }
 
-_HF_LONG_BACKOFF_ERRORS = {
-    "background_budget_exhausted",
-    "history_disabled",
-    "background_paused_manual",
-    "global_circuit_open",
-    "cloudflare_challenge",
-    "html_challenge",
-}
-
 
 def _is_hf_backoff_error(error: str) -> bool:
     error = (error or "").strip().lower()
     return bool(error) and any(marker in error for marker in _HF_BACKOFF_ERRORS)
-
-
-def _reply_poll_delay_for_error(error: str) -> int:
-    error = (error or "").strip().lower()
-    if any(marker in error for marker in _HF_LONG_BACKOFF_ERRORS):
-        return 3600
-    if _is_hf_backoff_error(error):
-        return 900
-    return 0
-
-
-def _restore_reply_checks(uid: str, tids: set[str], titles: dict[str, str],
-                          numreplies: dict[str, int], seed_tids: set[str]) -> None:
-    if tids:
-        _reply_check_queue.setdefault(uid, set()).update(tids)
-    if titles:
-        _reply_check_titles.setdefault(uid, {}).update(titles)
-    if numreplies:
-        _reply_check_numreplies.setdefault(uid, {}).update(numreplies)
-    if seed_tids:
-        _reply_check_seed_tids.setdefault(uid, set()).update(seed_tids)
 
 
 async def poll_reply_queues(active_uids: set | None = None) -> None:
@@ -248,78 +195,47 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
     The crawl (every 5 min) compares lastpost vs stored cursor and puts TIDs needing
     a check into _reply_check_queue. This function just drains that queue.
 
-    Cost: 0 calls if nothing is flagged. Changed threads use one shared metadata
-    lookup plus their final post pages. Owner and Stanley posts are filtered only
-    after the changed thread has been inspected.
+    Cost: 0 calls if nothing flagged. 1 call/thread with new replies + 1 users batch.
+    Never polls old/inactive threads. Never polls threads where we or Stanley posted last.
     """
-    from HFClient import HFClient
-    global _reply_poll_global_backoff_until
+    from hf_gateway_client import HFClient
 
-    # Snapshot and clear the queue atomically
-    uids_to_process = list(_reply_check_queue.keys())
-    if not uids_to_process:
+    claimed = await asyncio.to_thread(claim_owned_reply_checks, active_uids, 50)
+    if not claimed:
         return
+    jobs_by_uid: dict[str, list[dict]] = {}
+    for job in claimed:
+        jobs_by_uid.setdefault(str(job["uid"]), []).append(job)
 
     now = int(time.time())
-    if now < _reply_poll_global_backoff_until:
-        return
 
-    for uid in uids_to_process:
-        if active_uids is not None and uid not in active_uids:
-            continue
+    for uid, uid_jobs in jobs_by_uid.items():
         if now < _reply_poll_backoff_until.get(uid, 0):
+            for job in uid_jobs:
+                await asyncio.to_thread(
+                    retry_owned_reply_check,
+                    str(job["uid"]),
+                    str(job["tid"]),
+                    "HF controller backoff active",
+                )
             continue
 
-        tids       = _reply_check_queue.pop(uid, set())
-        titles     = _reply_check_titles.pop(uid, {})
-        numreplies = _reply_check_numreplies.pop(uid, {})
-        seed_tids  = _reply_check_seed_tids.pop(uid, set())
+        tids = {str(job["tid"]) for job in uid_jobs}
+        titles = {str(job["tid"]): str(job.get("thread_title") or "") for job in uid_jobs}
+        numreplies = {str(job["tid"]): int(job.get("numreplies_hint") or 0) for job in uid_jobs}
+        seed_tids = {str(job["tid"]) for job in uid_jobs if int(job.get("seed_only") or 0)}
+        target_lastposts = {str(job["tid"]): int(job.get("target_lastpost") or 0) for job in uid_jobs}
         if not tids:
             continue
 
         token = await asyncio.to_thread(db.get_token, uid)
         if not token:
+            for tid_str in tids:
+                await asyncio.to_thread(retry_owned_reply_check, uid, tid_str, "HF token unavailable")
             continue
 
-        client = HFClient(
-            token,
-            owner_uid=uid,
-            feature="posting.reply_poll",
-            priority=7,
-            background=True,
-            route_class="background",
-            egress_lane="background",
-        )
-
-        # threads._uid frequently omits numreplies. Resolve changed TIDs through
-        # threads._tid in one batch before calculating their final posts pages.
-        targeted_counts: dict[str, int | None] = {}
-        try:
-            meta_data = await client.read({"threads": {
-                "_tid": [int(t) for t in tids],
-                "tid": True, "numreplies": True,
-            }}, feature="posting.reply_poll.metadata", background=True,
-                priority=7, cache_ttl=5, stale_ttl=300)
-            meta_rows = (meta_data or {}).get("threads", [])
-            if isinstance(meta_rows, dict):
-                meta_rows = [meta_rows]
-            for row in (meta_rows or []):
-                meta_tid = str(row.get("tid") or "")
-                raw_count = row.get("numreplies")
-                if meta_tid:
-                    targeted_counts[meta_tid] = int(raw_count) if raw_count is not None else None
-            if not meta_rows and _is_hf_backoff_error(getattr(client, "last_error", "")):
-                delay = _reply_poll_delay_for_error(getattr(client, "last_error", ""))
-                _restore_reply_checks(uid, tids, titles, numreplies, seed_tids)
-                _reply_poll_backoff_until[uid] = now + delay
-                _reply_poll_global_backoff_until = max(_reply_poll_global_backoff_until, now + delay)
-                log.warning(
-                    "Reply poll: uid=%s backing off %ss after controller error=%s",
-                    uid, delay, getattr(client, "last_error", ""),
-                )
-                continue
-        except Exception as exc:
-            log.warning("Reply poll: targeted thread metadata failed uid=%s: %s", uid, exc)
+        client = HFClient(token, owner_uid=uid, feature="owned_thread_replies",
+                          priority=4, background=True)
 
         # Load last_pid cursors for these specific tids only
         all_tracked = await asyncio.to_thread(get_all_tracked_threads)
@@ -347,21 +263,44 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             seed_only    = tid_str in seed_tids
             thread_title = titles.get(tid_str, tracked.get("title", ""))
 
-            nr = targeted_counts.get(tid_str)
-            if nr == 0 and last_pid_int > 0:
-                # A populated cursor and a zero count is the known bad API shape.
-                nr = None
+            nr = numreplies.get(tid_str, 0)
+            last_page = max(1, math.ceil((nr + 1) / 30))
+            pages_to_fetch = list(dict.fromkeys([max(1, last_page - 1), last_page]))
 
             try:
-                collected_posts, verified_replies = await fetch_changed_thread_posts(
-                    client, tid_str, nr,
-                )
-                await asyncio.to_thread(
-                    update_thread_numreplies, uid, tid_str, verified_replies,
-                )
+                collected_posts: list = []
+                hf_failed = False
+                for fetch_page in pages_to_fetch:
+                    page_data = await client.read({
+                        "posts": {
+                            "_tid":     [int(tid_str)],
+                            "_page":    fetch_page,
+                            "_perpage": 30,
+                            "pid":      True,
+                            "uid":      True,
+                            "dateline": True,
+                            "message":  True,
+                            "subject":  True,
+                        }
+                    })
+                    if page_data is None:
+                        hf_failed = True
+                        if _is_hf_backoff_error(getattr(client, "last_error", "")):
+                            stop_due_to_backoff = True
+                            break
+                        continue
+                    page_raw = page_data.get("posts", [])
+                    if isinstance(page_raw, dict): page_raw = [page_raw]
+                    collected_posts.extend(page_raw or [])
 
                 if not collected_posts:
-                    log.info("Reply poll: uid=%s tid=%s - no posts returned", uid, tid_str)
+                    if hf_failed:
+                        failed_tids.add(tid_str)
+                        log.info("Reply poll: uid=%s tid=%s - HF returned None, requeueing",
+                                 uid, tid_str)
+                    else:
+                        log.info("Reply poll: uid=%s tid=%s nr=%d pages=%s - no posts returned",
+                                 uid, tid_str, nr, pages_to_fetch)
                     continue
 
                 # Dedupe by pid (pages can overlap at boundaries)
@@ -387,8 +326,8 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                     tid_max_pid[tid_str] = max_pid
 
                 log.info(
-                    "Reply poll: uid=%s tid=%s replies=%d collected=%d new=%d seed=%s cursor_adv=%s",
-                    uid, tid_str, verified_replies, len(collected_posts), len(new_posts),
+                    "Reply poll: uid=%s tid=%s nr=%d pages=%s collected=%d new=%d seed=%s cursor_adv=%s",
+                    uid, tid_str, nr, pages_to_fetch, len(collected_posts), len(new_posts),
                     seed_only, cursor_advanced,
                 )
 
@@ -399,21 +338,20 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
             except Exception as e:
                 log.warning("Reply poll: post fetch failed uid=%s tid=%s: %s", uid, tid_str, e)
                 failed_tids.add(tid_str)
-                if _is_hf_backoff_error(getattr(client, "last_error", "")):
-                    stop_due_to_backoff = True
 
         if failed_tids:
-            failed_titles = {t: titles[t] for t in failed_tids if t in titles}
-            failed_nr = {t: numreplies[t] for t in failed_tids if t in numreplies}
-            failed_seed_tids = {t for t in failed_tids if t in seed_tids}
-            _restore_reply_checks(uid, failed_tids, failed_titles, failed_nr, failed_seed_tids)
+            for tid_str in failed_tids:
+                await asyncio.to_thread(
+                    retry_owned_reply_check,
+                    uid,
+                    tid_str,
+                    getattr(client, "last_error", "") or "HF reply fetch failed",
+                )
             if _is_hf_backoff_error(getattr(client, "last_error", "")):
-                delay = _reply_poll_delay_for_error(getattr(client, "last_error", ""))
-                _reply_poll_backoff_until[uid] = now + delay
-                _reply_poll_global_backoff_until = max(_reply_poll_global_backoff_until, now + delay)
+                _reply_poll_backoff_until[uid] = now + 900
                 log.warning(
-                    "Reply poll: uid=%s parked %d tid(s) for %ss after controller error=%s",
-                    uid, len(failed_tids), delay, getattr(client, "last_error", ""),
+                    "Reply poll: uid=%s parked %d tid(s) for 900s after controller error=%s",
+                    uid, len(failed_tids), getattr(client, "last_error", ""),
                 )
             else:
                 log.info("Reply poll: uid=%s re-queued %d tid(s) for retry (transient HF failure)",
@@ -429,8 +367,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                     "uid": True, "username": True, "avatar": True,
                     "usertitle": True, "reputation": True,
                     "displaygroup": True, "additionalgroups": True,
-                }}, feature="posting.reply_poll.users", background=True,
-                    priority=8, cache_ttl=60, stale_ttl=3600)
+                }})
                 users_raw = (u_data or {}).get("users", [])
                 if isinstance(users_raw, dict): users_raw = [users_raw]
                 uid_profile_map: dict = {}
@@ -456,6 +393,19 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 log.warning("Reply poll: username batch failed uid=%s: %s", uid, e)
 
         # ── Queue replies ────────────────────────────────────────────────────
+        telegram_replies = False
+        try:
+            from modules.merchant.merchant_db import get_notification_preferences
+            from modules.market.market_db import access_status
+            prefs = await asyncio.to_thread(get_notification_preferences, uid)
+            owner_uid = str(__import__("os").environ.get("MARKET_TOKEN_UID", "")).strip()
+            market_paid = uid == owner_uid
+            if not market_paid:
+                market_paid = bool((await asyncio.to_thread(access_status, uid)).get("paid"))
+            telegram_replies = market_paid and bool(prefs.get("telegram_replies"))
+        except Exception as exc:
+            log.debug("Reply poll: Telegram preference unavailable uid=%s: %s", uid, exc)
+
         _QUOTE_BLOCK = re.compile(r'\[quote[^\]]*\][\s\S]*?\[/quote\]', re.IGNORECASE)
         for item in pending:
             tid_str      = item["tid_str"]
@@ -488,12 +438,21 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 f"Reply in: {thread_title or tid_str}",
                 f"{post_username}: {preview}" if post_username else preview,
                 f"https://hackforums.net/showthread.php?tid={tid_str}&pid={pid_str}#pid{pid_str}",
-                "toolbox", None, False,
+                "toolbox", None, True, telegram_replies,
             )
 
         # ── Update last_pid cursors ──────────────────────────────────────────
         for tid_str, max_pid in tid_max_pid.items():
             await asyncio.to_thread(update_thread_last_checked, uid, tid_str, max_pid, now)
+
+        for tid_str in tids - failed_tids:
+            if tid_str not in tid_max_pid and target_lastposts.get(tid_str):
+                tracked = tid_map.get(tid_str, {})
+                await asyncio.to_thread(
+                    update_thread_last_checked, uid, tid_str,
+                    str(tracked.get("last_pid") or "0"), target_lastposts[tid_str],
+                )
+            await asyncio.to_thread(finish_owned_reply_check, uid, tid_str)
 
         if pending:
             log.info("Reply poll: uid=%s queued %d new replies from %d threads", uid, len(pending), len(tids))

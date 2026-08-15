@@ -9,6 +9,7 @@ import {
 
 // "In Progress" tab groups waiting_on_approval + active backend stages
 const IN_PROGRESS_STAGES = new Set(['waiting_on_approval', 'active'])
+const CLOSED_STAGES = new Set(['disputed', 'cancelled', 'expired', 'problem'])
 const STALE_SECS = 90 * 86400
 
 const PRIMARY_STAGES = [
@@ -18,6 +19,7 @@ const PRIMARY_STAGES = [
   { val: 'waiting_on_counterparty',  label: 'Waiting' },
   { val: 'needs_rating',             label: 'Needs Rating' },
   { val: 'completed',                label: 'Completed' },
+  { val: 'closed',                   label: 'Closed' },
 ]
 
 const SECONDARY_STAGES = [
@@ -268,6 +270,12 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
   const [followUpOpen,  setFollowUpOpen]  = useState(false)
   const [fuTid,         setFuTid]         = useState('')
   const [fuCopied,      setFuCopied]      = useState('')
+  const [followups,     setFollowups]     = useState([])
+  const [markingSent,   setMarkingSent]   = useState(false)
+
+  const loadFollowups = () => api.get(`/api/market/my-business/contracts/${deal.cid}/followups`)
+    .then(d => setFollowups(d.followups || [])).catch(() => setFollowups([]))
+  useEffect(() => { loadFollowups() }, [deal.cid])
 
   const doSync = () => {
     setSyncing(true)
@@ -337,6 +345,18 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
     navigator.clipboard.writeText(text).then(() => {
       setFuCopied(key); setTimeout(() => setFuCopied(''), 2000)
     }).catch(() => {})
+  }
+
+  const markFollowupSent = async () => {
+    if (!fuTemplate) return
+    setMarkingSent(true)
+    try {
+      await api.post(`/api/market/my-business/contracts/${deal.cid}/followups`, {
+        tid: String(deal.tid || ''), counterparty_uid: String(deal.counterparty_uid || ''),
+        template_id: fuTemplate.template_id, subject: fuSubject, body: fuBody,
+      })
+      await loadFollowups()
+    } finally { setMarkingSent(false) }
   }
 
   const canAct = {
@@ -647,11 +667,16 @@ function ContractModal({ deal, myUid, templates, onClose, onActionSuccess, onOpe
                     <button className="btn btn-sm" onClick={() => copyFu(fuBody, 'body')}>
                       {fuCopied === 'body' ? 'Copied!' : 'Copy Body'}
                     </button>
+                    <button className="btn btn-sm" disabled={markingSent} onClick={markFollowupSent}>
+                      {markingSent ? 'Saving...' : 'Mark Sent'}
+                    </button>
                   </div>
+                  <p style={{fontSize:10,color:'var(--dim)',margin:'8px 0 0'}}>Opening or copying a PM does not mark it sent. Use Mark Sent only after sending it on HF.</p>
                 </>
               )}
             </>
           )}
+          {followups.length > 0 && <div style={{marginTop:10,borderTop:'1px solid var(--b2)',paddingTop:8}}><div style={{fontSize:9,color:'var(--dim)',textTransform:'uppercase'}}>Follow-up history</div>{followups.map(event=><div key={event.id} style={{display:'flex',justifyContent:'space-between',gap:8,fontSize:10,padding:'5px 0',opacity:event.corrected_at ? .6 : 1}}><span>{event.template_id || 'Manual follow-up'} · {new Date(event.marked_sent_at*1000).toLocaleString()}</span>{!event.corrected_at&&<button className="btn btn-sm" onClick={async()=>{await api.post(`/api/market/my-business/contracts/${deal.cid}/followups/${event.id}/correct`,{note:'Marked not sent'});loadFollowups()}}>Mark Not Sent</button>}</div>)}</div>}
         </div>
       )}
     </Backdrop>
@@ -899,12 +924,15 @@ export default function MerchantDeals({ initialStage = null, initialRatingFilter
   const counts = {
     ...rawCounts,
     in_progress: (rawCounts.active || 0) + (rawCounts.waiting_on_approval || 0),
+    closed: (rawCounts.disputed || 0) + (rawCounts.cancelled || 0) + (rawCounts.expired || 0) + (rawCounts.problem || 0),
   }
 
   // Stage-filtered list is the basis for both ratingCounts and visible
   const stageFiltered = stage === 'in_progress'
     ? allDeals.filter(d => IN_PROGRESS_STAGES.has(d.stage))
-    : stage ? allDeals.filter(d => d.stage === stage) : allDeals
+    : stage === 'closed'
+      ? allDeals.filter(d => CLOSED_STAGES.has(d.stage))
+      : stage ? allDeals.filter(d => d.stage === stage) : allDeals
 
   // Rating counts computed from the stage-filtered list so counts reflect context
   const ratingCounts = {}
@@ -955,7 +983,7 @@ export default function MerchantDeals({ initialStage = null, initialRatingFilter
   }, [fetchDeals])
 
   return (
-    <div>
+    <div className="mhq-shell">
       {/* Stage filter tabs — primary workflow row + secondary archive row */}
       <div style={{ marginBottom: 12 }}>
         {/* Primary: workflow stages + action buttons */}
@@ -1057,14 +1085,17 @@ export default function MerchantDeals({ initialStage = null, initialRatingFilter
       {loading
         ? <div className="empty"><div className="spin" /></div>
         : visible.length === 0
-          ? <div className="empty" style={{ color:'var(--dim)' }}>No contracts found.</div>
-          : visible.map(d => (
-              <DealCard
-                key={d.cid}
-                deal={d}
-                onClick={() => setModalDeal(d)}
-              />
-            ))
+          ? <div className="mhq-empty">No contracts found.</div>
+          : <div className="mhq-table-wrap"><table className="mhq-table"><thead><tr><th>CID</th><th>Buyer</th><th>Sales Thread / Product</th><th>Created</th><th>Stage</th><th>Rating</th><th>Next Action</th></tr></thead><tbody>{visible.map(deal => {
+              const product = deal.product || deal.iproduct || deal.oproduct || deal.thread_title || 'No product recorded'
+              const tone = deal.stage === 'disputed' || deal.stage === 'problem' ? 'bad' : deal.stage === 'needs_rating' ? 'info' : ['needs_review','waiting_on_approval','waiting_on_counterparty'].includes(deal.stage) ? 'warn' : ['active','completed'].includes(deal.stage) ? 'good' : ''
+              const next = deal.stage === 'needs_review' ? 'Review' : deal.stage === 'active' ? 'Complete' : deal.stage === 'needs_rating' ? 'Rate' : 'Inspect'
+              return <tr key={deal.cid} onClick={() => setModalDeal(deal)} style={{cursor:'pointer'}}>
+                <td><span className="mhq-action-cid">#{deal.cid}</span></td><td><span className="mhq-table-primary">{deal.counterparty_username || `UID ${deal.counterparty_uid}`}</span><span className="mhq-table-meta">UID {deal.counterparty_uid || 'unknown'}</span></td>
+                <td><span className="mhq-table-primary">{product}</span><span className="mhq-table-meta">{deal.thread_title || (deal.tid ? `TID ${deal.tid}` : 'No sales thread')}</span></td><td>{relTime(deal.dateline)}</td>
+                <td><span className={`mhq-status ${tone}`}>{contractStageLabel(deal.stage)}</span></td><td>{deal.rating_state && deal.rating_state !== 'not_applicable' ? deal.rating_state.replaceAll('_',' ') : '—'}</td><td><button className="btn btn-sm" onClick={event=>{event.stopPropagation();setModalDeal(deal)}}>{next}</button></td>
+              </tr>
+            })}</tbody></table></div>
       }
 
       {/* Contract modal */}

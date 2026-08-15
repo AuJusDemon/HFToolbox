@@ -98,6 +98,29 @@ def init_posting_db() -> None:
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS owned_reply_checks (
+                uid              VARCHAR(64) NOT NULL,
+                tid              VARCHAR(64) NOT NULL,
+                thread_title     VARCHAR(512) NOT NULL DEFAULT '',
+                numreplies_hint  INT NOT NULL DEFAULT 0,
+                target_lastpost  BIGINT NOT NULL DEFAULT 0,
+                seed_only        TINYINT NOT NULL DEFAULT 0,
+                status           VARCHAR(16) NOT NULL DEFAULT 'pending',
+                attempts         INT NOT NULL DEFAULT 0,
+                next_attempt_at  BIGINT NOT NULL DEFAULT 0,
+                last_error       TEXT,
+                queued_at        BIGINT NOT NULL DEFAULT 0,
+                updated_at       BIGINT NOT NULL DEFAULT 0,
+                PRIMARY KEY (uid, tid),
+                INDEX idx_orc_due (status, next_attempt_at, queued_at),
+                INDEX idx_orc_uid (uid, status)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        try:
+            conn.execute("ALTER TABLE owned_reply_checks ADD COLUMN target_lastpost BIGINT NOT NULL DEFAULT 0")
+        except Exception:
+            pass
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS posting_recents (
                 uid           VARCHAR(64)  NOT NULL,
                 fid           VARCHAR(64)  NOT NULL,
@@ -324,6 +347,76 @@ def update_thread_numreplies(uid: str, tid: str, numreplies: int) -> None:
         )
 
 
+def enqueue_owned_reply_check(uid: str, tid: str, title: str = "",
+                              numreplies_hint: int = 0, seed_only: bool = False,
+                              target_lastpost: int = 0) -> None:
+    """Durably schedule a reply fetch. Repeated lastpost observations only refresh the job."""
+    now = int(time.time())
+    with _db() as conn:
+        conn.execute(
+            """INSERT INTO owned_reply_checks
+               (uid,tid,thread_title,numreplies_hint,seed_only,target_lastpost,status,attempts,
+                next_attempt_at,queued_at,updated_at)
+               VALUES (?,?,?,?,?,?,'pending',0,0,?,?)
+               ON CONFLICT(uid,tid) DO UPDATE SET
+                 thread_title=excluded.thread_title,
+                 numreplies_hint=CASE
+                   WHEN owned_reply_checks.numreplies_hint > excluded.numreplies_hint
+                   THEN owned_reply_checks.numreplies_hint ELSE excluded.numreplies_hint END,
+                 target_lastpost=CASE
+                   WHEN owned_reply_checks.target_lastpost > excluded.target_lastpost
+                   THEN owned_reply_checks.target_lastpost ELSE excluded.target_lastpost END,
+                 seed_only=CASE WHEN owned_reply_checks.seed_only=0 THEN 0 ELSE excluded.seed_only END,
+                 status='pending',next_attempt_at=0,updated_at=excluded.updated_at""",
+            (uid, tid, title, int(numreplies_hint or 0), int(seed_only),
+             int(target_lastpost or 0), now, now),
+        )
+
+
+def claim_owned_reply_checks(active_uids: set | None = None, limit: int = 50) -> list[dict]:
+    """Claim due reply work. Running rows are recoverable after a five-minute lease."""
+    now = int(time.time())
+    params: list = [now, now - 300]
+    uid_clause = ""
+    if active_uids:
+        clean = sorted(str(uid) for uid in active_uids)
+        uid_clause = f" AND uid IN ({','.join('?' for _ in clean)})"
+        params.extend(clean)
+    params.append(max(1, min(int(limit), 200)))
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM owned_reply_checks WHERE "
+            "((status='pending' AND next_attempt_at<=?) OR (status='running' AND updated_at<=?))"
+            + uid_clause + " ORDER BY queued_at ASC LIMIT ?", tuple(params),
+        ).fetchall()
+        out = [dict(row) for row in rows]
+        for row in out:
+            conn.execute(
+                "UPDATE owned_reply_checks SET status='running',attempts=attempts+1,updated_at=? "
+                "WHERE uid=? AND tid=?", (now, row["uid"], row["tid"]),
+            )
+        return out
+
+
+def finish_owned_reply_check(uid: str, tid: str) -> None:
+    with _db() as conn:
+        conn.execute("DELETE FROM owned_reply_checks WHERE uid=? AND tid=?", (uid, tid))
+
+
+def retry_owned_reply_check(uid: str, tid: str, error: str = "") -> None:
+    now = int(time.time())
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT attempts FROM owned_reply_checks WHERE uid=? AND tid=?", (uid, tid)
+        ).fetchone()
+        attempts = int(row["attempts"] if row else 1)
+        delay = min(3600, 60 * (2 ** min(attempts, 5)))
+        conn.execute(
+            "UPDATE owned_reply_checks SET status='pending',next_attempt_at=?,last_error=?,updated_at=? "
+            "WHERE uid=? AND tid=?", (now + delay, str(error)[:500], now, uid, tid),
+        )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Reply queue
 # ─────────────────────────────────────────────────────────────────────────────
@@ -445,9 +538,6 @@ def save_draft(uid: str, fid: str, forum_name: str, subject: str, message: str) 
 def delete_draft(draft_id: int, uid: str) -> bool:
     """Owner-only hard delete."""
     with _db() as conn:
-        row = conn.execute("SELECT uid FROM thread_drafts WHERE id=?", (draft_id,)).fetchone()
-        if not row or row["uid"] != uid:
-            return False
         conn.execute("DELETE FROM draft_collaborators WHERE draft_id=?", (draft_id,))
         conn.execute("DELETE FROM draft_edit_log WHERE draft_id=?", (draft_id,))
         conn.execute("DELETE FROM draft_presence WHERE draft_id=?", (draft_id,))
@@ -576,22 +666,6 @@ def save_draft_collab(draft_id: int, uid: str, fid: str, forum_name: str,
 
         new_version = current_version + 1
 
-        cur = conn.execute(
-            """UPDATE thread_drafts
-               SET fid=?, forum_name=?, subject=?, message=?, reply1=?, reply2=?,
-                   version=?, last_editor_uid=?, last_editor_name=?, updated_at=?
-               WHERE id=? AND version=?""",
-            (fid, forum_name, subject, message, reply1 or "", reply2 or "",
-             new_version, uid, editor_name, now, draft_id, current_version)
-        )
-        if cur.rowcount == 0:
-            fresh = conn.execute("SELECT * FROM thread_drafts WHERE id=?", (draft_id,)).fetchone()
-            if not fresh:
-                return ("notfound", None)
-            current = dict(fresh)
-            current["is_owner"] = is_owner
-            return ("conflict", current)
-
         conn.execute(
             """INSERT INTO draft_edit_log
                (draft_id, editor_uid, editor_name,
@@ -601,6 +675,15 @@ def save_draft_collab(draft_id: int, uid: str, fid: str, forum_name: str,
             (draft_id, uid, editor_name,
              d["subject"], subject, d["message"], message,
              new_version, now)
+        )
+
+        conn.execute(
+            """UPDATE thread_drafts
+               SET fid=?, forum_name=?, subject=?, message=?, reply1=?, reply2=?,
+                   version=?, last_editor_uid=?, last_editor_name=?, updated_at=?
+               WHERE id=?""",
+            (fid, forum_name, subject, message, reply1 or "", reply2 or "",
+             new_version, uid, editor_name, now, draft_id)
         )
 
         updated             = dict(conn.execute("SELECT * FROM thread_drafts WHERE id=?", (draft_id,)).fetchone())

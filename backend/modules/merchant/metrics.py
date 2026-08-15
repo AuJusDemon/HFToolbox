@@ -52,7 +52,7 @@ def classify_contract_stage(
     istatus: str = '',
     ostatus: str = '',
 ) -> str:
-    """Map contract fields to a Seller HQ queue stage string."""
+    """Map contract fields to a My Business queue stage string."""
     s = str(status_n or '')
     if s in _PENDING:
         if dateline and (now - int(dateline)) > _AGE_EXPIRED_S:
@@ -201,7 +201,7 @@ def bump_waste_score(bump_count: int, unread_replies: int, completed_contracts: 
 
 
 def offer_health(thread: dict, cstats: dict, rstats: dict, bstats: dict,
-                 sla_hours: int = 24) -> str:
+                 sla_hours: int = 24, stale_days: int = 30) -> str:
     """
     Compute offer health label:
     needs_attention | wasting_spend | stale | healthy | new
@@ -226,7 +226,7 @@ def offer_health(thread: dict, cstats: dict, rstats: dict, bstats: dict,
         return 'needs_attention'
     if bumps >= 5 and unread == 0 and complete == 0 and active == 0:
         return 'wasting_spend'
-    if age_days > 14 and complete == 0:
+    if age_days > max(1, int(stale_days or 30)) and complete == 0:
         return 'stale'
     if complete > 0 or active > 0:
         return 'healthy'

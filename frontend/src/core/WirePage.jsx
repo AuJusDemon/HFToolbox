@@ -356,7 +356,7 @@ function sanitizeBBCodeHtml(html) {
 // BBCode component — renders full HTML as one unit, then finds wire-uimg
 // placeholders and decrypts them directly in the DOM via useEffect.
 // This means [uimg] inside [spoiler]/[quote]/[table] always works.
-function BBCode({ raw }) {
+export function BBCode({ raw }) {
   const ref = useRef(null)
   const html = useMemo(() => sanitizeBBCodeHtml(parseBBCode(raw)), [raw])
 

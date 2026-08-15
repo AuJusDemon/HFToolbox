@@ -138,8 +138,31 @@ function LeadCard({ lead, onStageChange }) {
   )
 }
 
-export default function MerchantPipeline() {
+function LeadTableRow({ lead, onStageChange }) {
+  const [patching, setPatching] = useState(false)
+  const [showNote, setShowNote] = useState(false)
+  const [note, setNote] = useState(lead.note || '')
+  const patch = fields => {
+    setPatching(true)
+    api.patch(`/api/merchant/leads/${lead.from_uid}/${lead.tid}`, fields)
+      .then(onStageChange).finally(() => setPatching(false))
+  }
+  return <>
+    <tr>
+      <td><span className="mhq-table-primary">{lead.from_username || `UID ${lead.from_uid}`}</span><span className="mhq-table-meta">{lead.reply_count || 1} messages · {lead.unread_count || 0} unread</span></td>
+      <td><span className="mhq-table-primary">{lead.thread_title || `TID ${lead.tid}`}</span><span className="mhq-table-meta">TID {lead.tid}</span></td>
+      <td><select className="inp" value={lead.stage} disabled={patching} onChange={e => patch({stage:e.target.value})}>{STAGES.map(stage => <option key={stage} value={stage}>{stageLabel(stage)}</option>)}</select></td>
+      <td>{lead.message_preview || 'No reply preview'}</td>
+      <td><span className={lead.sla_breached ? 'r' : ''}>{relTime(lead.latest_dateline || lead.dateline)}{lead.sla_breached ? ' · Late' : ''}</span></td>
+      <td><div style={{display:'flex',gap:6}}><button className="btn btn-sm" onClick={() => setShowNote(v => !v)}>Notes</button>{lead.latest_pid && <a className="btn btn-sm" href={`https://hackforums.net/showthread.php?tid=${lead.tid}&pid=${lead.latest_pid}#pid${lead.latest_pid}`} target="_blank" rel="noreferrer">Open</a>}</div></td>
+    </tr>
+    {showNote && <tr><td colSpan="6"><div style={{display:'flex',gap:8}}><input className="inp" style={{flex:1}} value={note} onChange={e=>setNote(e.target.value)} placeholder="Private lead note"/><button className="btn btn-sm" disabled={patching} onClick={()=>{patch({note});setShowNote(false)}}>Save Note</button></div></td></tr>}
+  </>
+}
+
+export default function MerchantPipeline({marketAccess=null}) {
   const [data, setData]       = useState(null)
+  const [opportunities, setOpportunities] = useState([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab]         = useState('new')
 
@@ -149,7 +172,13 @@ export default function MerchantPipeline() {
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
   }
-  useEffect(load, [])
+  useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (!marketAccess?.paid) { setOpportunities([]); return }
+    api.get('/api/market/my-business/opportunities?days=30&limit=50')
+      .then(d => setOpportunities(d.opportunities || []))
+      .catch(() => setOpportunities([]))
+  }, [marketAccess?.paid])
 
   if (loading) return <div className="empty"><div className="spin" /></div>
   if (!data)   return <div className="empty" style={{ color: 'var(--red)' }}>Failed to load replies</div>
@@ -159,28 +188,19 @@ export default function MerchantPipeline() {
   const visibleLeads = leads.filter(l => l.stage === tab)
 
   return (
-    <div>
-      {/* Summary bar */}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        {[
-          { label: 'OPEN REPLIES', val: summary.open ?? 0 },
-          { label: 'LATE REPLY',   val: summary.sla_breaches ?? 0, color: 'var(--red)' },
-        ].concat(
-          Object.entries(summary.by_stage || {}).map(([s, c]) => ({
-            label: stageLabel(s).toUpperCase(), val: c, color: stageColor(s),
-          }))
-        ).map(({ label, val, color }) => (
-          <div key={label} style={{
-            background: 'var(--s1)', padding: '6px 12px', minWidth: 60, textAlign: 'center',
-          }}>
-            <div style={{ fontSize: 9, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>{label}</div>
-            <div style={{ fontSize: 16, fontWeight: 700, fontFamily: 'var(--mono)', color: color || 'var(--sub)' }}>{val}</div>
-          </div>
-        ))}
+    <div className="mhq-shell">
+      {marketAccess?.paid && <section className="mhq-section"><div className="mhq-section-head"><div><h3>Buyer request matches</h3><p>Requests strongly matched to your detected sales products.</p></div><span>{opportunities.length} matches</span></div>
+        {opportunities.length === 0 ? <div className="mhq-empty">No strong product matches in the past 30 days.</div> : <div className="mhq-table-wrap"><table className="mhq-table"><thead><tr><th>Source</th><th>Buyer Request</th><th>Your Product</th><th>Market</th><th>Posted</th><th>Next Action</th></tr></thead><tbody>{opportunities.map(row => <tr key={`${row.product_id}:${row.tid}`}><td><span className="mhq-status info">Buyer Request</span></td><td><span className="mhq-table-primary">{row.subject}</span><span className="mhq-table-meta">UID {row.buyer_uid}</span></td><td>{row.product_name}</td><td>{row.unique_buyers || 0} buyers · {row.matching_supply || 0} seller listings</td><td>{relTime(row.created_at)}</td><td><a className="btn btn-sm" href={`https://hackforums.net/showthread.php?tid=${row.tid}`} target="_blank" rel="noreferrer">Review request</a></td></tr>)}</tbody></table></div>}
+      </section>}
+      <div className="mhq-summary">
+        <button type="button"><span className="mhq-summary-label">Open Replies</span><strong className="mhq-summary-value">{summary.open ?? 0}</strong></button>
+        <button type="button"><span className="mhq-summary-label">Late Replies</span><strong className="mhq-summary-value" style={{color:(summary.sla_breaches||0)>0?'var(--red)':'var(--text)'}}>{summary.sla_breaches ?? 0}</strong><span className="mhq-summary-note">SLA: {sla_hours} hours</span></button>
+        <button type="button"><span className="mhq-summary-label">Qualified</span><strong className="mhq-summary-value">{summary.by_stage?.qualified || 0}</strong></button>
+        <button type="button"><span className="mhq-summary-label">Contracts Opened</span><strong className="mhq-summary-value" style={{color:'var(--green)'}}>{summary.by_stage?.contract_opened || 0}</strong></button>
       </div>
 
       {/* Stage tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 12, overflowX: 'auto', whiteSpace: 'nowrap' }}>
+      <div className="mhq-filterbar" style={{overflowX:'auto',whiteSpace:'nowrap'}}>
         {stages.map(s => {
           const cnt = (summary.by_stage || {})[s] ?? 0
           return (
@@ -195,14 +215,8 @@ export default function MerchantPipeline() {
       </div>
 
       {visibleLeads.length === 0
-        ? <div className="empty" style={{ color: 'var(--dim)' }}>No replies in this stage.</div>
-        : visibleLeads.map(lead => (
-          <LeadCard
-            key={`${lead.from_uid}_${lead.tid}`}
-            lead={lead}
-            onStageChange={load}
-          />
-        ))
+        ? <div className="mhq-empty">No replies in this stage.</div>
+        : <div className="mhq-table-wrap"><table className="mhq-table"><thead><tr><th>Buyer</th><th>Sales Thread</th><th>Stage</th><th>Latest Reply</th><th>Updated</th><th>Next Action</th></tr></thead><tbody>{visibleLeads.map(lead => <LeadTableRow key={`${lead.from_uid}_${lead.tid}`} lead={lead} onStageChange={load}/>)}</tbody></table></div>
       }
 
       {leads.length === 0 && (

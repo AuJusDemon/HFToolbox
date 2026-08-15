@@ -30,7 +30,7 @@ async def merchant_overview(request: Request):
 
 @router.get("/freshness")
 async def merchant_freshness(request: Request):
-    """Return last-update timestamps for Seller HQ data areas. Lightweight poll target."""
+    """Return last-update timestamps for My Business data areas. Lightweight poll target."""
     uid = _uid(request)
     from modules.merchant.service import _get_crawl_freshness
     from modules.merchant.merchant_db import get_received_ratings_freshness
@@ -115,18 +115,184 @@ async def merchant_promotion_detail(tid: str, request: Request):
     return detail
 
 
+@router.get("/thread-updates")
+async def merchant_thread_updates(request: Request):
+    uid = _uid(request)
+    from modules.merchant.service import get_thread_updates
+    return await asyncio.to_thread(get_thread_updates, uid)
+
+
+class ThreadUpdatePost(BaseModel):
+    message: str
+
+
+def _result_post_id(result: dict | None) -> str:
+    if not isinstance(result, dict):
+        return ""
+    posts = result.get("posts")
+    if isinstance(posts, dict):
+        for key in ("pid", "postid", "id"):
+            if posts.get(key):
+                return str(posts[key])
+    return ""
+
+
+@router.post("/thread-updates/{tid}/post")
+async def merchant_post_thread_update(tid: str, body: ThreadUpdatePost, request: Request):
+    uid = _uid(request)
+    message = (body.message or "").strip()
+    if len(message) < 5:
+        raise HTTPException(400, "Write the thread update first")
+    if len(message) > 20000:
+        raise HTTPException(400, "Thread update is too long")
+
+    from modules.merchant.service import get_offer_detail
+    from modules.merchant.merchant_db import (
+        create_thread_snapshot,
+        create_thread_update,
+        mark_thread_update_result,
+    )
+    offer = await asyncio.to_thread(get_offer_detail, uid, str(tid))
+    if not offer:
+        raise HTTPException(404, "Sales thread not found")
+    if offer.get("closed"):
+        raise HTTPException(400, "This sales thread is closed")
+
+    def _as_int(*values):
+        for value in values:
+            try:
+                if value is not None and value != "":
+                    return int(value)
+            except (TypeError, ValueError):
+                continue
+        return 0
+
+    replies = _as_int(offer.get("numreplies"), offer.get("replies"))
+    posts = _as_int(offer.get("post_count"), offer.get("posts"), replies + 1)
+    baseline = {
+        "views": offer.get("views", 0),
+        "replies": replies,
+        "posts": posts,
+        "contracts_total": offer.get("contracts_total", 0),
+        "contracts_active": offer.get("contracts_active", 0),
+        "contracts_complete": offer.get("contracts_complete", 0),
+    }
+    await asyncio.to_thread(create_thread_snapshot, uid, str(tid), **baseline, source="pre_update")
+    update = await asyncio.to_thread(create_thread_update, uid, str(tid), message, baseline)
+
+    import db
+    token = await asyncio.to_thread(db.get_token, uid)
+    if not token:
+        await asyncio.to_thread(
+            mark_thread_update_result, uid, update["id"],
+            status="failed", result_message="HF token missing", observed=baseline,
+        )
+        raise HTTPException(401, "HF login required")
+
+    from hf_gateway_client import HFClient, AuthExpired
+    hf = HFClient(token, owner_uid=uid, feature="merchant.thread_update", priority=2)
+    try:
+        result = await hf.write(
+            {"posts": {"_tid": int(tid), "_message": message}},
+            idempotency_key=update["id"],
+        )
+    except AuthExpired:
+        await asyncio.to_thread(
+            mark_thread_update_result, uid, update["id"],
+            status="failed", result_message="HF token expired", observed=baseline,
+        )
+        raise HTTPException(401, "HF login expired")
+
+    if not result:
+        saved = await asyncio.to_thread(
+            mark_thread_update_result, uid, update["id"],
+            status="failed", result_message=hf.last_error or "HF write failed",
+            observed=baseline,
+        )
+        raise HTTPException(502, saved.get("result_message") if saved else "HF write failed")
+
+    saved = await asyncio.to_thread(
+        mark_thread_update_result, uid, update["id"],
+        status="posted", result_message="Posted through HF API",
+        hf_pid=_result_post_id(result), observed=baseline,
+    )
+    return {"ok": True, "update": saved}
+
+
+@router.post("/thread-updates/{tid}/op-draft")
+async def merchant_create_op_draft(tid: str, request: Request):
+    uid = _uid(request)
+    from modules.merchant.service import get_offer_detail
+    offer = await asyncio.to_thread(get_offer_detail, uid, str(tid))
+    if not offer:
+        raise HTTPException(404, "Sales thread not found")
+
+    import db
+    token = await asyncio.to_thread(db.get_token, uid)
+    if not token:
+        raise HTTPException(401, "HF login required")
+
+    from _db_compat import _db
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT firstpost,fid,title FROM my_threads WHERE uid=? AND tid=?",
+            (uid, str(tid)),
+        ).fetchone()
+    thread = dict(row) if row else {}
+    firstpost = str(thread.get("firstpost") or "0")
+
+    from hf_gateway_client import HFClient, AuthExpired
+    hf = HFClient(token, owner_uid=uid, feature="merchant.op_draft_import", priority=3)
+    try:
+        if firstpost in ("", "0"):
+            thread_result = await hf.read({
+                "threads": {
+                    "_tid": [int(tid)],
+                    "tid": True, "fid": True, "subject": True, "firstpost": True,
+                    "views": True, "numreplies": True, "lastpost": True,
+                }
+            }, cache_ttl=0)
+            thread_row = (thread_result or {}).get("threads")
+            if isinstance(thread_row, list):
+                thread_row = thread_row[0] if thread_row else {}
+            if isinstance(thread_row, dict):
+                firstpost = str(thread_row.get("firstpost") or firstpost)
+                thread["fid"] = str(thread_row.get("fid") or thread.get("fid") or "")
+                thread["title"] = str(thread_row.get("subject") or thread.get("title") or "")
+
+        if firstpost in ("", "0"):
+            raise HTTPException(404, "Opening post was not found")
+
+        post_result = await hf.read({
+            "posts": {"_pid": [int(firstpost)], "pid": True, "tid": True, "message": True, "subject": True}
+        }, cache_ttl=0)
+    except AuthExpired:
+        raise HTTPException(401, "HF login expired")
+
+    post_row = (post_result or {}).get("posts")
+    if isinstance(post_row, list):
+        post_row = post_row[0] if post_row else {}
+    if not isinstance(post_row, dict) or not str(post_row.get("message") or "").strip():
+        raise HTTPException(502, "Opening post content could not be imported")
+
+    from modules.posting.posting_db import create_draft
+    subject = f"OP rewrite - {offer.get('raw_title') or offer.get('title') or f'TID {tid}'}"
+    draft_id = await asyncio.to_thread(
+        create_draft,
+        uid,
+        str(thread.get("fid") or offer.get("fid") or ""),
+        f"FID {thread.get('fid') or offer.get('fid') or ''}",
+        subject[:250],
+        str(post_row.get("message") or ""),
+    )
+    return {"ok": True, "draft_id": draft_id}
+
+
 @router.get("/reports/weekly")
 async def merchant_weekly_report(request: Request, week: int = 0):
     uid = _uid(request)
     from modules.merchant.service import get_reports_weekly
     return await asyncio.to_thread(get_reports_weekly, uid, week)
-
-
-@router.get("/freshness")
-async def merchant_freshness(request: Request):
-    uid = _uid(request)
-    from modules.merchant.service import get_freshness
-    return await asyncio.to_thread(get_freshness, uid)
 
 
 # ── Workflow state mutations ────────────────────────────────────────────────────
@@ -185,6 +351,61 @@ async def patch_offer(tid: str, body: OfferPatch, request: Request):
     return {"ok": True}
 
 
+class ProductPatch(BaseModel):
+    name: str
+
+
+class ProductThreadPatch(BaseModel):
+    tid: str
+    excluded: bool = False
+
+
+@router.post("/products", status_code=201)
+async def create_product(body: ProductPatch, request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import create_seller_product
+    product = await asyncio.to_thread(create_seller_product, uid, body.name)
+    if not product:
+        raise HTTPException(400, "Product name is required")
+    return product
+
+
+@router.get("/products")
+async def merchant_products(request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import list_seller_products
+    return {"products": await asyncio.to_thread(list_seller_products, uid)}
+
+
+@router.patch("/products/{product_id}")
+async def patch_product(product_id: str, body: ProductPatch, request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import rename_seller_product
+    if not await asyncio.to_thread(rename_seller_product, uid, product_id, body.name):
+        raise HTTPException(404, "Product not found")
+    return {"ok": True}
+
+
+@router.delete("/products/{product_id}", status_code=204)
+async def delete_product(product_id: str, request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import delete_seller_product
+    if not await asyncio.to_thread(delete_seller_product, uid, product_id):
+        raise HTTPException(404, "Product not found")
+    return None
+
+
+@router.put("/products/{product_id}/thread")
+async def put_product_thread(product_id: str, body: ProductThreadPatch, request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import assign_product_thread
+    if not await asyncio.to_thread(
+        assign_product_thread, uid, product_id, body.tid, body.excluded
+    ):
+        raise HTTPException(404, "Product or owned sales thread not found")
+    return {"ok": True}
+
+
 class GoalsPatch(BaseModel):
     reply_sla_hours:             Optional[int] = None
     weekly_bump_budget:          Optional[int] = None
@@ -216,6 +437,29 @@ async def patch_goals(body: GoalsPatch, request: Request):
         body.weekly_new_lead_goal       if body.weekly_new_lead_goal       is not None else current.get('weekly_new_lead_goal', 0),
     )
     return {"ok": True}
+
+
+class NotificationPreferences(BaseModel):
+    telegram_replies: bool = False
+    telegram_followups: bool = False
+    telegram_ratings: bool = False
+
+
+@router.get("/notification-preferences")
+async def notification_preferences(request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import get_notification_preferences
+    return await asyncio.to_thread(get_notification_preferences, uid)
+
+
+@router.put("/notification-preferences")
+async def update_notification_preferences(body: NotificationPreferences, request: Request):
+    uid = _uid(request)
+    from modules.merchant.merchant_db import set_notification_preferences
+    return await asyncio.to_thread(
+        set_notification_preferences, uid, body.telegram_followups,
+        body.telegram_ratings, body.telegram_replies,
+    )
 
 
 # ── PM Templates ───────────────────────────────────────────────────────────────

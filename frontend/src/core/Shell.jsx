@@ -2,11 +2,25 @@ import { useState, useEffect, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import useStore from '../store.js'
 import { api } from './api.js'
-import extraNavLinks from '../navlinks.jsx'
 
 // Set to null to make The Wire public for all users.
 
-// ── Theme system ────────────────────────────────────────────────────────────
+// Single source of truth for dashboard nav. Sidebar and mobile nav both render from this.
+// group drives the sidebar's section labels ("navigation" / "modules" / "system");
+// mobileLabel is the compact all-caps form the bottom mobile nav uses.
+export const NAV_ITEMS = [
+  { to: '/dashboard',           label: 'Overview',    mobileLabel: 'HOME',     group: 'navigation' },
+  { to: '/dashboard/bytes',     label: 'Bytes',       mobileLabel: 'BYTES',    group: 'modules'    },
+  { to: '/dashboard/contracts', label: 'Contracts',   mobileLabel: 'DEALS',    group: 'modules'    },
+  { to: '/dashboard/bumper',    label: 'Auto Bumper', mobileLabel: 'BUMPER',   group: 'modules'    },
+  { to: '/dashboard/posting',   label: 'Posting',     mobileLabel: 'POST',     group: 'modules', badgeKey: 'replyCount' },
+  { to: '/dashboard/sigmarket', label: 'Sig Market',  mobileLabel: 'SIG MKT',  group: 'modules'    },
+  { to: '/dashboard/wire',      label: 'The Wire',    mobileLabel: 'WIRE',     group: 'modules'    },
+  { to: '/dashboard/market',    label: 'Marketplace', mobileLabel: 'MARKET',   group: 'modules'    },
+  { to: '/dashboard/settings',  label: 'Settings',    mobileLabel: 'SETTINGS', group: 'system'     },
+]
+
+// Theme system
 export const THEMES = [
   { id: 'terminal', label: 'Terminal', swatch: '#39ff14', bg: '#080808', desc: 'Phosphor green CRT' },
   { id: 'classic',  label: 'Classic',  swatch: '#00d4b4', bg: '#050709', desc: 'Original dashboard' },
@@ -30,10 +44,10 @@ const GROUPS = {
   "78":"VIBE","70":"Gamblers","68":"Brotherhood",
   "67":"Vendor","7":"Exiled","38":"Banned",
 }
-// Order: site rank groups → vendor → member-owned groups → system
+// Order: site rank groups, vendor, member-owned groups, system.
 const GROUP_PRIORITY = ["9","28","67","46","48","50","52","68","70","71","77","78","7","38","2"]
 
-// Inline styles derived from group_css.txt — no className lookup needed
+// Inline styles derived from group_css.txt. No className lookup needed.
 const GROUP_STYLES = {
   "2":  {color:"#efefef"},
   "9":  {color:"#FFCC00"},
@@ -80,14 +94,15 @@ function AsciiBar({ pct, width = 16, colorClass = '' }) {
   const empty  = width - filled
   return (
     <span>
-      <span className={`rl-fill ${colorClass}`}>{'█'.repeat(filled)}</span>
-      <span style={{ color:'var(--b3)' }}>{'░'.repeat(empty)}</span>
+      <span className={`rl-fill ${colorClass}`}>{'#'.repeat(filled)}</span>
+      <span style={{ color:'var(--b3)' }}>{'-'.repeat(empty)}</span>
     </span>
   )
 }
 
 function RateLimit() {
   const [val, setVal]     = useState(null)
+  const [apiState,setApiState] = useState({stale:true,hf_api:null})
   const settings          = useStore(s => s.settings)
   const setApiPaused      = useStore(s => s.setApiPaused)
   const setThrottle       = useStore(s => s.setThrottle)
@@ -97,6 +112,7 @@ function RateLimit() {
     const go = () => api.get('/api/rate-limit').then(d => {
       const r = d?.remaining ?? null
       setVal(r)
+      setApiState({stale:Boolean(d?.stale),hf_api:d?.hf_api||null})
       if (d?.throttle) setThrottle(d.throttle)
       if (settings.apiFloorEnabled && r !== null && r < 9999) {
         const shouldPause = r < (settings.apiFloor ?? 30)
@@ -111,25 +127,28 @@ function RateLimit() {
     return () => clearInterval(id)
   }, [settings.apiFloor, settings.apiFloorEnabled])
 
-  const known  = val !== null && val < 9999
+  const unavailable = apiState.hf_api?.available === false
+  const known  = !apiState.stale && val !== null && val < 9999
   const floor  = settings.apiFloorEnabled ? (settings.apiFloor ?? 30) : 0
   const paused = known && settings.apiFloorEnabled && val < floor
   const pct    = known ? Math.min(val / 240, 1) : 1
   const fc     = !known ? '' : paused ? 'crit' : pct > 0.5 ? '' : pct > 0.2 ? 'warn' : 'crit'
-  const numCol = fc === 'crit' ? 'var(--red)' : fc === 'warn' ? 'var(--yellow)' : 'var(--acc)'
+  const numCol = unavailable ? 'var(--yellow)' : fc === 'crit' ? 'var(--red)' : fc === 'warn' ? 'var(--yellow)' : 'var(--acc)'
 
   return (
     <>
       <div className="rl-row">
-        <span className="rl-lbl">API{paused ? ' [PAUSED]' : ''}</span>
+        <span className="rl-lbl">API{unavailable ? ' [WAIT]' : paused ? ' [PAUSED]' : ''}</span>
         <span className="rl-n" style={{ color: numCol }}>
-          {known ? `${val}/240` : '---'}
+          {unavailable
+            ? `${Math.max(1,Math.ceil(Number(apiState.hf_api?.retry_after_seconds||0)/60))}m`
+            : known ? `${val}/240` : '---'}
         </span>
       </div>
       <div className="rl-track">
         {known
           ? <AsciiBar pct={pct} width={16} colorClass={fc} />
-          : <span style={{ color:'var(--dim)' }}>{'░'.repeat(16)}</span>
+          : <span style={{ color:'var(--dim)' }}>{'-'.repeat(16)}</span>
         }
       </div>
     </>
@@ -159,8 +178,8 @@ function TokenExpiryBanner() {
   const expired = secsLeft <= 0
   const hoursLeft = Math.max(0, Math.floor(secsLeft / 3600))
   const label = expired
-    ? '! Token expired — autobump and background sync are paused'
-    : `! Token expires in ${hoursLeft}h — autobump will pause when it does`
+    ? '! Token expired - autobump and background sync are paused'
+    : `! Token expires in ${hoursLeft}h - autobump will pause when it does`
   return (
     <div style={{
       background: expired ? 'rgba(255,51,51,.06)' : 'rgba(255,200,0,.05)',
@@ -193,7 +212,7 @@ function ApiPausedBanner() {
       padding:'7px 16px',display:'flex',alignItems:'center',gap:10,
       fontSize:11,color:'var(--red)',fontFamily:'var(--mono)',
     }}>
-      <span>! API calls low — polling paused (floor: {settings.apiFloor})</span>
+      <span>! API calls low - polling paused (floor: {settings.apiFloor})</span>
       <button
         onClick={() => nav('/dashboard/settings')}
         style={{fontSize:10,color:'var(--red)',opacity:.6,background:'none',border:'none',cursor:'pointer',textDecoration:'underline',padding:0,fontFamily:'var(--mono)',marginLeft:'auto'}}
@@ -263,16 +282,11 @@ function NotifPanel({ notifs, unseenCount, setNotifOpen, setUnseenCount, setNoti
   )
 }
 
+// Derived from NAV_ITEMS so titles can't silently drift out of sync with the nav
+// Derived from NAV_ITEMS so titles and sidebar labels stay in sync.
 const TITLE_MAP = {
-  '/dashboard':           'Overview',
-  '/dashboard/bytes':     'Bytes',
-  '/dashboard/contracts': 'Contracts',
-  '/dashboard/bumper':    'Auto Bumper',
-  '/dashboard/posting':   'Posting',
-  '/dashboard/sigmarket':  'Sig Market',
-  '/dashboard/wire':      'The Wire',
-  '/dashboard/groups':    'Group Features',
-  '/dashboard/settings':  'Settings',
+  ...Object.fromEntries(NAV_ITEMS.map(i => [i.to, i.label])),
+  '/dashboard/groups': 'Group Features',  // routed but not a sidebar nav item
 }
 
 function ThemePicker({ theme, setTheme }) {
@@ -337,7 +351,7 @@ export default function Shell() {
   const notifRef = useRef(null)
 
   // Single shell-data poll replaces 3 separate 60s polls (profile, replies, notifications).
-  // All DB reads — zero HF API calls. Saves 2 HTTP requests per minute.
+  // All DB reads. Zero HF API calls. Saves 2 HTTP requests per minute.
   useEffect(() => {
     const poll = () => api.get('/api/shell-data').then(d => {
       if (!d) return
@@ -362,7 +376,7 @@ export default function Shell() {
 
   const rawGroups   = profile?.groups || user?.groups || []
   const sortedGids  = sortGroups(rawGroups.filter(g => GROUPS[g]))
-  // Use displaygroup from profile — "0" means HF didn't set one, use top priority
+  // Use displaygroup from profile. "0" means HF did not set one, use top priority.
   const displayGid = (() => {
     const dg = profile?.displaygroup
     if (dg && dg !== '0' && GROUPS[dg]) return dg
@@ -386,12 +400,13 @@ export default function Shell() {
   // Current path for topbar
   const title = TITLE_MAP[loc.pathname] || ''
   const pathDisplay = loc.pathname.replace('/dashboard', '') || '/'
+  const visibleNavItems = NAV_ITEMS.filter(i => !i.operatorOnly || user?.is_operator)
 
   return (
     <div className="shell-wrap">
       <div className="shell">
 
-        {/* ── SIDEBAR ── */}
+        {/* SIDEBAR */}
         <aside className="sidebar">
           <div className="sb-inner">
 
@@ -440,20 +455,19 @@ export default function Shell() {
 
             {/* Nav */}
             <div className="sb-nav-lbl">navigation</div>
-            <NavLink to="/dashboard" label="Overview" />
+            {visibleNavItems.filter(i => i.group === 'navigation').map(i => (
+              <NavLink key={i.to} to={i.to} label={i.label} />
+            ))}
 
             <div className="sb-nav-lbl" style={{marginTop:4}}>modules</div>
-            <NavLink to="/dashboard/bytes"     label="Bytes" />
-            <NavLink to="/dashboard/contracts" label="Contracts" />
-            <NavLink to="/dashboard/bumper"    label="Auto Bumper" />
-            <NavLink to="/dashboard/posting"   label="Posting" badge={replyCount} />
-            <NavLink to="/dashboard/sigmarket"  label="Sig Market" />
-            <NavLink to="/dashboard/wire" label="The Wire" />
-            <NavLink to="/dashboard/merchant" label="Seller HQ" />
+            {visibleNavItems.filter(i => i.group === 'modules').map(i => (
+              <NavLink key={i.to} to={i.to} label={i.label} badge={i.badgeKey === 'replyCount' ? replyCount : undefined} />
+            ))}
 
             <div className="sb-nav-lbl" style={{marginTop:4}}>system</div>
-            <NavLink to="/dashboard/settings"  label="Settings" />
-            {extraNavLinks}
+            {visibleNavItems.filter(i => i.group === 'system').map(i => (
+              <NavLink key={i.to} to={i.to} label={i.label} />
+            ))}
 
           </div>
 
@@ -466,7 +480,7 @@ export default function Shell() {
           </div>
         </aside>
 
-        {/* ── MAIN ── */}
+        {/* MAIN */}
         <div className="main">
           <TokenExpiryBanner />
           <ApiPausedBanner />
@@ -515,9 +529,7 @@ export default function Shell() {
                   />
                 )}
               </div>
-
-              <div className="live-dot"/>
-              <span className="tb-tag tb-live">LIVE</span>
+              <span className="tb-tag">READY</span>
             </div>
           </div>
 
@@ -542,25 +554,15 @@ function MobileNav() {
   const nav  = useNavigate()
   const loc  = useLocation()
   const user = useStore(s => s.user)
-  const items = [
-    { to:'/dashboard',           label:'HOME'     },
-    { to:'/dashboard/bytes',     label:'BYTES'    },
-    { to:'/dashboard/contracts', label:'DEALS'    },
-    { to:'/dashboard/bumper',    label:'BUMPER'   },
-    { to:'/dashboard/posting',   label:'POST'     },
-    { to:'/dashboard/sigmarket', label:'SIG MKT'  },
-    { to:'/dashboard/wire',     label:'WIRE'     },
-    { to:'/dashboard/merchant', label:'SELL'     },
-    { to:'/dashboard/settings', label:'SETTINGS' },
-  ]
+  const visibleNavItems = NAV_ITEMS.filter(i => !i.operatorOnly || user?.is_operator)
   return (
     <nav className="mob-nav">
-      {items.map(({to,label}) => {
+      {visibleNavItems.map(({to,mobileLabel}) => {
         const on = loc.pathname===to||(to!=='/dashboard'&&loc.pathname.startsWith(to))
         return (
           <button key={to} className={`mob-nav-btn${on?' on':''}`} onClick={()=>nav(to)}>
             <span className="mob-nav-btn-icon">{on?'▶':'·'}</span>
-            {label}
+            {mobileLabel}
           </button>
         )
       })}
