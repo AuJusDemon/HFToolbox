@@ -3,12 +3,13 @@ import { api } from './api.js'
 import { BBCode } from './WirePage.jsx'
 import MerchantPage from './MerchantPage.jsx'
 
-const STATUS = {'0':'Awaiting approval','1':'Awaiting approval','2':'Cancelled','3':'Middleman','4':'Cancelled','5':'Active','6':'Complete','7':'Disputed','8':'Expired'}
+const STATUS = {'-1':'Invalid','0':'Awaiting approval','1':'Expired','2':'Denied','3':'Middleman','4':'Canceled','5':'Active','6':'Complete','7':'Disputed','8':'Expired'}
 const CONTRACT_BUCKETS = [
   ['complete_contracts','complete'],['active_contracts','active'],
   ['awaiting_contracts','awaiting'],['middleman_contracts','middleman'],
-  ['cancelled_contracts','cancelled'],['disputed_contracts','disputed'],
-  ['expired_contracts','expired'],
+  ['denied_contracts','denied'],['cancelled_contracts','cancelled'],
+  ['disputed_contracts','disputed'],['expired_contracts','expired'],
+  ['invalid_contracts','invalid'],['other_contracts','other'],
 ]
 const CATEGORIES = ['hosting','social','accounts','design','development','security','crypto','gaming','marketing','data','other']
 const FORUMS = [
@@ -68,6 +69,15 @@ function ContractCounts({thread}) {
   </span>
 }
 
+function ThreadFreshness({thread}) {
+  const contractSeen=Number(thread.last_contract_seen_at||0)
+  const threadSeen=Number(thread.last_seen_at||0)
+  if(contractSeen) {
+    return <div className="market-checked">contracts updated {ago(contractSeen)}{threadSeen&&Math.abs(contractSeen-threadSeen)>86400?<span>thread stats {ago(threadSeen)}</span>:null}</div>
+  }
+  return <div className="market-checked">thread checked {ago(threadSeen)}</div>
+}
+
 function ThreadRow({thread,onOpen}) {
   return <button className="market-thread-row" onClick={()=>onOpen(thread.tid)}>
     <div className="market-thread-main">
@@ -79,7 +89,7 @@ function ThreadRow({thread,onOpen}) {
     <div className="market-activity"><b>{thread.views}</b> views <b>{thread.replies}</b> replies
       <span>7d change: +{thread.views_7d} views  -  +{thread.replies_7d} replies</span></div>
     <ContractCounts thread={thread}/>
-    <div className="market-checked">checked {ago(thread.last_seen_at)}</div>
+    <ThreadFreshness thread={thread}/>
   </button>
 }
 
@@ -131,7 +141,7 @@ function Threads({preset={},onPresetUsed,access,onPurchase}) {
     <button className="btn" onClick={()=>setSelected(null)}>Back to results</button>
     {!detail?<Empty>Loading thread...</Empty>:<div className="market-detail">
       <header><div className="market-kicker">{detail.market_type==='wtb'?'Buyer request':'Seller listing'}  -  {detail.forum_name}</div>
-        <h3>{detail.subject}</h3><div className="market-thread-meta">UID {detail.seller_uid}  -  {detail.views} views  -  {detail.replies} replies  -  checked {ago(detail.last_seen_at)}</div></header>
+        <h3>{detail.subject}</h3><div className="market-thread-meta">UID {detail.seller_uid}  -  {detail.views} views  -  {detail.replies} replies  -  thread checked {ago(detail.last_seen_at)}</div></header>
       <div className="market-detail-grid"><section><div className="col-lbl">Opening post</div><div className="market-post">{detail.opening_post?<BBCode raw={detail.opening_post}/>:<span className="market-muted">Opening post unavailable.</span>}</div>
         <a className="btn" href={`https://hackforums.net/showthread.php?tid=${detail.tid}`} target="_blank" rel="noreferrer">Open original thread</a></section>
         <aside><div className="col-lbl">Observed contract activity</div>{(detail.contract_counts||[]).length===0?<p className="market-muted">No contracts linked to this TID have been observed.</p>:detail.contract_counts.map(r=><div className="market-stat-line" key={r.status}><span>{STATUS[r.status]||`Status ${r.status}`}</span><b>{r.count}</b></div>)}

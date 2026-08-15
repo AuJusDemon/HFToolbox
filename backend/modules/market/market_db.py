@@ -1170,12 +1170,12 @@ def contract_coverage() -> dict:
         ).fetchone()
         observed = conn.execute(
             "SELECT COUNT(*) total,"
-            "SUM(status IN ('0','1')) awaiting,"
-            "SUM(status IN ('2','4')) cancelled,"
+            "SUM(status='0') awaiting,"
+            "SUM(status='2') denied,SUM(status='4') cancelled,"
             "SUM(status='3') middleman,SUM(status='5') active,"
             "SUM(status='6') complete,SUM(status='7') disputed,"
-            "SUM(status='8') expired,"
-            "SUM(status NOT IN ('0','1','2','3','4','5','6','7','8')) other "
+            "SUM(status IN ('1','8')) expired,SUM(status='-1') invalid,"
+            "SUM(status NOT IN ('-1','0','1','2','3','4','5','6','7','8')) other "
             "FROM market_contracts"
         ).fetchone()
         observed_total = int(_value(observed, "total", 0) or 0)
@@ -1215,8 +1215,8 @@ def contract_coverage() -> dict:
             "status_counts": {
                 key: int(_value(observed, key, 0) or 0)
                 for key in (
-                    "awaiting", "cancelled", "middleman", "active",
-                    "complete", "disputed", "expired", "other",
+                    "awaiting", "denied", "cancelled", "middleman", "active",
+                    "complete", "disputed", "expired", "invalid", "other",
                 )
             },
         }
@@ -1357,11 +1357,13 @@ def list_threads(
     offset = (page - 1) * perpage
     contract_counts = (
         "SELECT tid,COUNT(*) total,"
-        "SUM(status IN ('0','1')) awaiting_count,"
-        "SUM(status IN ('2','4')) cancelled_count,"
+        "SUM(status='0') awaiting_count,"
+        "SUM(status='2') denied_count,SUM(status='4') cancelled_count,"
         "SUM(status='3') middleman_count,SUM(status='5') active_count,"
         "SUM(status='6') complete_count,SUM(status='7') disputed_count,"
-        "SUM(status='8') expired_count,MAX(contract_at) last_contract_at "
+        "SUM(status IN ('1','8')) expired_count,SUM(status='-1') invalid_count,"
+        "SUM(status NOT IN ('-1','0','1','2','3','4','5','6','7','8')) other_count,"
+        "MAX(contract_at) last_contract_at,MAX(last_seen_at) last_contract_seen_at "
         "FROM market_contracts GROUP BY tid"
     )
     direction = "ASC" if sort_dir.lower() == "asc" else "DESC"
@@ -1384,10 +1386,14 @@ def list_threads(
             "COALESCE(c.active_count,0) active_contracts,"
             "COALESCE(c.complete_count,0) complete_contracts,"
             "COALESCE(c.awaiting_count,0) awaiting_contracts,"
+            "COALESCE(c.denied_count,0) denied_contracts,"
             "COALESCE(c.cancelled_count,0) cancelled_contracts,"
             "COALESCE(c.middleman_count,0) middleman_contracts,"
             "COALESCE(c.disputed_count,0) disputed_contracts,"
-            "COALESCE(c.expired_count,0) expired_contracts "
+            "COALESCE(c.expired_count,0) expired_contracts,"
+            "COALESCE(c.invalid_count,0) invalid_contracts,"
+            "COALESCE(c.other_count,0) other_contracts,"
+            "COALESCE(c.last_contract_seen_at,0) last_contract_seen_at "
             "FROM market_threads t JOIN market_forums f ON f.fid=t.fid "
             f"LEFT JOIN ({contract_counts}) c ON c.tid=t.tid "
             f"WHERE {where} ORDER BY {order_by} LIMIT ? OFFSET ?",

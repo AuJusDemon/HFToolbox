@@ -26,9 +26,16 @@ MARKET_CATEGORIES = (
 )
 
 CONTRACT_STATUSES = {
-    "0": "awaiting", "1": "awaiting", "2": "cancelled",
-    "3": "middleman", "4": "cancelled", "5": "active",
-    "6": "complete", "7": "disputed", "8": "expired",
+    "-1": "invalid",
+    "0": "awaiting",
+    "1": "expired",
+    "2": "denied",
+    "3": "middleman",
+    "4": "cancelled",
+    "5": "active",
+    "6": "complete",
+    "7": "disputed",
+    "8": "expired",
 }
 
 BUYER_FORUMS = frozenset({44, 308, 339})
