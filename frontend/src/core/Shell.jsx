@@ -8,7 +8,23 @@ import { api } from './api.js'
 // Single source of truth for dashboard nav. Sidebar and mobile nav both render from this.
 // group drives the sidebar's section labels ("navigation" / "modules" / "system");
 // mobileLabel is the compact all-caps form the bottom mobile nav uses.
-export const NAV_ITEMS = [
+export const ROUTE_PREFETCHERS = {
+  '/dashboard/bytes': () => import('./BytesPage.jsx'),
+  '/dashboard/contracts': () => import('./ContractsPage.jsx'),
+  '/dashboard/bumper': () => import('./BumperPage.jsx'),
+  '/dashboard/posting': () => import('./PostingPage.jsx'),
+  '/dashboard/sigmarket': () => import('./SigmarketPage.jsx'),
+  '/dashboard/wire': () => import('./WirePage.jsx'),
+  '/dashboard/market': () => import('./MarketPage.jsx'),
+  '/dashboard/settings': () => import('./Settings.jsx'),
+}
+
+function prefetchRoute(to) {
+  const fn = ROUTE_PREFETCHERS[to]
+  if (fn) fn().catch(() => {})
+}
+
+const NAV_ITEMS = [
   { to: '/dashboard',           label: 'Overview',    mobileLabel: 'HOME',     group: 'navigation' },
   { to: '/dashboard/bytes',     label: 'Bytes',       mobileLabel: 'BYTES',    group: 'modules'    },
   { to: '/dashboard/contracts', label: 'Contracts',   mobileLabel: 'DEALS',    group: 'modules'    },

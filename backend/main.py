@@ -13,6 +13,7 @@ import os
 import sys
 import hmac
 import logging
+import time
 import asyncio
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -946,6 +947,26 @@ app.include_router(auth.router)
 
 
 @app.middleware("http")
+async def slow_api_timing_middleware(request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    try:
+        slow_ms = int(os.environ.get("HFT_SLOW_API_MS", "750") or 750)
+    except Exception:
+        slow_ms = 750
+    if request.url.path.startswith("/api/") and elapsed_ms >= slow_ms:
+        log.info(
+            "slow_api path=%s status=%s ms=%s bytes=%s",
+            request.url.path,
+            getattr(response, "status_code", ""),
+            elapsed_ms,
+            response.headers.get("content-length", ""),
+        )
+    return response
+
+
+@app.middleware("http")
 async def activity_middleware(request, call_next):
     """
     On every authenticated request:
@@ -1333,12 +1354,11 @@ async def dash_contracts(request: Request, force: bool = False):
             "value":    _contract_value(c),
         }
 
-    # ── Try DB first (crawler keeps this populated) ───────────────────────────
+    # Dashboard gets a small recent list. Full history stays on /api/contracts/history.
     total_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
     if total_count > 0 and not force:
-        rows = await asyncio.to_thread(db.get_contracts_history, uid, total_count, 0, None, "dateline", "desc")
+        rows = await asyncio.to_thread(db.get_contracts_history, uid, 12, 0, None, "dateline", "desc")
         contracts = [_fmt(dict(r)) for r in rows]
-        # Enrich with cached counterparty usernames — zero HF API calls
         all_cp_uids = list({str(c["inituid"]) for c in contracts if c.get("inituid")} |
                            {str(c["otheruid"]) for c in contracts if c.get("otheruid")})
         username_map = {uid: info["username"] for uid, info in (await asyncio.to_thread(db.get_uid_usernames, all_cp_uids)).items()} if all_cp_uids else {}
@@ -1347,7 +1367,13 @@ async def dash_contracts(request: Request, force: bool = False):
             cp_uid  = str(c["otheruid"] if is_init else c["inituid"])
             c["counterparty_uid"]      = cp_uid
             c["counterparty_username"] = username_map.get(cp_uid, "")
-        return {"contracts": contracts, "uid": uid, "total_count": total_count, "username_map": username_map}
+        counts = {
+            "active": await asyncio.to_thread(db.get_contracts_history_count, uid, "5"),
+            "awaiting": await asyncio.to_thread(db.get_contracts_history_count, uid, "1"),
+            "disputed": await asyncio.to_thread(db.get_contracts_history_count, uid, "7"),
+            "complete": await asyncio.to_thread(db.get_contracts_history_count, uid, "6"),
+        }
+        return {"contracts": contracts, "uid": uid, "total_count": total_count, "counts": counts, "username_map": username_map}
 
     # ── DB empty or force refresh — fall back to HF API (page 1 only) ─────────
     token = await asyncio.to_thread(db.get_token, uid)

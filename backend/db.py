@@ -561,6 +561,14 @@ def init_bytes_history():
                 PRIMARY KEY (uid)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
+        for statement in (
+            "CREATE INDEX idx_bh_uid_sent_date ON bytes_history (uid, sent, dateline)",
+            "CREATE INDEX idx_bh_uid_type_date ON bytes_history (uid, type, dateline)",
+        ):
+            try:
+                conn.execute(statement)
+            except Exception:
+                pass
 
 
 def upsert_bytes_txns(uid: str, txns: list) -> int:
@@ -594,6 +602,8 @@ def upsert_bytes_txns(uid: str, txns: list) -> int:
 def get_bytes_history(uid: str, limit: int = 50, offset: int = 0,
                        direction: str = "all", type_filter: str = "", q: str = "") -> list:
     """Filtered bytes history. direction=all|sent|received. type_filter=comma-sep codes. q=reason search."""
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
     wheres, params = ["uid=?"], [uid]
     if direction == "sent":
         wheres.append("sent=1")
@@ -604,20 +614,24 @@ def get_bytes_history(uid: str, limit: int = 50, offset: int = 0,
         if codes:
             wheres.append(f"type IN ({','.join('?'*len(codes))})")
             params.extend(codes)
+    if q:
+        wheres.append("reason LIKE ?")
+        params.append(f"%{q.strip()}%")
+    where = " AND ".join(wheres)
     with _db() as conn:
+        total_row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM bytes_history WHERE {where}",
+            params,
+        ).fetchone()
         rows = conn.execute(
-            f"SELECT id,amount,dateline,reason,sent,type,post_tid FROM bytes_history WHERE {' AND '.join(wheres)} ORDER BY dateline DESC",
-            params
+            f"SELECT id,amount,dateline,reason,sent,type,post_tid FROM bytes_history WHERE {where} ORDER BY dateline DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
         ).fetchall()
-        result = []
-        for r in rows:
-            reason = r["reason"]
-            if q and q.lower() not in (reason or "").lower():
-                continue
-            result.append({"id": r["id"], "amount": r["amount"],
-                           "dateline": r["dateline"], "reason": reason, "sent": r["sent"],
-                           "type": r["type"] or "", "post_tid": r["post_tid"] or ""})
-        return result[offset:offset+limit], len(result)
+        result = [{"id": r["id"], "amount": r["amount"],
+                   "dateline": r["dateline"], "reason": r["reason"], "sent": r["sent"],
+                   "type": r["type"] or "", "post_tid": r["post_tid"] or ""}
+                  for r in rows]
+        return result, int(total_row["n"] if total_row else 0)
 
 
 def get_bytes_history_all(uid: str) -> list:

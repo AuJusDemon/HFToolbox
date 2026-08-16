@@ -76,25 +76,28 @@ function BytesHistory({ data }) {
   const [page,     setPage]     = useState(1)
   const PERPAGE = 30
 
+  const [total, setTotal] = useState(0)
+
   useEffect(() => {
     setLoading(true)
-    api.get('/api/bytes/history?page=1&perpage=2000')
-      .then(d => { if (d) setAllTxns(d.transactions || []); setLoading(false) })
+    const params = new URLSearchParams({ page: String(page), perpage: String(PERPAGE), direction: dir })
+    if (cat && CAT_CODES[cat]) params.set('type_filter', CAT_CODES[cat].join(','))
+    if (q) params.set('q', q)
+    api.get(`/api/bytes/history?${params.toString()}`)
+      .then(d => {
+        if (d) {
+          setAllTxns(d.transactions || [])
+          setTotal(Number(d.total || 0))
+        }
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
-  }, [])
+  }, [page, dir, cat, q])
 
-  const filtered = allTxns.filter(t => {
-    const type = t.type || inferCategory(t.reason)
-    if (dir === 'sent' && !t.sent) return false
-    if (dir === 'received' && t.sent) return false
-    if (cat && CAT_CODES[cat] && !CAT_CODES[cat].includes(type)) return false
-    if (q && !(t.reason||'').toLowerCase().includes(q.toLowerCase())) return false
-    return true
-  })
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PERPAGE))
+  const filtered = allTxns
+  const totalPages = Math.max(1, Math.ceil(total / PERPAGE))
   const safePage   = Math.min(page, totalPages)
-  const rows       = filtered.slice((safePage-1)*PERPAGE, safePage*PERPAGE)
+  const rows       = filtered
   const hasFilters = dir !== 'all' || cat !== '' || q !== ''
 
   const changeDir = d => { setDir(d); setPage(1) }
@@ -148,7 +151,7 @@ function BytesHistory({ data }) {
         ))}
         {hasFilters && (
           <span style={{fontSize:10,color:'var(--dim)',marginLeft:4}}>
-            {filtered.length.toLocaleString()} result{filtered.length!==1?'s':''}
+            {total.toLocaleString()} result{total!==1?'s':''}
           </span>
         )}
       </div>
@@ -285,11 +288,11 @@ function BytesHistory({ data }) {
         })
       }
 
-      {filtered.length > PERPAGE && (
+      {total > PERPAGE && (
         <div className="pg">
           <button className="pg-btn" disabled={safePage<=1} onClick={()=>setPage(safePage-1)}>&lt;</button>
           <span className="pg-info">{safePage} / {totalPages}
-            <span style={{color:'var(--dim)'}}> ({filtered.length.toLocaleString()} txns)</span>
+            <span style={{color:'var(--dim)'}}> ({total.toLocaleString()} txns)</span>
           </span>
           <button className="pg-btn" disabled={safePage>=totalPages} onClick={()=>setPage(safePage+1)}>&gt;</button>
         </div>

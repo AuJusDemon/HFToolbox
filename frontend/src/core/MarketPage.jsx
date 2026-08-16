@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { api } from './api.js'
 import { BBCode } from './WirePage.jsx'
-import MerchantPage from './MerchantPage.jsx'
+
+const MerchantPage = lazy(() => import('./MerchantPage.jsx'))
 
 const STATUS = {'-1':'Invalid','0':'Awaiting approval','1':'Expired','2':'Denied','3':'Middleman','4':'Canceled','5':'Active','6':'Complete','7':'Disputed','8':'Expired'}
 const CONTRACT_BUCKETS = [
@@ -263,7 +264,7 @@ function Disputes({access,onPurchase}) {
 }
 
 function MyBusiness({access,onPurchase}) {
-  return <div className="market-business"><div className="market-business-head"><div><div className="market-kicker">My Business</div><p>Your sales threads, leads, contracts, buyers, thread updates, reports, and settings. Market pass data adds comparisons and alerts, but the seller workspace stays available.</p></div>{!access?.paid&&<button className="btn" onClick={onPurchase}>Add market comparisons</button>}</div><MerchantPage embedded marketAccess={access}/></div>
+  return <div className="market-business"><div className="market-business-head"><div><div className="market-kicker">My Business</div><p>Your sales threads, leads, contracts, buyers, thread updates, reports, and settings. Market pass data adds comparisons and alerts, but the seller workspace stays available.</p></div>{!access?.paid&&<button className="btn" onClick={onPurchase}>Add market comparisons</button>}</div><Suspense fallback={<Empty>Loading My Business...</Empty>}><MerchantPage embedded marketAccess={access}/></Suspense></div>
 }
 
 function Watches({access,onPurchase}) {

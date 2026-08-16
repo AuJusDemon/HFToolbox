@@ -167,6 +167,25 @@ def init_market_db() -> None:
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS market_thread_contract_rollups (
+                tid BIGINT PRIMARY KEY,
+                observed_contracts INTEGER NOT NULL DEFAULT 0,
+                awaiting_contracts INTEGER NOT NULL DEFAULT 0,
+                denied_contracts INTEGER NOT NULL DEFAULT 0,
+                cancelled_contracts INTEGER NOT NULL DEFAULT 0,
+                middleman_contracts INTEGER NOT NULL DEFAULT 0,
+                active_contracts INTEGER NOT NULL DEFAULT 0,
+                complete_contracts INTEGER NOT NULL DEFAULT 0,
+                disputed_contracts INTEGER NOT NULL DEFAULT 0,
+                expired_contracts INTEGER NOT NULL DEFAULT 0,
+                invalid_contracts INTEGER NOT NULL DEFAULT 0,
+                other_contracts INTEGER NOT NULL DEFAULT 0,
+                last_contract_at BIGINT NOT NULL DEFAULT 0,
+                last_contract_seen_at BIGINT NOT NULL DEFAULT 0,
+                updated_at BIGINT NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS market_contract_cursors (
                 direction VARCHAR(12) PRIMARY KEY,
                 anchor_cid BIGINT NOT NULL,
@@ -377,7 +396,17 @@ def init_market_db() -> None:
         for statement in (
             "CREATE INDEX idx_mtt_topic_band ON market_thread_topics (topic_id,confidence_band,tid)",
             "CREATE INDEX idx_mc_tid_status_date ON market_contracts (tid,status,contract_at)",
+            "CREATE INDEX idx_mc_status_date ON market_contracts (status,contract_at)",
             "CREATE INDEX idx_mt_type_created ON market_threads (market_type,created_at)",
+            "CREATE INDEX idx_mt_forum_created ON market_threads (fid,created_at)",
+            "CREATE INDEX idx_mt_category_created ON market_threads (category,created_at)",
+            "CREATE INDEX idx_mt_views ON market_threads (views)",
+            "CREATE INDEX idx_mt_replies ON market_threads (replies)",
+            "CREATE INDEX idx_mcr_last_contract ON market_thread_contract_rollups (last_contract_at)",
+            "CREATE INDEX idx_mcr_complete ON market_thread_contract_rollups (complete_contracts)",
+            "CREATE INDEX idx_mcr_active ON market_thread_contract_rollups (active_contracts)",
+            "CREATE INDEX idx_mcr_disputed ON market_thread_contract_rollups (disputed_contracts)",
+            "CREATE INDEX idx_mcr_expired ON market_thread_contract_rollups (expired_contracts)",
         ):
             try:
                 conn.execute(statement)
@@ -789,6 +818,8 @@ def update_opening_post(tid: int, message: str, digest: str) -> None:
             "last_post_fetched_at=? WHERE tid=?",
             (message, digest, now, tid),
         )
+        if tid:
+            _refresh_contract_rollup_conn(conn, tid)
         conn.execute("DELETE FROM market_cached_views WHERE cache_key='pulse' OR cache_key LIKE 'topics:%%'")
 
 
@@ -1000,6 +1031,8 @@ def upsert_contract(seller_uid: int, row: dict, status_refresh: bool = False) ->
                 "(tid,first_seen_at,next_attempt_at) VALUES (?,?,0)",
                 (tid, now),
             )
+        if tid:
+            _refresh_contract_rollup_conn(conn, tid)
         if tid and known_market_thread:
             conn.execute(
                 "INSERT INTO market_thread_refresh_queue "
@@ -1009,6 +1042,83 @@ def upsert_contract(seller_uid: int, row: dict, status_refresh: bool = False) ->
                 (tid, now),
             )
         conn.execute("DELETE FROM market_cached_views WHERE cache_key='pulse' OR cache_key LIKE 'topics:%%'")
+
+
+def _refresh_contract_rollup_conn(conn, tid: int) -> None:
+    tid = _as_int(tid)
+    if not tid:
+        return
+    now = int(time.time())
+    row = conn.execute(
+        "SELECT COUNT(*) observed_contracts,"
+        "SUM(status IN ('0','1')) awaiting_contracts,"
+        "SUM(status='2') denied_contracts,SUM(status='4') cancelled_contracts,"
+        "SUM(status='3') middleman_contracts,SUM(status='5') active_contracts,"
+        "SUM(status='6') complete_contracts,SUM(status='7') disputed_contracts,"
+        "SUM(status='8') expired_contracts,SUM(status='-1') invalid_contracts,"
+        "SUM(status NOT IN ('-1','0','1','2','3','4','5','6','7','8')) other_contracts,"
+        "MAX(contract_at) last_contract_at,MAX(last_seen_at) last_contract_seen_at "
+        "FROM market_contracts WHERE tid=?",
+        (tid,),
+    ).fetchone()
+    if not row or int(_value(row, "observed_contracts", 0) or 0) <= 0:
+        conn.execute("DELETE FROM market_thread_contract_rollups WHERE tid=?", (tid,))
+        return
+    conn.execute(
+        "INSERT INTO market_thread_contract_rollups "
+        "(tid,observed_contracts,awaiting_contracts,denied_contracts,cancelled_contracts,"
+        "middleman_contracts,active_contracts,complete_contracts,disputed_contracts,"
+        "expired_contracts,invalid_contracts,other_contracts,last_contract_at,last_contract_seen_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(tid) DO UPDATE SET "
+        "observed_contracts=excluded.observed_contracts,awaiting_contracts=excluded.awaiting_contracts,"
+        "denied_contracts=excluded.denied_contracts,cancelled_contracts=excluded.cancelled_contracts,"
+        "middleman_contracts=excluded.middleman_contracts,active_contracts=excluded.active_contracts,"
+        "complete_contracts=excluded.complete_contracts,disputed_contracts=excluded.disputed_contracts,"
+        "expired_contracts=excluded.expired_contracts,invalid_contracts=excluded.invalid_contracts,"
+        "other_contracts=excluded.other_contracts,last_contract_at=excluded.last_contract_at,"
+        "last_contract_seen_at=excluded.last_contract_seen_at,updated_at=excluded.updated_at",
+        (
+            tid,
+            int(_value(row, "observed_contracts", 0) or 0),
+            int(_value(row, "awaiting_contracts", 0) or 0),
+            int(_value(row, "denied_contracts", 0) or 0),
+            int(_value(row, "cancelled_contracts", 0) or 0),
+            int(_value(row, "middleman_contracts", 0) or 0),
+            int(_value(row, "active_contracts", 0) or 0),
+            int(_value(row, "complete_contracts", 0) or 0),
+            int(_value(row, "disputed_contracts", 0) or 0),
+            int(_value(row, "expired_contracts", 0) or 0),
+            int(_value(row, "invalid_contracts", 0) or 0),
+            int(_value(row, "other_contracts", 0) or 0),
+            int(_value(row, "last_contract_at", 0) or 0),
+            int(_value(row, "last_contract_seen_at", 0) or 0),
+            now,
+        ),
+    )
+
+
+def refresh_contract_rollups(tids: list[int] | None = None) -> int:
+    with _db() as conn:
+        if tids:
+            changed = 0
+            for tid in sorted({_as_int(tid) for tid in tids if _as_int(tid)}):
+                _refresh_contract_rollup_conn(conn, tid)
+                changed += 1
+            return changed
+        rows = conn.execute("SELECT DISTINCT tid FROM market_contracts WHERE tid>0").fetchall()
+        for row in rows:
+            _refresh_contract_rollup_conn(conn, int(_value(row, "tid", 0) or 0))
+        return len(rows)
+
+
+def _ensure_contract_rollups(conn) -> None:
+    existing = conn.execute("SELECT COUNT(*) n FROM market_thread_contract_rollups").fetchone()
+    if int(_value(existing, "n", 0) or 0) > 0:
+        return
+    tids = conn.execute("SELECT DISTINCT tid FROM market_contracts WHERE tid>0 LIMIT 50000").fetchall()
+    for row in tids:
+        _refresh_contract_rollup_conn(conn, int(_value(row, "tid", 0) or 0))
 
 
 def get_contract_cursor(direction: str) -> dict:
@@ -1355,47 +1465,37 @@ def list_threads(
         params.append(int(time.time()) - max(1, min(days, 365)) * 86400)
     where = " AND ".join(clauses)
     offset = (page - 1) * perpage
-    contract_counts = (
-        "SELECT tid,COUNT(*) total,"
-        "SUM(status='0') awaiting_count,"
-        "SUM(status='2') denied_count,SUM(status='4') cancelled_count,"
-        "SUM(status='3') middleman_count,SUM(status='5') active_count,"
-        "SUM(status='6') complete_count,SUM(status='7') disputed_count,"
-        "SUM(status IN ('1','8')) expired_count,SUM(status='-1') invalid_count,"
-        "SUM(status NOT IN ('-1','0','1','2','3','4','5','6','7','8')) other_count,"
-        "MAX(contract_at) last_contract_at,MAX(last_seen_at) last_contract_seen_at "
-        "FROM market_contracts GROUP BY tid"
-    )
     direction = "ASC" if sort_dir.lower() == "asc" else "DESC"
     sort_column = {
         "newest": "t.created_at", "posted": "t.created_at",
         "views": "t.views", "replies": "t.replies",
         "recent_contracts": "COALESCE(c.last_contract_at,0)",
-        "total_contracts": "COALESCE(c.total,0)",
-        "complete_contracts": "COALESCE(c.complete_count,0)",
-        "active_contracts": "COALESCE(c.active_count,0)",
-        "cancelled_contracts": "COALESCE(c.cancelled_count,0)",
-        "disputed_contracts": "COALESCE(c.disputed_count,0)",
-        "expired_contracts": "COALESCE(c.expired_count,0)",
+        "total_contracts": "COALESCE(c.observed_contracts,0)",
+        "complete_contracts": "COALESCE(c.complete_contracts,0)",
+        "active_contracts": "COALESCE(c.active_contracts,0)",
+        "cancelled_contracts": "COALESCE(c.cancelled_contracts,0)",
+        "disputed_contracts": "COALESCE(c.disputed_contracts,0)",
+        "expired_contracts": "COALESCE(c.expired_contracts,0)",
     }.get(sort, "t.created_at")
     order_by = f"{sort_column} {direction},t.created_at DESC"
     with _db() as conn:
+        _ensure_contract_rollups(conn)
         rows = conn.execute(
             f"SELECT t.*,f.name forum_name,"
-            "COALESCE(c.total,0) observed_contracts,"
-            "COALESCE(c.active_count,0) active_contracts,"
-            "COALESCE(c.complete_count,0) complete_contracts,"
-            "COALESCE(c.awaiting_count,0) awaiting_contracts,"
-            "COALESCE(c.denied_count,0) denied_contracts,"
-            "COALESCE(c.cancelled_count,0) cancelled_contracts,"
-            "COALESCE(c.middleman_count,0) middleman_contracts,"
-            "COALESCE(c.disputed_count,0) disputed_contracts,"
-            "COALESCE(c.expired_count,0) expired_contracts,"
-            "COALESCE(c.invalid_count,0) invalid_contracts,"
-            "COALESCE(c.other_count,0) other_contracts,"
+            "COALESCE(c.observed_contracts,0) observed_contracts,"
+            "COALESCE(c.active_contracts,0) active_contracts,"
+            "COALESCE(c.complete_contracts,0) complete_contracts,"
+            "COALESCE(c.awaiting_contracts,0) awaiting_contracts,"
+            "COALESCE(c.denied_contracts,0) denied_contracts,"
+            "COALESCE(c.cancelled_contracts,0) cancelled_contracts,"
+            "COALESCE(c.middleman_contracts,0) middleman_contracts,"
+            "COALESCE(c.disputed_contracts,0) disputed_contracts,"
+            "COALESCE(c.expired_contracts,0) expired_contracts,"
+            "COALESCE(c.invalid_contracts,0) invalid_contracts,"
+            "COALESCE(c.other_contracts,0) other_contracts,"
             "COALESCE(c.last_contract_seen_at,0) last_contract_seen_at "
             "FROM market_threads t JOIN market_forums f ON f.fid=t.fid "
-            f"LEFT JOIN ({contract_counts}) c ON c.tid=t.tid "
+            "LEFT JOIN market_thread_contract_rollups c ON c.tid=t.tid "
             f"WHERE {where} ORDER BY {order_by} LIMIT ? OFFSET ?",
             (*params, perpage, offset),
         ).fetchall()
@@ -1513,14 +1613,10 @@ def pulse(force: bool = False) -> dict:
         category_rows = conn.execute(
             "SELECT t.category,COUNT(*) threads,"
             "SUM(t.market_type='wtb') wtb_threads,"
-            "COALESCE(SUM(c.contracts),0) contracts,"
+            "COALESCE(SUM(c.observed_contracts),0) contracts,"
             "COALESCE(SUM(c.active_contracts),0) active_contracts,"
             "COALESCE(SUM(c.complete_contracts),0) complete_contracts "
-            "FROM market_threads t LEFT JOIN ("
-            "SELECT tid,COUNT(*) contracts,SUM(status='5') active_contracts,"
-            "SUM(status='6') complete_contracts "
-            "FROM market_contracts GROUP BY tid"
-            ") c ON c.tid=t.tid "
+            "FROM market_threads t LEFT JOIN market_thread_contract_rollups c ON c.tid=t.tid "
             "WHERE t.first_seen_at>=? AND t.market_type IN ('wtb','wts') AND "
             "LOWER(TRIM(COALESCE(t.opening_post,''))) NOT IN ('[deleted]','deleted') "
             "GROUP BY t.category "

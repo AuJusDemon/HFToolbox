@@ -23,9 +23,19 @@ const fmtCd = s => {
 function usePolling(fn, ms) {
   const ref = useRef(fn); ref.current = fn
   useEffect(() => {
+    if (ms == null) return undefined
     const id = setInterval(() => ref.current(), ms)
     return () => clearInterval(id)
   }, [ms])
+}
+
+function useDelayedRefresh(fn, enabled, delay = 400) {
+  const ref = useRef(fn); ref.current = fn
+  useEffect(() => {
+    if (!enabled) return undefined
+    const id = setTimeout(() => ref.current(), delay)
+    return () => clearTimeout(id)
+  }, [enabled, delay])
 }
 
 const STATUS_COLORS = {
@@ -65,15 +75,15 @@ function CardHeader({ icon, title, badge, badgeColor, to, extra }) {
 }
 
 // ── AUTO BUMPER ───────────────────────────────────────────────────────────────
-function BumperOverview() {
+function BumperOverview({ initialCount = null, deferLoad = false }) {
   const nav = useNavigate()
   const [jobs, setJobs] = useState([])
   const load = useCallback(() =>
     api.get('/api/autobump/jobs').then(d => setJobs(d?.jobs||[])).catch(() => {})
   , [])
-  useEffect(() => { load() }, [])
+  useDelayedRefresh(load, !deferLoad)
   const throttle = useStore(s => s.throttle)
-  usePolling(load, throttledInterval(60000, throttle))
+  usePolling(load, deferLoad ? null : throttledInterval(60000, throttle))
 
   const enabled  = jobs.filter(j => j.enabled)
   const dueCount = jobs.filter(j => j.enabled && (j.seconds_until_bump||0) <= 0).length
@@ -162,9 +172,9 @@ function BumperOverview() {
 }
 
 // ── BYTES OVERVIEW ────────────────────────────────────────────────────────────
-function BytesOverview() {
+function BytesOverview({ initialData = null, deferLoad = false }) {
   const nav = useNavigate()
-  const [data,    setData]    = useState(null)
+  const [data,    setData]    = useState(initialData)
   const [toUid,   setToUid]   = useState('')
   const [amount,  setAmount]  = useState('')
   const [reason,  setReason]  = useState('')
@@ -173,11 +183,10 @@ function BytesOverview() {
 
   const refresh = () => api.get('/api/dash/bytes').then(d => { if(d) setData(d) }).catch(() => {})
 
-  useEffect(() => {
-    refresh()
-  }, [])
+  useEffect(() => { if (initialData) setData(initialData) }, [initialData])
+  useDelayedRefresh(refresh, !deferLoad)
   const throttle = useStore(s => s.throttle)
-  usePolling(refresh, throttledInterval(120000, throttle))
+  usePolling(refresh, deferLoad ? null : throttledInterval(120000, throttle))
 
   const txns = (data?.transactions || []).slice(0, 10)
 
@@ -189,7 +198,6 @@ function BytesOverview() {
       await api.post('/api/dash/bytes/send', { to_uid: toUid.trim(), amount: Number(amount), reason: reason.trim() })
       setSendMsg({ ok: true, text: 'Sent!' })
       setToUid(''); setAmount(''); setReason('')
-      setSending(false)
       refresh()
     } catch (err) {
       setSendMsg({ ok: false, text: err.message || 'Failed' })
@@ -264,20 +272,23 @@ function BytesOverview() {
 }
 
 // ── CONTRACTS OVERVIEW ────────────────────────────────────────────────────────
-function ContractsOverview() {
+function ContractsOverview({ initialData = null, deferLoad = false }) {
   const nav = useNavigate()
-  const [data, setData] = useState(null)
-
-  useEffect(() => {
+  const [data, setData] = useState(initialData)
+  const load = useCallback(() => {
     api.get('/api/dash/contracts').then(d => { if(d) setData(d) }).catch(() => {})
   }, [])
+
+  useEffect(() => { if (initialData) setData(initialData) }, [initialData])
+  useDelayedRefresh(load, !deferLoad)
   const throttle = useStore(s => s.throttle)
-  usePolling(() => api.get('/api/dash/contracts').then(d => { if(d) setData(d) }).catch(() => {}), throttledInterval(300000, throttle))
+  usePolling(load, deferLoad ? null : throttledInterval(300000, throttle))
 
   const contracts = (data?.contracts || []).slice(0, 10)
-  const active    = (data?.contracts||[]).filter(c => c.status_n === '5').length
-  const awaiting  = (data?.contracts||[]).filter(c => c.status_n === '1').length
-  const disputed  = (data?.contracts||[]).filter(c => c.status_n === '7').length
+  const counts    = data?.counts || {}
+  const active    = counts.active ?? (data?.contracts||[]).filter(c => c.status_n === '5').length
+  const awaiting  = counts.awaiting ?? (data?.contracts||[]).filter(c => c.status_n === '1').length
+  const disputed  = counts.disputed ?? (data?.contracts||[]).filter(c => c.status_n === '7').length
   const total     = data?.total_count ?? (data?.contracts||[]).length
 
   return (
@@ -390,19 +401,20 @@ function UserLookup() {
 }
 
 // ── SIGMARKET OVERVIEW ────────────────────────────────────────────────────────
-function SigmarketOverview() {
+function SigmarketOverview({ initialData = null, deferLoad = false }) {
   const nav       = useNavigate()
   const isEnabled = useStore(s => s.isEnabled)
   const apiPaused = useStore(s => s.apiPaused)
-  const [data, setData] = useState(null)
+  const [data, setData] = useState(initialData)
 
   const load = useCallback(() => {
     api.get('/api/sigmarket/status').then(d => { if(d) setData(d) }).catch(() => {})
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { if (initialData) setData(initialData) }, [initialData])
+  useDelayedRefresh(load, !deferLoad)
   const throttle = useStore(s => s.throttle)
-  usePolling(load, apiPaused ? null : throttledInterval(300000, throttle))
+  usePolling(load, (apiPaused || deferLoad) ? null : throttledInterval(300000, throttle))
 
   if (!isEnabled('sigmarket')) return null
 
@@ -488,7 +500,7 @@ function SigmarketOverview() {
 
 
 // ── MERCHANT HQ CARD ──────────────────────────────────────────────────────────
-function MerchantHQCard() {
+function MerchantHQCard({ deferLoad = false }) {
   const nav = useNavigate()
   const [data, setData] = useState(null)
 
@@ -496,9 +508,9 @@ function MerchantHQCard() {
     api.get('/api/merchant/overview').then(d => { if (d) setData(d) }).catch(() => {})
   }, [])
 
-  useEffect(() => { load() }, [load])
+  useDelayedRefresh(load, !deferLoad)
   const throttle = useStore(s => s.throttle)
-  usePolling(load, throttledInterval(120000, throttle))
+  usePolling(load, deferLoad ? null : throttledInterval(120000, throttle))
 
   const actionCount = data?.action_queue?.length ?? 0
   const slaBreaches = data?.pipeline?.sla_breaches ?? 0
@@ -576,6 +588,17 @@ function DashGrid({ children }) {
 
 export default function Dashboard() {
   const isEnabled = useStore(s => s.isEnabled)
+  const throttle = useStore(s => s.throttle)
+  const [snapshot, setSnapshot] = useState(null)
+  const [snapshotReady, setSnapshotReady] = useState(false)
+  const loadSnapshot = useCallback(() => {
+    api.get('/api/dashboard/snapshot')
+      .then(d => { if (d) setSnapshot(d); setSnapshotReady(true) })
+      .catch(() => setSnapshotReady(true))
+  }, [])
+
+  useEffect(() => { loadSnapshot() }, [loadSnapshot])
+  usePolling(loadSnapshot, throttledInterval(60000, throttle))
 
   const showBumper    = isEnabled('autobump')
   const showBytes     = isEnabled('bytes')
@@ -585,14 +608,14 @@ export default function Dashboard() {
 
   return (
     <>
-      {showBumper && <BumperOverview />}
+      {showBumper && <BumperOverview initialCount={snapshot?.job_count} deferLoad={!snapshotReady} />}
       <DashGrid>
-        {showBytes     && <BytesOverview />}
-        {showContracts && <ContractsOverview />}
+        {showBytes     && <BytesOverview initialData={snapshot?.bytes} deferLoad={!snapshotReady} />}
+        {showContracts && <ContractsOverview initialData={snapshot?.contracts} deferLoad={!snapshotReady} />}
       </DashGrid>
       <DashGrid>
-        {showMerchant  && <MerchantHQCard />}
-        {showSigmarket && <SigmarketOverview />}
+        {showMerchant  && <MerchantHQCard deferLoad={!snapshotReady} />}
+        {showSigmarket && <SigmarketOverview initialData={snapshot?.sig_status} deferLoad={!snapshotReady} />}
       </DashGrid>
       <DashGrid>
         <UserLookup />

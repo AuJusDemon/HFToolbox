@@ -5,32 +5,20 @@ import useStore    from './store.js'
 import Shell       from './core/Shell.jsx'
 import Login       from './core/Login.jsx'
 import Dashboard   from './core/Dashboard.jsx'
-import Settings    from './core/Settings.jsx'
-import BytesPage   from './core/BytesPage.jsx'
 import { api }     from './core/api.js'
 
-// Lazy-load heavier pages. They preload immediately so first nav is instant.
-const _preloadContracts = import('./core/ContractsPage.jsx')
-const _preloadBumper    = import('./core/BumperPage.jsx')
-const _preloadDetail    = import('./core/ContractDetailPage.jsx')
-const _preloadGroups    = import('./core/GroupsPage.jsx')
-const _preloadUser      = import('./core/UserPage.jsx')
-const _preloadPosting   = import('./core/PostingPage.jsx')
-const _preloadSigmarket = import('./core/SigmarketPage.jsx')
-const _preloadWire      = import('./core/WirePage.jsx')
-const _preloadMerchant  = import('./core/MerchantPage.jsx')
-const _preloadMarket    = import('./core/MarketPage.jsx')
-
-const ContractsPage      = lazy(() => _preloadContracts)
-const BumperPage         = lazy(() => _preloadBumper)
-const ContractDetailPage = lazy(() => _preloadDetail)
-const GroupsPage         = lazy(() => _preloadGroups)
-const UserPage           = lazy(() => _preloadUser)
-const PostingPage        = lazy(() => _preloadPosting)
-const SigmarketPage      = lazy(() => _preloadSigmarket)
-const WirePage           = lazy(() => _preloadWire)
-const MerchantPage       = lazy(() => _preloadMerchant)
-const MarketPage         = lazy(() => _preloadMarket)
+// Heavy pages load only when routed. Shell, Login, and Dashboard stay eager.
+const BytesPage          = lazy(() => import('./core/BytesPage.jsx'))
+const Settings           = lazy(() => import('./core/Settings.jsx'))
+const ContractsPage      = lazy(() => import('./core/ContractsPage.jsx'))
+const BumperPage         = lazy(() => import('./core/BumperPage.jsx'))
+const ContractDetailPage = lazy(() => import('./core/ContractDetailPage.jsx'))
+const GroupsPage         = lazy(() => import('./core/GroupsPage.jsx'))
+const UserPage           = lazy(() => import('./core/UserPage.jsx'))
+const PostingPage        = lazy(() => import('./core/PostingPage.jsx'))
+const SigmarketPage      = lazy(() => import('./core/SigmarketPage.jsx'))
+const WirePage           = lazy(() => import('./core/WirePage.jsx'))
+const MarketPage         = lazy(() => import('./core/MarketPage.jsx'))
 
 function RequireAuth({ children }) {
   const { user, authLoading } = useStore()
@@ -131,11 +119,11 @@ export default function App() {
         <Route path="/" element={<Login />} />
         <Route path="/dashboard" element={<RequireAuth><Shell /></RequireAuth>}>
           <Route index element={<GuardedRoute><Dashboard /></GuardedRoute>} />
-          <Route path="bytes"          element={<GuardedRoute><BytesPage /></GuardedRoute>} />
+          <Route path="bytes"          element={<GuardedRoute><Suspense fallback={<Spin/>}><BytesPage /></Suspense></GuardedRoute>} />
           <Route path="contracts"      element={<GuardedRoute><Suspense fallback={<Spin/>}><ContractsPage /></Suspense></GuardedRoute>} />
           <Route path="contracts/:cid" element={<GuardedRoute><Suspense fallback={<Spin/>}><ContractDetailPage /></Suspense></GuardedRoute>} />
           <Route path="bumper"         element={<GuardedRoute><Suspense fallback={<Spin/>}><BumperPage /></Suspense></GuardedRoute>} />
-          <Route path="settings"       element={<GuardedRoute><Settings /></GuardedRoute>} />
+          <Route path="settings"       element={<GuardedRoute><Suspense fallback={<Spin/>}><Settings /></Suspense></GuardedRoute>} />
           <Route path="user/:uid"      element={<GuardedRoute><Suspense fallback={<Spin/>}><UserPage /></Suspense></GuardedRoute>} />
           <Route path="posting/join/:token" element={<DraftJoinRedirect />} />
           <Route path="posting"        element={<GuardedRoute><Suspense fallback={<Spin/>}><PostingPage /></Suspense></GuardedRoute>} />
