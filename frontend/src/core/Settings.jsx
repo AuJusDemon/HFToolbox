@@ -197,11 +197,6 @@ function ApiRefreshSection({ settings, save }) {
     { v: 40, l: '40' }, { v: 50, l: '50' }, { v: 75, l: '75' },
     { v: 100, l: '100' },
   ]
-  const intervalOpts = [
-    { v: 30, l: '30s' }, { v: 60, l: '1m' }, { v: 120, l: '2m' },
-    { v: 300, l: '5m' }, { v: 600, l: '10m' },
-  ]
-
   return (
     <div className="card" style={{ marginBottom: 12 }}>
       <div className="card-head">
@@ -228,16 +223,6 @@ function ApiRefreshSection({ settings, save }) {
         </Row>
         <Row label="Pause threshold" hint="Browser polling pauses below this remaining-call count.">
           <SelectControl value={settings.apiFloor} onChange={v => save({ apiFloor: v })} options={floorOpts} />
-        </Row>
-        <SectionLabel>Polling intervals</SectionLabel>
-        <Row label="Bytes" hint="Balance and bytes history polling.">
-          <SelectControl value={settings.bytesInterval} onChange={v => save({ bytesInterval: v })} options={intervalOpts} />
-        </Row>
-        <Row label="Contracts" hint="Contract dashboard polling.">
-          <SelectControl value={settings.contractsInterval} onChange={v => save({ contractsInterval: v })} options={intervalOpts} />
-        </Row>
-        <Row label="Auto Bumper" hint="Bump job and budget polling.">
-          <SelectControl value={settings.bumperInterval} onChange={v => save({ bumperInterval: v })} options={intervalOpts} />
         </Row>
         <Row label="Refresh my data" hint={message || 'Queues the normal refresh worker. Cooldown prevents accidental repeat refreshes.'} last>
           <button className="btn btn-ghost" onClick={refreshNow} disabled={refreshing}>
@@ -677,7 +662,7 @@ export default function Settings() {
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-.02em', marginBottom: 4 }}>Settings</div>
         <div style={{ fontSize: 12, color: 'var(--sub)' }}>
-          Account controls, polling intervals, dashboard cards, Telegram delivery, alerts, and stored data.
+          Account controls, dashboard cards, Telegram delivery, alerts, and stored data.
         </div>
       </div>
 
