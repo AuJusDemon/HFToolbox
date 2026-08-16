@@ -33,9 +33,7 @@ const TAB_META = {
 
 function MerchantSettings({marketAccess=null}) {
   const [goals,setGoals]=useState(null),[templates,setTemplates]=useState([]),[saved,setSaved]=useState(false)
-  const [notifications,setNotifications]=useState(null)
   useEffect(()=>{api.get('/api/merchant/goals').then(setGoals);api.get('/api/merchant/pm-templates').then(setTemplates)},[])
-  useEffect(()=>{if(marketAccess?.paid)api.get('/api/merchant/notification-preferences').then(setNotifications)},[marketAccess?.paid])
   if(!goals)return <div className="empty">Loading seller settings...</div>
   const save=async()=>{setSaved(false);await api.patch('/api/merchant/goals',goals);setSaved(true)}
   return <div className="mhq-shell"><section><div className="mhq-section-head"><div><h3>Seller Workflow Defaults</h3><p>These rules control due work and performance warnings across My Business.</p></div></div>
@@ -43,7 +41,7 @@ function MerchantSettings({marketAccess=null}) {
     <button className="btn btn-acc" onClick={save}>Save settings</button>{saved&&<span className="market-note"> Saved.</span>}
     </section><section className="mhq-section"><div className="mhq-section-head"><div><h3>PM Templates</h3><p>{templates.length} templates available for contract and lead follow-ups.</p></div></div>
     <div className="mhq-table-wrap"><table className="mhq-table"><thead><tr><th>Template</th><th>Subject</th></tr></thead><tbody>{templates.map(t=><tr key={t.template_id}><td className="mhq-table-primary">{t.name}</td><td>{t.subject||'No subject'}</td></tr>)}</tbody></table></div>
-    </section>{marketAccess?.paid&&notifications&&<section className="mhq-section"><div className="mhq-section-head"><div><h3>Telegram reminders</h3><p>Choose which seller tasks are delivered to your connected Telegram account.</p></div></div><div className="mhq-settings-checks"><label><input type="checkbox" checked={notifications.telegram_replies} onChange={e=>setNotifications({...notifications,telegram_replies:e.target.checked})}/> New replies to owned sales threads</label><label><input type="checkbox" checked={notifications.telegram_followups} onChange={e=>setNotifications({...notifications,telegram_followups:e.target.checked})}/> Follow-ups that are due</label><label><input type="checkbox" checked={notifications.telegram_ratings} onChange={e=>setNotifications({...notifications,telegram_ratings:e.target.checked})}/> Contracts waiting for a rating</label></div><button className="btn" onClick={()=>api.put('/api/merchant/notification-preferences',notifications)}>Save reminder settings</button></section>}
+    </section><section className="mhq-section"><div className="mhq-section-head"><div><h3>Telegram reminders</h3><p>Seller reminders now use the global Telegram and Alert Preferences settings.</p></div></div><a className="btn" href="/dashboard/settings">Open notification settings</a></section>
   </div>
 }
 

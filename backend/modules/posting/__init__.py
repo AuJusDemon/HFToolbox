@@ -395,19 +395,6 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 log.warning("Reply poll: username batch failed uid=%s: %s", uid, e)
 
         # ── Queue replies ────────────────────────────────────────────────────
-        telegram_replies = False
-        try:
-            from modules.merchant.merchant_db import get_notification_preferences
-            from modules.market.market_db import access_status
-            prefs = await asyncio.to_thread(get_notification_preferences, uid)
-            owner_uid = str(__import__("os").environ.get("MARKET_TOKEN_UID", "")).strip()
-            market_paid = uid == owner_uid
-            if not market_paid:
-                market_paid = bool((await asyncio.to_thread(access_status, uid)).get("paid"))
-            telegram_replies = market_paid and bool(prefs.get("telegram_replies"))
-        except Exception as exc:
-            log.debug("Reply poll: Telegram preference unavailable uid=%s: %s", uid, exc)
-
         _QUOTE_BLOCK = re.compile(r'\[quote[^\]]*\][\s\S]*?\[/quote\]', re.IGNORECASE)
         for item in pending:
             tid_str      = item["tid_str"]
@@ -440,7 +427,7 @@ async def poll_reply_queues(active_uids: set | None = None) -> None:
                 f"Reply in: {thread_title or tid_str}",
                 f"{post_username}: {preview}" if post_username else preview,
                 f"https://hackforums.net/showthread.php?tid={tid_str}&pid={pid_str}#pid{pid_str}",
-                "toolbox", None, True, telegram_replies,
+                "toolbox", None, True, True,
             )
 
         # ── Update last_pid cursors ──────────────────────────────────────────

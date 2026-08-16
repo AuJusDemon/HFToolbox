@@ -510,6 +510,18 @@ async def _telegram_delivery_loop():
                         )
                     except Exception:
                         log.warning("Delivery: failed to mark event %s delivered", event["id"])
+                else:
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(
+                                integration_db.mark_alert_event_failed,
+                                event["id"],
+                                "telegram_send_failed",
+                            ),
+                            timeout=10,
+                        )
+                    except Exception:
+                        log.warning("Delivery: failed to mark event %s failed", event["id"])
                 await asyncio.sleep(0.05)
         except asyncio.TimeoutError:
             log.warning("Telegram delivery loop: DB timed out fetching events, skipping cycle")
@@ -1069,7 +1081,46 @@ async def rate_limit(request: Request):
     from HFClient import get_rate_limit_remaining
     remaining = get_rate_limit_remaining(token)
     throttle  = _throttle_level()
-    return {"remaining": remaining, "throttle": throttle}
+    settings = await asyncio.to_thread(db.get_user_settings, uid)
+    floor_enabled = bool(settings.get("apiFloorEnabled", False))
+    floor_value = int(settings.get("apiFloor", 30))
+    polling_paused = bool(floor_enabled and remaining is not None and remaining < floor_value)
+    return {
+        "remaining": remaining,
+        "throttle": throttle,
+        "polling_paused": polling_paused,
+        "api_floor_enabled": floor_enabled,
+        "api_floor": floor_value,
+    }
+
+
+@app.post("/api/refresh-now")
+async def refresh_now(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    token = await asyncio.to_thread(db.get_token, uid)
+    if not token:
+        return JSONResponse({"error": "no token"}, status_code=401)
+
+    now = int(_time.time())
+    settings = await asyncio.to_thread(db.get_user_settings, uid)
+    last = int(settings.get("manualRefreshLast", 0) or 0)
+    cooldown = 180
+    remaining_wait = cooldown - (now - last)
+    if remaining_wait > 0:
+        return JSONResponse(
+            {"error": "cooldown", "retry_after": remaining_wait},
+            status_code=429,
+        )
+
+    settings["manualRefreshLast"] = now
+    await asyncio.to_thread(db.save_user_settings, uid, settings)
+    try:
+        _crawl_trigger.put_nowait(uid)
+    except asyncio.QueueFull:
+        return JSONResponse({"error": "refresh_already_queued"}, status_code=429)
+    return {"ok": True, "cooldown_seconds": cooldown}
 
 
 @app.get("/api/shell-data")
@@ -1953,6 +2004,30 @@ async def get_alert_prefs(request: Request):
     return {"preferences": prefs}
 
 
+@app.get("/api/telegram/delivery-status")
+async def telegram_delivery_status(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    link = await asyncio.to_thread(integration_db.get_telegram_link, uid)
+    status = await asyncio.to_thread(integration_db.get_alert_delivery_status, uid)
+    status["linked"] = bool(link)
+    if link:
+        status["chat_id"] = link.get("chat_id")
+        status["linked_at"] = link.get("linked_at")
+    return status
+
+
+@app.post("/api/telegram/mark-seen")
+async def mark_telegram_alerts_seen(request: Request):
+    uid = request.session.get("uid")
+    if not uid:
+        return JSONResponse({"error": "unauthenticated"}, status_code=401)
+    result = await asyncio.to_thread(integration_db.mark_existing_alerts_seen, uid)
+    status = await asyncio.to_thread(integration_db.get_alert_delivery_status, uid)
+    return {"ok": True, "result": result, "status": status}
+
+
 @app.patch("/api/telegram/alert-preferences")
 async def set_alert_prefs(request: Request):
     uid = request.session.get("uid")
@@ -1965,7 +2040,8 @@ async def set_alert_prefs(request: Request):
                 integration_db.set_alert_preference, uid, str(event_type), enabled
             )
     prefs = await asyncio.to_thread(integration_db.get_alert_preferences, uid)
-    return {"preferences": prefs}
+    status = await asyncio.to_thread(integration_db.get_alert_delivery_status, uid)
+    return {"preferences": prefs, "delivery": status}
 
 
 @app.get("/api/notifications")
