@@ -13,10 +13,20 @@ const CONTRACT_BUCKETS = [
   ['invalid_contracts','invalid'],['other_contracts','other'],
 ]
 const CATEGORIES = ['hosting','social','accounts','design','development','security','crypto','gaming','marketing','data','other']
-const FORUMS = [
-  [107,'Premium Sellers'],[44,'Buyers Bay'],[308,'Service Requests'],[106,'Service Offerings'],
-  [145,'Hosting Services'],[263,'Social Media Services'],[171,'VPN and Proxy Services'],
-  [291,'Online Accounts'],[225,'Webmaster Marketplace'],[176,'Member Sales Market'],
+const FALLBACK_FORUMS = [
+  [163,'Marketplace Discussions'],[402,'Promotional Advertising'],
+  [186,'Free Services and Giveaways'],[205,'Appraisals and Pricing'],
+  [217,'Jobs and Partnerships'],[111,'Deal Disputes'],
+  [107,'Premium Sellers Section'],[374,'Premium Tools and Programs'],
+  [299,'Cryptography and Encryption Market'],[136,'Ebook Bazaar'],
+  [182,'Currency Exchange'],[218,'Virtual Game Items'],
+  [145,'Hosting Services'],[263,'Social Media Services'],
+  [106,'Service Offerings'],[219,'Graphics Market'],
+  [171,'VPN and Proxy Services'],[308,'Service Requests'],
+  [44,'Buyers Bay'],[176,'Member Sales Market'],
+  [291,'Online Accounts'],[404,'Marketplace Miscellaneous'],
+  [339,'Hash Bounties'],[255,'Rewards and Small Favors'],
+  [225,'Webmaster Marketplace'],
 ]
 
 function ago(ts) {
@@ -120,9 +130,10 @@ function MarketFreshness({data}) {
   </div>
 }
 
-function Threads({preset={},onPresetUsed,access,onPurchase}) {
+function Threads({preset={},onPresetUsed,access,onPurchase,forums=[]}) {
   const [data,setData]=useState(null),[selected,setSelected]=useState(preset.tid||null),[detail,setDetail]=useState(null)
   const [filters,setFilters]=useState({q:'',category:'',fid:'',market_type:'',sort:'posted',sort_dir:'desc',days:'0',contract_status:'',topic_id:'',topic_name:'',page:1,...preset})
+  const forumOptions=forums.length?forums:FALLBACK_FORUMS
   const presetKey=JSON.stringify(preset)
   useEffect(()=>{if(Object.keys(preset).length){if(preset.tid)setSelected(preset.tid);setFilters(f=>({...f,...preset,page:1}));onPresetUsed?.()}},[presetKey])
   const query=useMemo(()=>{
@@ -157,7 +168,7 @@ function Threads({preset={},onPresetUsed,access,onPurchase}) {
       <label>Search<input className="inp" placeholder="Product, service, phrase, or seller" value={filters.q} onChange={e=>change('q',e.target.value)}/></label>
       <label>Listing type<select className="inp" value={filters.market_type} onChange={e=>change('market_type',e.target.value)}><option value="">Selling and buying</option><option value="wts">Selling</option><option value="wtb">Buyer requests</option></select></label>
       <label>Category<select className="inp" value={filters.category} onChange={e=>change('category',e.target.value)}><option value="">All categories</option>{CATEGORIES.map(v=><option key={v}>{v}</option>)}</select></label>
-      <label>Forum<select className="inp" value={filters.fid} onChange={e=>change('fid',e.target.value)}><option value="">All forums</option>{FORUMS.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
+      <label>Forum<select className="inp" value={filters.fid} onChange={e=>change('fid',e.target.value)}><option value="">All forums</option>{forumOptions.map(([id,name])=><option key={id} value={id}>{name}</option>)}</select></label>
       <label>Time range<select className="inp" value={access?.paid?filters.days:(filters.days==='0'?'30':filters.days)} onChange={e=>change('days',e.target.value)}>{access?.paid&&<option value="0">All retained</option>}<option value="1">Past 24 hours</option><option value="7">Past 7 days</option><option value="30">Past 30 days</option></select></label>
       {access?.paid&&<label>Contract signal<select className="inp" value={filters.contract_status} onChange={e=>change('contract_status',e.target.value)}><option value="">Any contract status</option><option value="active">Active</option><option value="complete">Completed</option><option value="awaiting">Awaiting approval</option><option value="middleman">Middleman</option><option value="cancelled">Cancelled</option><option value="disputed">Disputed</option><option value="expired">Expired</option></select></label>}
       <label>Sort results<select className="inp" value={`${filters.sort}:${filters.sort_dir}`} onChange={e=>changeSort(e.target.value)}>
@@ -267,11 +278,12 @@ function MyBusiness({access,onPurchase}) {
   return <div className="market-business"><div className="market-business-head"><div><div className="market-kicker">My Business</div><p>Your sales threads, leads, contracts, buyers, thread updates, reports, and settings. Market pass data adds comparisons and alerts, but the seller workspace stays available.</p></div>{!access?.paid&&<button className="btn" onClick={onPurchase}>Add market comparisons</button>}</div><Suspense fallback={<Empty>Loading My Business...</Empty>}><MerchantPage embedded marketAccess={access}/></Suspense></div>
 }
 
-function Watches({access,onPurchase}) {
+function Watches({access,onPurchase,forums=[]}) {
   const empty={name:'',watch_kind:'phrase',required_phrase:'',optional:'',excluded:'',fid:'',market_type:'any',seller_uid:'',category:'',thread_tid:'',telegram_enabled:false}
   const [watches,setWatches]=useState([]),[matches,setMatches]=useState([]),[telegramConnected,setTelegramConnected]=useState(false),[telegramAvailable,setTelegramAvailable]=useState(false)
   const [matchPage,setMatchPage]=useState(1),[matchTotal,setMatchTotal]=useState(0)
   const [form,setForm]=useState(empty),[error,setError]=useState('')
+  const forumOptions=forums.length?forums:FALLBACK_FORUMS
   const threadSpecificKinds = new Set(['competitor_thread', 'contract_movement', 'owned_thread_activity'])
   const showThreadTid = access?.paid && threadSpecificKinds.has(form.watch_kind)
   const load=()=>api.get(`/api/market/watches?page=${matchPage}&perpage=25`).then(d=>{setWatches(d.watches||[]);setMatches(d.matches||[]);setMatchTotal(Number(d.total||0));setTelegramConnected(Boolean(d.telegram_connected));setTelegramAvailable(Boolean(d.telegram_delivery_available))}).catch(()=>{setWatches([]);setMatches([])})
@@ -291,7 +303,7 @@ function Watches({access,onPurchase}) {
       <label>Optional terms<span>Any one may match, comma separated</span><input className="inp" placeholder="offshore, bulletproof, no KYC" value={form.optional} onChange={e=>setForm(f=>({...f,optional:e.target.value}))}/></label>
       <label>Exclude terms<span>Reject results containing these terms</span><input className="inp" placeholder="free, giveaway" value={form.excluded} onChange={e=>setForm(f=>({...f,excluded:e.target.value}))}/></label>
       <div className="market-form-row"><label>Listing type<select className="inp" value={form.market_type} onChange={e=>setForm(f=>({...f,market_type:e.target.value}))}><option value="any">Selling or buying</option><option value="wts">Selling only</option><option value="wtb">Buyer requests only</option></select></label>
-      <label>Forum<select className="inp" value={form.fid} onChange={e=>setForm(f=>({...f,fid:e.target.value}))}><option value="">Any forum</option>{FORUMS.map(([id,n])=><option key={id} value={id}>{n}</option>)}</select></label></div>
+      <label>Forum<select className="inp" value={form.fid} onChange={e=>setForm(f=>({...f,fid:e.target.value}))}><option value="">Any forum</option>{forumOptions.map(([id,n])=><option key={id} value={id}>{n}</option>)}</select></label></div>
       <label>Seller UID<span>Optional: only match one member</span><input className="inp" inputMode="numeric" value={form.seller_uid} onChange={e=>setForm(f=>({...f,seller_uid:e.target.value.replace(/\D/g,'')}))}/></label>
       <div className="market-form-row"><label>Category<select className="inp" value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))}><option value="">Any category</option>{CATEGORIES.map(value=><option key={value} value={value}>{value}</option>)}</select></label>{showThreadTid&&<label>Exact thread ID<span>Only for this thread-specific rule</span><input className="inp" inputMode="numeric" value={form.thread_tid} onChange={e=>setForm(f=>({...f,thread_tid:e.target.value.replace(/\D/g,'')}))}/></label>}</div>
       {access.paid&&telegramAvailable&&<label className="market-telegram-option"><span><b>Telegram delivery</b><small>Send a Telegram message when this rule matches.</small></span><input type="checkbox" checked={form.telegram_enabled} onChange={e=>setForm(f=>({...f,telegram_enabled:e.target.checked}))}/></label>}
@@ -311,8 +323,10 @@ export default function MarketPage() {
   const requestedTab=params.get('tab')
   const [tab,setTab]=useState(requestedTid?'explore':requestedTab||'overview'),[preset,setPreset]=useState(requestedTid?{tid:requestedTid}:{})
   const [access,setAccess]=useState(null),[purchasing,setPurchasing]=useState(false),[upgradeOpen,setUpgradeOpen]=useState(false),[purchaseId,setPurchaseId]=useState('')
+  const [forums,setForums]=useState([])
   const loadAccess=()=>api.get('/api/market/access').then(setAccess).catch(()=>{})
   useEffect(()=>{loadAccess()},[])
+  useEffect(()=>{api.get('/api/market/forums').then(data=>setForums((data?.forums||[]).map(row=>[row.fid,row.name]))).catch(()=>setForums([]))},[])
   const open=(nextTab,nextPreset={})=>{setPreset(nextPreset);setTab(nextTab)}
   const purchase=()=>{setPurchaseId(newPurchaseId());setUpgradeOpen(true)}
   const confirmPurchase=async()=>{const id=purchaseId||newPurchaseId();setPurchaseId(id);setPurchasing(true);try{await api.post('/api/market/access/purchase',{idempotency_key:id});await loadAccess();setUpgradeOpen(false)}finally{setPurchasing(false)}}
@@ -323,8 +337,8 @@ export default function MarketPage() {
     <nav className="mhq-tabs market-tabs">{tabs.map(([id,label])=><button key={id} className={`tab${tab===id?' on':''}`} onClick={()=>open(id,{})}>{label}</button>)}</nav>
     {tab==='overview'&&<Pulse access={access} onPurchase={purchase} openBrowse={p=>open('explore',p)} openDemand={()=>open('demand',{})} openSection={section=>open(section,{})}/>}
     {tab==='demand'&&<Demand access={access} onPurchase={purchase} openBrowse={p=>open('explore',p)}/>}
-    {tab==='explore'&&<Threads preset={preset} onPresetUsed={()=>setPreset({})} access={access} onPurchase={purchase}/>}
-    {tab==='movers'&&<Movers access={access} onPurchase={purchase}/>} {tab==='disputes'&&<Disputes access={access} onPurchase={purchase}/>} {tab==='watches'&&<Watches access={access} onPurchase={purchase}/>}
+    {tab==='explore'&&<Threads preset={preset} onPresetUsed={()=>setPreset({})} access={access} onPurchase={purchase} forums={forums}/>}
+    {tab==='movers'&&<Movers access={access} onPurchase={purchase}/>} {tab==='disputes'&&<Disputes access={access} onPurchase={purchase}/>} {tab==='watches'&&<Watches access={access} onPurchase={purchase} forums={forums}/>}
     {tab==='business'&&<MyBusiness access={access} onPurchase={purchase}/>}
     <UpgradeDialog access={access} open={upgradeOpen} onClose={()=>setUpgradeOpen(false)} onConfirm={confirmPurchase} purchasing={purchasing} purchaseId={purchaseId}/>
   </div>

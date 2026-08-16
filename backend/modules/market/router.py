@@ -159,6 +159,12 @@ async def market_categories(request: Request):
     return {"categories": pulse["categories"], "generated_at": pulse["generated_at"]}
 
 
+@router.get("/forums")
+async def market_forums(request: Request):
+    _uid(request)
+    return {"forums": await asyncio.to_thread(market_db.list_forums)}
+
+
 @router.get("/movers")
 async def market_movers(request: Request, days: int = 30):
     uid = _uid(request)

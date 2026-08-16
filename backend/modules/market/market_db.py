@@ -1418,6 +1418,14 @@ def forum_coverage() -> list[dict]:
         return [dict(row) for row in rows]
 
 
+def list_forums() -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT fid,name FROM market_forums WHERE enabled=1 ORDER BY name"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 def list_threads(
     page: int, perpage: int, fid: int | None = None, category: str = "",
     market_type: str = "", query: str = "", contract_only: bool = False,
