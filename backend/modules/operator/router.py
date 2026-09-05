@@ -52,6 +52,21 @@ def _rows(conn, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[dict[str, 
         return [], f"{type(exc).__name__}: {str(exc)[:180]}"
 
 
+def _count_map(conn, sql: str, params: tuple[Any, ...] = ()) -> dict[str, int]:
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return {str(_value(row, "uid", "")): _int(_value(row, "count", 0)) for row in rows}
+    except Exception:
+        return {}
+
+
+def _uid_set(conn, sql: str, params: tuple[Any, ...] = ()) -> set[str]:
+    try:
+        return {str(_value(row, "uid", "")) for row in conn.execute(sql, params).fetchall()}
+    except Exception:
+        return set()
+
+
 def _int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -127,15 +142,7 @@ def _build_summary(operator_uid: str) -> dict[str, Any]:
                 "SELECT COUNT(*) AS v FROM bump_jobs WHERE bump_until IS NOT NULL AND bump_until > 0 AND bump_until <= ?",
                 (now,),
             )),
-            "blocked_dead_token": _int(_scalar(
-                conn,
-                """
-                SELECT COUNT(*) AS v
-                FROM bump_jobs j
-                JOIN users u ON u.uid = j.uid
-                WHERE j.enabled=1 AND COALESCE(u.token_dead,0)=1
-                """,
-            )),
+            "blocked_dead_token": 0,
             "bumps_24h": _int(_scalar(
                 conn,
                 "SELECT COUNT(*) AS v FROM bump_log WHERE ts >= ? AND action='bumped'",
@@ -197,28 +204,42 @@ def _build_summary(operator_uid: str) -> dict[str, Any]:
                 (hour_ago,),
             )),
         }
+        dead_uids = _uid_set(conn, "SELECT uid FROM users WHERE COALESCE(token_dead,0)=1")
+        active_bump_uids = _uid_set(conn, "SELECT uid FROM bump_jobs WHERE enabled=1")
+        bump["blocked_dead_token"] = len(active_bump_uids.intersection(dead_uids))
 
         authed_users, authed_users_error = _rows(
             conn,
             """
             SELECT
-                u.uid,
-                COALESCE(NULLIF(u.username,''),'unknown') AS username,
-                COALESCE(u.last_seen,0) AS last_seen,
-                COALESCE(u.created_at,0) AS created_at,
-                COALESCE(u.token_dead,0) AS token_dead,
-                COALESCE(u.token_expiry,0) AS token_expiry,
-                CASE WHEN tl.hf_uid IS NULL THEN 0 ELSE 1 END AS telegram_linked,
-                (SELECT COUNT(*) FROM bump_jobs bj WHERE bj.uid=u.uid) AS bump_jobs,
-                (SELECT COUNT(*) FROM market_watches mw WHERE mw.uid=u.uid AND mw.enabled=1) AS market_watches,
-                (SELECT COUNT(*) FROM alert_events ae WHERE ae.hf_uid=u.uid AND ae.created_at >= ?) AS alerts_7d
-            FROM users u
-            LEFT JOIN telegram_links tl ON tl.hf_uid=u.uid
-            ORDER BY COALESCE(u.last_seen,0) DESC, COALESCE(u.created_at,0) DESC
+                uid,
+                COALESCE(NULLIF(username,''),'unknown') AS username,
+                COALESCE(last_seen,0) AS last_seen,
+                COALESCE(created_at,0) AS created_at,
+                COALESCE(token_dead,0) AS token_dead,
+                COALESCE(token_expiry,0) AS token_expiry
+            FROM users
+            ORDER BY COALESCE(last_seen,0) DESC, COALESCE(created_at,0) DESC
             LIMIT 100
             """,
+        )
+        telegram_uids = _uid_set(conn, "SELECT hf_uid AS uid FROM telegram_links")
+        bump_counts = _count_map(conn, "SELECT uid, COUNT(*) AS count FROM bump_jobs GROUP BY uid")
+        watch_counts = _count_map(
+            conn,
+            "SELECT uid, COUNT(*) AS count FROM market_watches WHERE enabled=1 GROUP BY uid",
+        )
+        alert_counts = _count_map(
+            conn,
+            "SELECT hf_uid AS uid, COUNT(*) AS count FROM alert_events WHERE created_at >= ? GROUP BY hf_uid",
             (week_ago,),
         )
+        for user in authed_users:
+            uid = str(user.get("uid") or "")
+            user["telegram_linked"] = 1 if uid in telegram_uids else 0
+            user["bump_jobs"] = bump_counts.get(uid, 0)
+            user["market_watches"] = watch_counts.get(uid, 0)
+            user["alerts_7d"] = alert_counts.get(uid, 0)
         operator_user = _row(
             conn,
             """
