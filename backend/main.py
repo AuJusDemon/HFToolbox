@@ -944,6 +944,8 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+from modules.operator.router import router as operator_router
+app.include_router(operator_router)
 
 
 @app.middleware("http")

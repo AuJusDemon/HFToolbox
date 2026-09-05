@@ -16,6 +16,7 @@ export const ROUTE_PREFETCHERS = {
   '/dashboard/sigmarket': () => import('./SigmarketPage.jsx'),
   '/dashboard/wire': () => import('./WirePage.jsx'),
   '/dashboard/market': () => import('./MarketPage.jsx'),
+  '/dashboard/operator': () => import('./OperatorPage.jsx'),
   '/dashboard/settings': () => import('./Settings.jsx'),
 }
 
@@ -33,6 +34,7 @@ const NAV_ITEMS = [
   { to: '/dashboard/sigmarket', label: 'Sig Market',  mobileLabel: 'SIG MKT',  group: 'modules'    },
   { to: '/dashboard/wire',      label: 'The Wire',    mobileLabel: 'WIRE',     group: 'modules'    },
   { to: '/dashboard/market',    label: 'Marketplace', mobileLabel: 'MARKET',   group: 'modules'    },
+  { to: '/dashboard/operator',  label: 'Operator',    mobileLabel: 'OPS',      group: 'system', operatorOnly: true },
   { to: '/dashboard/settings',  label: 'Settings',    mobileLabel: 'SETTINGS', group: 'system'     },
 ]
 

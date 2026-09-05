@@ -19,6 +19,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from HFClient import exchange_code_for_token, HFClient
 import db
 import integration_db
+from operator_auth import is_operator_uid
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = logging.getLogger("hftoolbox.auth")
@@ -205,14 +206,17 @@ async def me(request: Request):
     groups = user["groups"]
     if _DEV_GROUPS_OVERRIDE:
         groups = list(dict.fromkeys(groups + _DEV_GROUPS_OVERRIDE))
+    payload = {
+        "uid":      user["uid"],
+        "username": user["username"],
+        "avatar":   user["avatar"],
+        "groups":   groups,
+    }
+    if is_operator_uid(uid):
+        payload["is_operator"] = True
     from fastapi.responses import JSONResponse as _JR
     return _JR(
-        content={
-            "uid":      user["uid"],
-            "username": user["username"],
-            "avatar":   user["avatar"],
-            "groups":   groups,
-        },
+        content=payload,
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )
 
