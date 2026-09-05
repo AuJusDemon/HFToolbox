@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from './api.js'
 
 const fmt = n => {
@@ -26,11 +26,19 @@ const stamp = ts => {
   })
 }
 
-function Metric({ label, value, tone = 'info' }) {
+const toneForStatus = status => {
+  if (status === 'bad') return 'bad'
+  if (status === 'warn') return 'warn'
+  if (status === 'good') return 'good'
+  return 'info'
+}
+
+function Metric({ label, value, tone = 'info', note = '' }) {
   return (
     <div className={`cp-metric ${tone}`}>
       <span className="cp-label">{label}</span>
       <strong>{fmt(value)}</strong>
+      {note ? <small>{note}</small> : null}
     </div>
   )
 }
@@ -39,11 +47,12 @@ function Pill({ value, tone = 'info' }) {
   return <span className={`cp-pill ${tone}`}>{value}</span>
 }
 
-function Section({ title, children }) {
+function Section({ title, meta = '', children }) {
   return (
     <section className="cp-section">
       <div className="cp-section-head">
         <h3>{title}</h3>
+        {meta ? <span>{meta}</span> : null}
       </div>
       {children}
     </section>
@@ -63,22 +72,113 @@ function Rows({ rows }) {
   )
 }
 
+function StatusStrip({ items }) {
+  return (
+    <div className="cp-status-strip">
+      {items.map(item => (
+        <div key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function WorkerTable({ workers }) {
+  if (!workers.length) return <div className="cp-empty">No worker rows were returned.</div>
+  return (
+    <div className="cp-table-wrap">
+      <table className="cp-table wide">
+        <thead>
+          <tr>
+            <th>Worker</th>
+            <th>State</th>
+            <th>Last Seen</th>
+            <th>Backlog</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          {workers.map(worker => (
+            <tr key={worker.name}>
+              <td>{worker.name}</td>
+              <td><Pill value={worker.state || worker.status || 'unknown'} tone={toneForStatus(worker.status)} /></td>
+              <td>{ago(worker.last_seen_age)}</td>
+              <td>{fmt(worker.backlog)}</td>
+              <td>{worker.note || '--'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function FailureTable({ failures }) {
+  if (!failures.length) return <div className="cp-empty">No grouped failures in the last 7 days.</div>
+  return (
+    <div className="cp-table-wrap">
+      <table className="cp-table wide">
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>Failure</th>
+            <th>Hits</th>
+            <th>Last Seen</th>
+          </tr>
+        </thead>
+        <tbody>
+          {failures.map((failure, index) => (
+            <tr key={`${failure.area}-${failure.message}-${index}`}>
+              <td>{failure.area}</td>
+              <td>{failure.message}</td>
+              <td>{fmt(failure.count)}</td>
+              <td>{stamp(failure.last_seen)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export default function OperatorPage() {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
     let alive = true
-    api.get('/api/operator/summary')
-      .then(d => { if (alive) setData(d) })
-      .catch(err => { if (alive) setError(err?.message || 'Operator summary could not be loaded') })
-    const id = setInterval(() => {
+    const load = () => {
       api.get('/api/operator/summary')
         .then(d => { if (alive) { setData(d); setError('') } })
         .catch(err => { if (alive) setError(err?.message || 'Operator summary could not be loaded') })
-    }, 60000)
+    }
+    load()
+    const id = setInterval(load, 60000)
     return () => { alive = false; clearInterval(id) }
   }, [])
+
+  const now = Math.floor(Date.now() / 1000)
+
+  const derived = useMemo(() => {
+    const users = data?.users || {}
+    const bump = data?.bump_service || {}
+    const alerts = data?.alerts || {}
+    const queues = data?.queues || {}
+    const market = data?.marketplace || {}
+    const failures = data?.recent_failures || []
+    const attention = data?.attention || []
+    const badWorkers = (data?.workers || []).filter(worker => worker.status === 'bad').length
+    const warnWorkers = (data?.workers || []).filter(worker => worker.status === 'warn').length
+    const queueBacklog = Number(queues.posting_due || 0)
+      + Number(queues.reply_checks_due || 0)
+      + Number(queues.market_thread_refresh_due || 0)
+      + Number(queues.market_reply_verify_due || 0)
+      + Number(queues.market_contract_lookup_due || 0)
+      + Number(queues.telegram_pending_old || 0)
+    return { users, bump, alerts, queues, market, failures, attention, badWorkers, warnWorkers, queueBacklog }
+  }, [data])
 
   if (error) {
     return (
@@ -99,13 +199,15 @@ export default function OperatorPage() {
     )
   }
 
-  const users = data.users || {}
-  const bump = data.bump_service || {}
-  const market = data.marketplace || {}
-  const alerts = data.alerts || {}
+  const users = derived.users
+  const bump = derived.bump
+  const market = derived.market
+  const alerts = derived.alerts
+  const queues = derived.queues
   const runtime = data.runtime || {}
+  const freshness = data.freshness || {}
   const run = market.last_run || {}
-  const attention = data.attention || []
+  const attention = derived.attention
   const authedUsers = data.authed_users || []
   const operatorUser = data.operator_user || null
 
@@ -115,112 +217,57 @@ export default function OperatorPage() {
         <div>
           <div className="market-kicker">owner operations</div>
           <h2>Operator</h2>
-          <p>Private aggregate health for Toolbox services. No user content, tokens, or message bodies are shown here.</p>
+          <p>Private read-only view of Toolbox health, queues, workers, auth state, and delivery failures. Raw tokens, customer messages, and secrets are not returned.</p>
         </div>
         <div className="cp-static-tabs">
           <span>Read only</span>
           <span>UID {data.operator_uid}</span>
+          <span>Refresh 60s</span>
           <span>{stamp(data.generated_at)}</span>
         </div>
       </div>
 
-      <div className="cp-status-strip">
-        <div>
-          <span>Environment</span>
-          <strong>{data.environment || 'development'}</strong>
-        </div>
-        <div>
-          <span>Background crawl</span>
-          <strong>{runtime.background_crawl || '--'}</strong>
-        </div>
-        <div>
-          <span>Telegram delivery</span>
-          <strong>{runtime.telegram_delivery || '--'}</strong>
-        </div>
-        <div>
-          <span>HF controller</span>
-          <strong>{runtime.controller || '--'}</strong>
-        </div>
-      </div>
-      <div className="cp-status-strip">
-        <div>
-          <span>Data source</span>
-          <strong>{runtime.database || '--'}</strong>
-        </div>
-        <div>
-          <span>Summary type</span>
-          <strong>dev database snapshot</strong>
-        </div>
-        <div>
-          <span>Records shown</span>
-          <strong>{fmt(authedUsers.length)} latest authed users</strong>
-        </div>
-        <div>
-          <span>Secret fields</span>
-          <strong>not returned</strong>
-        </div>
-      </div>
-      {Number(users.synthetic_hidden || 0) > 0 && (
-        <div className="cp-status-strip">
-          <div>
-            <span>Dev test users hidden</span>
-            <strong>{fmt(users.synthetic_hidden)}</strong>
-          </div>
-          <div>
-            <span>Filter</span>
-            <strong>bot and practice rows</strong>
-          </div>
-          <div>
-            <span>Reason</span>
-            <strong>not real HF accounts</strong>
-          </div>
-          <div>
-            <span>Authed users table</span>
-            <strong>real rows only</strong>
-          </div>
-        </div>
-      )}
+      <StatusStrip items={[
+        { label: 'Environment', value: data.environment || 'development' },
+        { label: 'Data Source', value: runtime.database || '--' },
+        { label: 'Background Crawl', value: runtime.background_crawl || '--' },
+        { label: 'HF Controller', value: runtime.controller || '--' },
+      ]} />
+      <StatusStrip items={[
+        { label: 'Telegram Delivery', value: runtime.telegram_delivery || '--' },
+        { label: 'Summary Type', value: 'dev database snapshot' },
+        { label: 'Records Shown', value: `${fmt(authedUsers.length)} latest real users` },
+        { label: 'Dev Test Rows Hidden', value: fmt(users.synthetic_hidden) },
+      ]} />
 
-      {operatorUser && operatorUser.uid && (
-        <div className="cp-status-strip">
-          <div>
-            <span>Current operator row</span>
-            <strong>{operatorUser.username || 'unknown'}</strong>
-          </div>
-          <div>
-            <span>Operator last seen</span>
-            <strong>{stamp(operatorUser.last_seen)}</strong>
-          </div>
-          <div>
-            <span>Stored HF token</span>
-            <strong>{Number(operatorUser.has_token || 0) ? 'present' : 'blank'}</strong>
-          </div>
-          <div>
-            <span>Token state</span>
-            <strong>{Number(operatorUser.token_dead || 0) ? 'dead' : 'not marked dead'}</strong>
-          </div>
-        </div>
-      )}
+      {operatorUser && operatorUser.uid ? (
+        <StatusStrip items={[
+          { label: 'Current Operator Row', value: operatorUser.username || 'unknown' },
+          { label: 'Operator Last Seen', value: stamp(operatorUser.last_seen) },
+          { label: 'Stored HF Token', value: Number(operatorUser.has_token || 0) ? 'present' : 'blank' },
+          { label: 'Token State', value: Number(operatorUser.token_dead || 0) ? 'dead' : 'not marked dead' },
+        ]} />
+      ) : null}
 
       <div className="cp-metrics">
-        <Metric label="Authed users" value={users.total} />
+        <Metric label="Attention Items" value={attention.length} tone={attention.length ? 'warn' : 'good'} />
+        <Metric label="Bad Workers" value={derived.badWorkers} tone={derived.badWorkers ? 'bad' : 'good'} />
+        <Metric label="Warn Workers" value={derived.warnWorkers} tone={derived.warnWorkers ? 'warn' : 'good'} />
+        <Metric label="Queue Backlog" value={derived.queueBacklog} tone={derived.queueBacklog ? 'warn' : 'good'} note="due or old" />
+        <Metric label="Authed Users" value={users.total} />
         <Metric label="Active 24h" value={users.active_24h} tone={users.active_24h ? 'good' : 'info'} />
-        <Metric label="Ready tokens" value={users.token_ready} tone="good" />
-        <Metric label="Dead tokens" value={users.token_dead} tone={users.token_dead ? 'warn' : 'good'} />
-        <Metric label="Active bump jobs" value={bump.jobs_active} tone={bump.jobs_active ? 'good' : 'info'} />
-        <Metric label="Telegram failed 24h" value={alerts.telegram_failed_24h} tone={alerts.telegram_failed_24h ? 'bad' : 'good'} />
       </div>
 
       <div className="cp-grid cp-grid-two">
-        <Section title="Attention">
+        <Section title="Attention" meta={`${attention.length} items`}>
           {attention.length ? (
             <div className="cp-table-wrap">
               <table className="cp-table">
                 <tbody>
                   {attention.map(item => (
-                    <tr key={item.label}>
+                    <tr key={`${item.label}-${item.value}`}>
                       <td>{item.label}</td>
-                      <td><Pill value={item.level} tone={item.level === 'bad' ? 'bad' : 'info'} /></td>
+                      <td><Pill value={item.level} tone={toneForStatus(item.level)} /></td>
                       <td>{fmt(item.value)}</td>
                     </tr>
                   ))}
@@ -232,48 +279,64 @@ export default function OperatorPage() {
           )}
         </Section>
 
-        <Section title="Users And Auth">
+        <Section title="Identity And Auth">
           <Rows rows={[
-            { label: 'Total users', value: fmt(users.total) },
-            { label: 'Dev test users hidden', value: fmt(users.synthetic_hidden) },
+            { label: 'Real users', value: fmt(users.total) },
             { label: 'Active in 7 days', value: fmt(users.active_7d) },
-            { label: 'Telegram linked', value: fmt(users.telegram_linked) },
+            { label: 'Ready tokens', value: fmt(users.token_ready) },
+            { label: 'Dead tokens', value: fmt(users.token_dead) },
             { label: 'Tokens expiring in 24h', value: fmt(users.token_expiring_24h) },
+            { label: 'Telegram linked rows', value: fmt(users.telegram_linked) },
           ]} />
         </Section>
       </div>
 
+      <Section title="Workers" meta="read-only">
+        <WorkerTable workers={data.workers || []} />
+      </Section>
+
       <div className="cp-grid">
-        <Section title="Auto Bumper">
+        <Section title="Queues">
           <Rows rows={[
-            { label: 'Total jobs', value: fmt(bump.jobs_total) },
-            { label: 'Due now', value: fmt(bump.jobs_due) },
-            { label: 'Expired jobs', value: fmt(bump.jobs_expired) },
-            { label: 'Blocked by dead token', value: fmt(bump.blocked_dead_token) },
-            { label: 'Bumps in 24h', value: fmt(bump.bumps_24h) },
-            { label: 'Non-success in 24h', value: fmt(bump.non_success_24h) },
+            { label: 'Scheduled posts pending', value: fmt(queues.posting_pending) },
+            { label: 'Scheduled posts due', value: fmt(queues.posting_due) },
+            { label: 'Scheduled posts failed', value: fmt(queues.posting_failed) },
+            { label: 'Reply checks due', value: fmt(queues.reply_checks_due) },
+            { label: 'Reply checks stuck', value: fmt(queues.reply_checks_stuck) },
+            { label: 'Unread replies', value: fmt(queues.reply_unread) },
           ]} />
         </Section>
 
-        <Section title="Marketplace">
+        <Section title="Marketplace Queues">
+          <Rows rows={[
+            { label: 'Thread refresh queued', value: fmt(queues.market_thread_refresh) },
+            { label: 'Thread refresh due', value: fmt(queues.market_thread_refresh_due) },
+            { label: 'Reply verify queued', value: fmt(queues.market_reply_verify) },
+            { label: 'Reply verify due', value: fmt(queues.market_reply_verify_due) },
+            { label: 'Contract lookup queued', value: fmt(queues.market_contract_lookup) },
+            { label: 'Contract lookup due', value: fmt(queues.market_contract_lookup_due) },
+          ]} />
+        </Section>
+
+        <Section title="Auto Bumper">
+          <Rows rows={[
+            { label: 'Total jobs', value: fmt(bump.jobs_total) },
+            { label: 'Active jobs', value: fmt(bump.jobs_active) },
+            { label: 'Due now', value: fmt(bump.jobs_due) },
+            { label: 'Expired jobs', value: fmt(bump.jobs_expired) },
+            { label: 'Blocked by dead token', value: fmt(bump.blocked_dead_token) },
+            { label: 'Last success', value: ago(freshness.last_bump_success_age) },
+          ]} />
+        </Section>
+
+        <Section title="Marketplace Index">
           <Rows rows={[
             { label: 'Indexed threads', value: fmt(market.threads) },
             { label: 'Indexed contracts', value: fmt(market.contracts) },
             { label: 'Enabled watches', value: fmt(market.watches_enabled) },
             { label: 'Watch matches 24h', value: fmt(market.watch_matches_24h) },
-            { label: 'Thread queue', value: fmt(market.refresh_queue) },
-            { label: 'Contract queue', value: fmt(market.contract_queue) },
-          ]} />
-        </Section>
-
-        <Section title="Freshness">
-          <Rows rows={[
             { label: 'Last thread seen', value: ago(market.last_thread_seen_age) },
             { label: 'Last contract seen', value: ago(market.last_contract_seen_age) },
-            { label: 'Last forum scan', value: ago(market.last_forum_scan_age) },
-            { label: 'Last market run', value: stamp(run.started_at) },
-            { label: 'Run status', value: run.status || '--' },
-            { label: 'Remaining after run', value: fmt(run.remaining) },
           ]} />
         </Section>
 
@@ -282,23 +345,42 @@ export default function OperatorPage() {
             { label: 'Events in 24h', value: fmt(alerts.events_24h) },
             { label: 'Sent in 24h', value: fmt(alerts.telegram_sent_24h) },
             { label: 'Failed in 24h', value: fmt(alerts.telegram_failed_24h) },
+            { label: 'Pending total', value: fmt(queues.telegram_pending) },
             { label: 'Pending older than 1h', value: fmt(alerts.pending_older_1h) },
+            { label: 'Last sent', value: ago(freshness.last_alert_sent_age) },
+          ]} />
+        </Section>
+      </div>
+
+      <div className="cp-grid cp-grid-two">
+        <Section title="Freshness">
+          <Rows rows={[
+            { label: 'Forum scan', value: ago(market.last_forum_scan_age) },
+            { label: 'Bytes crawl', value: ago(freshness.bytes_crawl_age) },
+            { label: 'Contracts crawl', value: ago(freshness.contracts_crawl_age) },
+            { label: 'Contracts recheck', value: ago(freshness.contracts_recheck_age) },
+            { label: 'Scheduled post sent', value: ago(freshness.last_post_sent_age) },
+            { label: 'Reply seen', value: ago(freshness.last_reply_seen_age) },
           ]} />
         </Section>
 
         <Section title="Last Market Run">
           <Rows rows={[
-            { label: 'Source', value: run.source || '--' },
-            { label: 'Calls used', value: fmt(run.calls_used) },
-            { label: 'Threads seen', value: fmt(run.threads_seen) },
-            { label: 'New threads', value: fmt(run.new_threads) },
-            { label: 'Contracts seen', value: fmt(run.contracts_seen) },
+            { label: 'Started', value: stamp(run.started_at) },
             { label: 'Finished', value: stamp(run.finished_at) },
+            { label: 'Source', value: run.source || '--' },
+            { label: 'Status', value: run.status || '--' },
+            { label: 'Calls used', value: fmt(run.calls_used) },
+            { label: 'Remaining after run', value: fmt(run.remaining) },
           ]} />
         </Section>
       </div>
 
-      <Section title="Authed Users">
+      <Section title="Recent Failures" meta="grouped, last 7 days">
+        <FailureTable failures={derived.failures} />
+      </Section>
+
+      <Section title="Authed Users" meta={`${fmt(authedUsers.length)} shown`}>
         {data.authed_users_error ? (
           <div className="cp-empty" style={{ color: 'var(--red)' }}>{data.authed_users_error}</div>
         ) : authedUsers.length ? (
@@ -308,11 +390,13 @@ export default function OperatorPage() {
                 <tr>
                   <th>User</th>
                   <th>UID</th>
-                  <th>Last seen</th>
+                  <th>Last Seen</th>
                   <th>Token</th>
-                  <th>Token expiry</th>
+                  <th>Token Expiry</th>
                   <th>Telegram</th>
                   <th>Bumps</th>
+                  <th>Posts</th>
+                  <th>Replies</th>
                   <th>Watches</th>
                   <th>Alerts 7d</th>
                 </tr>
@@ -320,17 +404,22 @@ export default function OperatorPage() {
               <tbody>
                 {authedUsers.map(user => {
                   const tokenDead = Number(user.token_dead || 0) === 1
+                  const hasToken = Number(user.has_token || 0) === 1
                   const tokenExpiry = Number(user.token_expiry || 0)
-                  const expiringSoon = tokenExpiry > 0 && tokenExpiry < Math.floor(Date.now() / 1000) + 86400
+                  const expiringSoon = tokenExpiry > 0 && tokenExpiry < now + 86400
+                  const tokenLabel = tokenDead ? 'dead' : (hasToken ? 'ready' : 'blank')
+                  const tokenTone = tokenDead ? 'bad' : (hasToken ? 'good' : 'warn')
                   return (
                     <tr key={user.uid}>
                       <td>{user.username || 'unknown'}</td>
                       <td>{user.uid}</td>
                       <td>{stamp(user.last_seen)}</td>
-                      <td><Pill value={tokenDead ? 'dead' : 'ready'} tone={tokenDead ? 'bad' : 'good'} /></td>
+                      <td><Pill value={tokenLabel} tone={tokenTone} /></td>
                       <td>{tokenExpiry ? <span style={{ color: expiringSoon ? 'var(--yellow)' : 'inherit' }}>{stamp(tokenExpiry)}</span> : '--'}</td>
                       <td>{Number(user.telegram_linked || 0) ? 'linked' : '--'}</td>
                       <td>{fmt(user.bump_jobs)}</td>
+                      <td>{fmt(user.scheduled_posts)}</td>
+                      <td>{fmt(user.open_replies)}</td>
                       <td>{fmt(user.market_watches)}</td>
                       <td>{fmt(user.alerts_7d)}</td>
                     </tr>
