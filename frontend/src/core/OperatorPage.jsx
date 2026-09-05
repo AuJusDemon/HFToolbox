@@ -160,6 +160,26 @@ export default function OperatorPage() {
           <strong>not returned</strong>
         </div>
       </div>
+      {Number(users.synthetic_hidden || 0) > 0 && (
+        <div className="cp-status-strip">
+          <div>
+            <span>Dev test users hidden</span>
+            <strong>{fmt(users.synthetic_hidden)}</strong>
+          </div>
+          <div>
+            <span>Filter</span>
+            <strong>bot and practice rows</strong>
+          </div>
+          <div>
+            <span>Reason</span>
+            <strong>not real HF accounts</strong>
+          </div>
+          <div>
+            <span>Authed users table</span>
+            <strong>real rows only</strong>
+          </div>
+        </div>
+      )}
 
       {operatorUser && operatorUser.uid && (
         <div className="cp-status-strip">
@@ -215,6 +235,7 @@ export default function OperatorPage() {
         <Section title="Users And Auth">
           <Rows rows={[
             { label: 'Total users', value: fmt(users.total) },
+            { label: 'Dev test users hidden', value: fmt(users.synthetic_hidden) },
             { label: 'Active in 7 days', value: fmt(users.active_7d) },
             { label: 'Telegram linked', value: fmt(users.telegram_linked) },
             { label: 'Tokens expiring in 24h', value: fmt(users.token_expiring_24h) },

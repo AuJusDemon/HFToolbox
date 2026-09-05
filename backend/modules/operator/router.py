@@ -93,6 +93,10 @@ def _status(ok: bool, warn: bool = False) -> str:
     return "good"
 
 
+REAL_USER_WHERE = "uid NOT LIKE 'bot\\_%' AND username NOT LIKE 'Practice Bot%'"
+SYNTHETIC_USER_WHERE = "uid LIKE 'bot\\_%' OR username LIKE 'Practice Bot%'"
+
+
 def _build_summary(operator_uid: str) -> dict[str, Any]:
     now = _now()
     day_ago = now - 86400
@@ -101,17 +105,18 @@ def _build_summary(operator_uid: str) -> dict[str, Any]:
 
     with _db() as conn:
         users = {
-            "total": _int(_scalar(conn, "SELECT COUNT(*) AS v FROM users")),
-            "active_24h": _int(_scalar(conn, "SELECT COUNT(*) AS v FROM users WHERE last_seen >= ?", (day_ago,))),
-            "active_7d": _int(_scalar(conn, "SELECT COUNT(*) AS v FROM users WHERE last_seen >= ?", (week_ago,))),
+            "total": _int(_scalar(conn, f"SELECT COUNT(*) AS v FROM users WHERE {REAL_USER_WHERE}")),
+            "synthetic_hidden": _int(_scalar(conn, f"SELECT COUNT(*) AS v FROM users WHERE {SYNTHETIC_USER_WHERE}")),
+            "active_24h": _int(_scalar(conn, f"SELECT COUNT(*) AS v FROM users WHERE {REAL_USER_WHERE} AND last_seen >= ?", (day_ago,))),
+            "active_7d": _int(_scalar(conn, f"SELECT COUNT(*) AS v FROM users WHERE {REAL_USER_WHERE} AND last_seen >= ?", (week_ago,))),
             "token_ready": _int(_scalar(
                 conn,
-                "SELECT COUNT(*) AS v FROM users WHERE COALESCE(token_dead,0)=0 AND COALESCE(token,'')<>''",
+                f"SELECT COUNT(*) AS v FROM users WHERE {REAL_USER_WHERE} AND COALESCE(token_dead,0)=0 AND COALESCE(token,'')<>''",
             )),
-            "token_dead": _int(_scalar(conn, "SELECT COUNT(*) AS v FROM users WHERE COALESCE(token_dead,0)=1")),
+            "token_dead": _int(_scalar(conn, f"SELECT COUNT(*) AS v FROM users WHERE {REAL_USER_WHERE} AND COALESCE(token_dead,0)=1")),
             "token_expiring_24h": _int(_scalar(
                 conn,
-                "SELECT COUNT(*) AS v FROM users WHERE token_expiry > ? AND token_expiry <= ?",
+                f"SELECT COUNT(*) AS v FROM users WHERE {REAL_USER_WHERE} AND token_expiry > ? AND token_expiry <= ?",
                 (now, now + 86400),
             )),
             "telegram_linked": _int(_scalar(conn, "SELECT COUNT(*) AS v FROM telegram_links")),
@@ -204,7 +209,7 @@ def _build_summary(operator_uid: str) -> dict[str, Any]:
                 (hour_ago,),
             )),
         }
-        dead_uids = _uid_set(conn, "SELECT uid FROM users WHERE COALESCE(token_dead,0)=1")
+        dead_uids = _uid_set(conn, f"SELECT uid FROM users WHERE {REAL_USER_WHERE} AND COALESCE(token_dead,0)=1")
         active_bump_uids = _uid_set(conn, "SELECT uid FROM bump_jobs WHERE enabled=1")
         bump["blocked_dead_token"] = len(active_bump_uids.intersection(dead_uids))
 
@@ -219,6 +224,7 @@ def _build_summary(operator_uid: str) -> dict[str, Any]:
                 COALESCE(token_dead,0) AS token_dead,
                 COALESCE(token_expiry,0) AS token_expiry
             FROM users
+            WHERE uid NOT LIKE 'bot\\_%' AND username NOT LIKE 'Practice Bot%'
             ORDER BY COALESCE(last_seen,0) DESC, COALESCE(created_at,0) DESC
             LIMIT 100
             """,
