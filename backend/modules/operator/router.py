@@ -45,11 +45,11 @@ def _row(conn, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
         return {}
 
 
-def _rows(conn, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+def _rows(conn, sql: str, params: tuple[Any, ...] = ()) -> tuple[list[dict[str, Any]], str]:
     try:
-        return [dict(row) for row in conn.execute(sql, params).fetchall()]
-    except Exception:
-        return []
+        return [dict(row) for row in conn.execute(sql, params).fetchall()], ""
+    except Exception as exc:
+        return [], f"{type(exc).__name__}: {str(exc)[:180]}"
 
 
 def _int(value: Any) -> int:
@@ -78,7 +78,7 @@ def _status(ok: bool, warn: bool = False) -> str:
     return "good"
 
 
-def _build_summary() -> dict[str, Any]:
+def _build_summary(operator_uid: str) -> dict[str, Any]:
     now = _now()
     day_ago = now - 86400
     week_ago = now - (7 * 86400)
@@ -198,7 +198,7 @@ def _build_summary() -> dict[str, Any]:
             )),
         }
 
-        authed_users = _rows(
+        authed_users, authed_users_error = _rows(
             conn,
             """
             SELECT
@@ -214,11 +214,23 @@ def _build_summary() -> dict[str, Any]:
                 (SELECT COUNT(*) FROM alert_events ae WHERE ae.hf_uid=u.uid AND ae.created_at >= ?) AS alerts_7d
             FROM users u
             LEFT JOIN telegram_links tl ON tl.hf_uid=u.uid
-            WHERE COALESCE(u.token,'')<>''
             ORDER BY COALESCE(u.last_seen,0) DESC, COALESCE(u.created_at,0) DESC
             LIMIT 100
             """,
             (week_ago,),
+        )
+        operator_user = _row(
+            conn,
+            """
+            SELECT uid, COALESCE(NULLIF(username,''),'unknown') AS username,
+                   COALESCE(last_seen,0) AS last_seen, COALESCE(created_at,0) AS created_at,
+                   COALESCE(token_dead,0) AS token_dead, COALESCE(token_expiry,0) AS token_expiry,
+                   CASE WHEN COALESCE(token,'')='' THEN 0 ELSE 1 END AS has_token
+            FROM users
+            WHERE uid=?
+            LIMIT 1
+            """,
+            (operator_uid,),
         )
 
     background_disabled = _flag("DEV_DISABLE_CRAWL")
@@ -241,7 +253,7 @@ def _build_summary() -> dict[str, Any]:
 
     return {
         "generated_at": now,
-        "operator_uid": "761578",
+        "operator_uid": operator_uid,
         "environment": os.environ.get("ENV", "development"),
         "runtime": {
             "background_crawl": "disabled" if background_disabled else "enabled",
@@ -252,6 +264,8 @@ def _build_summary() -> dict[str, Any]:
         },
         "users": users,
         "authed_users": authed_users,
+        "authed_users_error": authed_users_error,
+        "operator_user": operator_user,
         "bump_service": bump,
         "marketplace": market,
         "alerts": alerts,
@@ -261,5 +275,5 @@ def _build_summary() -> dict[str, Any]:
 
 @router.get("/summary")
 async def summary(request: Request):
-    require_operator(request)
-    return _build_summary()
+    operator_uid = require_operator(request)
+    return _build_summary(operator_uid)

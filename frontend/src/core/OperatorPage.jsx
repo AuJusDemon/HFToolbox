@@ -107,6 +107,7 @@ export default function OperatorPage() {
   const run = market.last_run || {}
   const attention = data.attention || []
   const authedUsers = data.authed_users || []
+  const operatorUser = data.operator_user || null
 
   return (
     <div className="cp-page">
@@ -159,6 +160,27 @@ export default function OperatorPage() {
           <strong>not returned</strong>
         </div>
       </div>
+
+      {operatorUser && operatorUser.uid && (
+        <div className="cp-status-strip">
+          <div>
+            <span>Current operator row</span>
+            <strong>{operatorUser.username || 'unknown'}</strong>
+          </div>
+          <div>
+            <span>Operator last seen</span>
+            <strong>{stamp(operatorUser.last_seen)}</strong>
+          </div>
+          <div>
+            <span>Stored HF token</span>
+            <strong>{Number(operatorUser.has_token || 0) ? 'present' : 'blank'}</strong>
+          </div>
+          <div>
+            <span>Token state</span>
+            <strong>{Number(operatorUser.token_dead || 0) ? 'dead' : 'not marked dead'}</strong>
+          </div>
+        </div>
+      )}
 
       <div className="cp-metrics">
         <Metric label="Authed users" value={users.total} />
@@ -256,7 +278,9 @@ export default function OperatorPage() {
       </div>
 
       <Section title="Authed Users">
-        {authedUsers.length ? (
+        {data.authed_users_error ? (
+          <div className="cp-empty" style={{ color: 'var(--red)' }}>{data.authed_users_error}</div>
+        ) : authedUsers.length ? (
           <div className="cp-table-wrap">
             <table className="cp-table wide op-users-table">
               <thead>
