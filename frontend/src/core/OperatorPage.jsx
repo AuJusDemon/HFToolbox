@@ -106,6 +106,7 @@ export default function OperatorPage() {
   const runtime = data.runtime || {}
   const run = market.last_run || {}
   const attention = data.attention || []
+  const authedUsers = data.authed_users || []
 
   return (
     <div className="cp-page">
@@ -138,6 +139,24 @@ export default function OperatorPage() {
         <div>
           <span>HF controller</span>
           <strong>{runtime.controller || '--'}</strong>
+        </div>
+      </div>
+      <div className="cp-status-strip">
+        <div>
+          <span>Data source</span>
+          <strong>{runtime.database || '--'}</strong>
+        </div>
+        <div>
+          <span>Summary type</span>
+          <strong>dev database snapshot</strong>
+        </div>
+        <div>
+          <span>Records shown</span>
+          <strong>{fmt(authedUsers.length)} latest authed users</strong>
+        </div>
+        <div>
+          <span>Secret fields</span>
+          <strong>not returned</strong>
         </div>
       </div>
 
@@ -235,6 +254,50 @@ export default function OperatorPage() {
           ]} />
         </Section>
       </div>
+
+      <Section title="Authed Users">
+        {authedUsers.length ? (
+          <div className="cp-table-wrap">
+            <table className="cp-table wide op-users-table">
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>UID</th>
+                  <th>Last seen</th>
+                  <th>Token</th>
+                  <th>Token expiry</th>
+                  <th>Telegram</th>
+                  <th>Bumps</th>
+                  <th>Watches</th>
+                  <th>Alerts 7d</th>
+                </tr>
+              </thead>
+              <tbody>
+                {authedUsers.map(user => {
+                  const tokenDead = Number(user.token_dead || 0) === 1
+                  const tokenExpiry = Number(user.token_expiry || 0)
+                  const expiringSoon = tokenExpiry > 0 && tokenExpiry < Math.floor(Date.now() / 1000) + 86400
+                  return (
+                    <tr key={user.uid}>
+                      <td>{user.username || 'unknown'}</td>
+                      <td>{user.uid}</td>
+                      <td>{stamp(user.last_seen)}</td>
+                      <td><Pill value={tokenDead ? 'dead' : 'ready'} tone={tokenDead ? 'bad' : 'good'} /></td>
+                      <td>{tokenExpiry ? <span style={{ color: expiringSoon ? 'var(--yellow)' : 'inherit' }}>{stamp(tokenExpiry)}</span> : '--'}</td>
+                      <td>{Number(user.telegram_linked || 0) ? 'linked' : '--'}</td>
+                      <td>{fmt(user.bump_jobs)}</td>
+                      <td>{fmt(user.market_watches)}</td>
+                      <td>{fmt(user.alerts_7d)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="cp-empty">No authed users found in this environment.</div>
+        )}
+      </Section>
     </div>
   )
 }

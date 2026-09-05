@@ -45,6 +45,13 @@ def _row(conn, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
         return {}
 
 
+def _rows(conn, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
+    try:
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+    except Exception:
+        return []
+
+
 def _int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -191,9 +198,34 @@ def _build_summary() -> dict[str, Any]:
             )),
         }
 
+        authed_users = _rows(
+            conn,
+            """
+            SELECT
+                u.uid,
+                COALESCE(NULLIF(u.username,''),'unknown') AS username,
+                COALESCE(u.last_seen,0) AS last_seen,
+                COALESCE(u.created_at,0) AS created_at,
+                COALESCE(u.token_dead,0) AS token_dead,
+                COALESCE(u.token_expiry,0) AS token_expiry,
+                CASE WHEN tl.hf_uid IS NULL THEN 0 ELSE 1 END AS telegram_linked,
+                (SELECT COUNT(*) FROM bump_jobs bj WHERE bj.uid=u.uid) AS bump_jobs,
+                (SELECT COUNT(*) FROM market_watches mw WHERE mw.uid=u.uid AND mw.enabled=1) AS market_watches,
+                (SELECT COUNT(*) FROM alert_events ae WHERE ae.hf_uid=u.uid AND ae.created_at >= ?) AS alerts_7d
+            FROM users u
+            LEFT JOIN telegram_links tl ON tl.hf_uid=u.uid
+            WHERE COALESCE(u.token,'')<>''
+            ORDER BY COALESCE(u.last_seen,0) DESC, COALESCE(u.created_at,0) DESC
+            LIMIT 100
+            """,
+            (week_ago,),
+        )
+
     background_disabled = _flag("DEV_DISABLE_CRAWL")
     telegram_disabled = _flag("DEV_DISABLE_TELEGRAM")
     controller_configured = bool(os.environ.get("HF_CONTROL_PLANE_URL", "").strip())
+    db_host = os.environ.get("DB_HOST", "sqlite").strip() or "sqlite"
+    db_name = os.environ.get("DB_NAME", os.environ.get("DB_PATH", "data/hf_dash.db")).strip()
 
     attention = []
     if users["token_dead"]:
@@ -215,9 +247,11 @@ def _build_summary() -> dict[str, Any]:
             "background_crawl": "disabled" if background_disabled else "enabled",
             "telegram_delivery": "disabled" if telegram_disabled else "enabled",
             "controller": "configured" if controller_configured else "not configured",
+            "database": f"{db_host}/{db_name}" if db_name else db_host,
             "status": _status(controller_configured, background_disabled),
         },
         "users": users,
+        "authed_users": authed_users,
         "bump_service": bump,
         "marketplace": market,
         "alerts": alerts,
