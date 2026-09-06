@@ -150,6 +150,15 @@ test('lower Program Directory expands details without navigating or authenticati
   await expect(row).toHaveAttribute('aria-expanded', 'false')
 })
 
+test('dedicated Bump Service action preserves its OAuth return route', async ({ page }) => {
+  await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
+  await page.goto('/landing-mock')
+  const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
+  await page.getByRole('button', { name: 'Open Bump Service' }).click()
+  const request = await requestPromise
+  expect(request.url()).toContain('next=%2Fdashboard%2Fbumper')
+})
+
 test('expanded Program Directory remains contained on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/landing-mock')
