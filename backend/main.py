@@ -938,7 +938,7 @@ app.add_middleware(
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.environ["SESSION_SECRET"],
-    https_only=os.environ.get("ENV") == "production",
+    https_only=auth.SESSION_COOKIE_SECURE,
     same_site="lax",
     max_age=60 * 60 * 24 * 14,  # 14 days
 )

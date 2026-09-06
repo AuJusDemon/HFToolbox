@@ -28,11 +28,17 @@ CLIENT_ID     = os.environ["HF_CLIENT_ID"]
 CLIENT_SECRET = os.environ["HF_CLIENT_SECRET"]
 REDIRECT_URI  = os.environ["HF_REDIRECT_URI"]
 FRONTEND_URL  = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+_secure_override = os.environ.get("SESSION_COOKIE_SECURE", "").strip().lower()
+SESSION_COOKIE_SECURE = (
+    _secure_override in {"1", "true", "yes", "on"}
+    if _secure_override
+    else FRONTEND_URL.lower().startswith("https://")
+)
 
 
 def _auth_error_redirect(request: Request, public_code: str, detail: str = ""):
     """Return browsers to login while retaining technical diagnostics in logs."""
-    reference = secrets.token_hex(4)
+    reference = str(request.session.pop("oauth_ref", "") or secrets.token_hex(4))
     safe_next = str(request.session.pop("oauth_next", "") or "")
     if safe_next and not safe_next.startswith("/dashboard"):
         safe_next = ""
@@ -47,16 +53,27 @@ def _auth_error_redirect(request: Request, public_code: str, detail: str = ""):
 
 @router.get("/login")
 async def login(request: Request, next: str = ""):
-    state = secrets.token_urlsafe(16)
-    # Encode the return path into the state so it survives the OAuth round-trip
-    # Format: "STATE|NEXT_PATH" — pipe is not in urlsafe base64 so safe to split on
     safe_next = next.strip()
     # Only allow internal paths (must start with /dashboard)
     if safe_next and not safe_next.startswith("/dashboard"):
         safe_next = ""
+
+    existing_uid = str(request.session.get("uid") or "")
+    if existing_uid:
+        existing_user = await asyncio.to_thread(db.get_user, existing_uid)
+        if existing_user and not existing_user.get("token_dead"):
+            destination = safe_next or "/dashboard"
+            log.info("OAuth bypassed for active browser session uid=%s next=%s", existing_uid, destination)
+            return RedirectResponse(f"{FRONTEND_URL}{destination}")
+        request.session.clear()
+
+    state = secrets.token_urlsafe(16)
+    reference = secrets.token_hex(4)
     full_state = f"{state}|{safe_next}" if safe_next else state
     request.session["oauth_state"] = state
     request.session["oauth_next"]  = safe_next
+    request.session["oauth_ref"] = reference
+    log.info("OAuth login started ref=%s next=%s", reference, safe_next or "/dashboard")
     params = urlencode({
         "response_type": "code",
         "client_id": CLIENT_ID,
@@ -177,9 +194,11 @@ async def callback(
     # Regenerate the session to prevent session fixation.
     # Pull next_path before clearing so it isn't lost.
     next_path = request.session.pop("oauth_next", "") or ""
+    reference = str(request.session.pop("oauth_ref", "") or "unknown")
     request.session.clear()
     request.session["uid"] = uid
     redirect_to = f"{FRONTEND_URL}{next_path}" if next_path else f"{FRONTEND_URL}/dashboard"
+    log.info("OAuth login completed ref=%s uid=%s next=%s", reference, uid, next_path or "/dashboard")
     return RedirectResponse(redirect_to)
 
 
@@ -224,10 +243,11 @@ async def me(request: Request):
 @router.post("/logout")
 async def logout(request: Request):
     uid = request.session.get("uid")
-    if uid:
-        await asyncio.to_thread(db.mark_token_dead, uid, True)
     request.session.clear()
+    if uid:
+        log.info("Browser session ended uid=%s", uid)
     response = JSONResponse({"ok": True})
-    https_only = os.environ.get("ENV") == "production"
-    response.delete_cookie("session", path="/", httponly=True, samesite="lax", secure=https_only)
+    response.delete_cookie(
+        "session", path="/", httponly=True, samesite="lax", secure=SESSION_COOKIE_SECURE
+    )
     return response

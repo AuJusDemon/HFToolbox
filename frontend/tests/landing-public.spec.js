@@ -19,6 +19,22 @@ async function runCommand(page, command) {
   await input.press('Enter')
 }
 
+test('root sign-in is single-flight under repeated clicks', async ({ page }) => {
+  let authRequests = 0
+  await page.route('**/auth/login**', route => {
+    authRequests += 1
+    return route.abort()
+  })
+  await page.goto('/')
+  const button = page.getByRole('button', { name: 'Continue with HackForums' })
+  await expect(button).toBeVisible({ timeout: 5000 })
+  await button.evaluate(element => {
+    element.click()
+    element.click()
+  })
+  await expect.poll(() => authRequests).toBe(1)
+})
+
 for (const viewport of VIEWPORTS) {
   test(`${viewport.name} hero boots, accepts commands, and remains width-contained`, async ({ page }) => {
     await page.setViewportSize(viewport)

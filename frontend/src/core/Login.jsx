@@ -65,7 +65,9 @@ export default function Login() {
   const [cursorOn,   setCursorOn]   = useState(true)
   const [typed,      setTyped]      = useState(hasAuthError ? 'authenticate --provider=hackforums' : '')
   const [typeDone,   setTypeDone]   = useState(hasAuthError)
+  const [authStarting, setAuthStarting] = useState(false)
   const bottomRef = useRef(null)
+  const authStartingRef = useRef(false)
 
   const CMD = 'authenticate --provider=hackforums'
 
@@ -457,14 +459,18 @@ export default function Login() {
                 <div className="login-auth-header">// oauth2 authentication required</div>
                 <button
                   className="login-auth-btn"
+                  disabled={authStarting}
                   onClick={() => {
+                    if (authStartingRef.current) return
+                    authStartingRef.current = true
+                    setAuthStarting(true)
                     const returnTo = requestedReturn || sessionStorage.getItem('auth_return_to') || ''
                     sessionStorage.removeItem('auth_return_to')
                     const url = returnTo ? `/auth/login?next=${encodeURIComponent(returnTo)}` : '/auth/login'
                     window.location.href = url
                   }}
                 >
-                  {authError ? 'Try Hack Forums sign-in again' : 'Continue with HackForums'}
+                  {authStarting ? 'Opening Hack Forums...' : authError ? 'Try Hack Forums sign-in again' : 'Continue with HackForums'}
                 </button>
                 <div className="login-auth-sub">
                   {'// No passwords stored. Authorization via official HF API v2 OAuth2.'}<br/>

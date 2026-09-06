@@ -31,6 +31,7 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
   const inputRef = useRef(null)
   const pulseTimerRef = useRef(null)
   const interactionTimersRef = useRef(new Set())
+  const interactionLockRef = useRef(false)
   const entryIdRef = useRef(0)
   const phase = BOOT_PHASES[phaseIndex]
   const ready = phase === 'ready'
@@ -131,6 +132,7 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
       pulse(result.program.id)
     }
     if (result.type === 'login') {
+      interactionLockRef.current = true
       const authenticated = loginTarget === '/dashboard'
       appendEntry(command, { type: 'output', lines: authenticated
         ? ['Account route selected.', 'Opening Toolbox...']
@@ -139,6 +141,7 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
       return
     }
     if (result.type === 'open') {
+      interactionLockRef.current = true
       appendEntry(command, { type: 'output', lines: [`Route selected: ${result.program.route}`, `Opening ${result.program.label}...`] })
       beginRouteTransfer(result.program.route, () => onOpen(result.program))
       return
@@ -147,10 +150,13 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
   }, [appendEntry, beginRouteTransfer, loginTarget, onLogin, onOpen, programs, pulse])
 
   const typeCommand = useCallback((command) => {
-    if (!ready || interactionState !== 'idle') return
+    if (!ready || interactionState !== 'idle' || interactionLockRef.current) return
+    interactionLockRef.current = true
     const value = String(command || '')
     if (reducedMotion) {
       setInput(value)
+      const result = resolveHeroCommand(value, programs)
+      if (!['login', 'open'].includes(result.type)) interactionLockRef.current = false
       execute(value)
       return
     }
@@ -164,9 +170,11 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
     })
     scheduleInteraction(() => {
       setInteractionState('idle')
+      const result = resolveHeroCommand(value, programs)
+      if (!['login', 'open'].includes(result.type)) interactionLockRef.current = false
       execute(value)
     }, characterDelay * value.length + 150)
-  }, [execute, interactionState, ready, reducedMotion, scheduleInteraction])
+  }, [execute, interactionState, programs, ready, reducedMotion, scheduleInteraction])
 
   const selectProgram = useCallback((program) => typeCommand(`open ${program.command}`), [typeCommand])
 

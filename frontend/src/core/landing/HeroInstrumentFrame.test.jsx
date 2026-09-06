@@ -119,6 +119,16 @@ describe('interactive terminal hero', () => {
     expect(props.onOpen).toHaveBeenCalledOnce()
   })
 
+  it('keeps rapid repeated program clicks to one navigation', () => {
+    const { props } = renderHero()
+    fireEvent.pointerDown(window)
+    const marketplace = screen.getByRole('button', { name: /Marketplace/ })
+    fireEvent.click(marketplace)
+    fireEvent.click(marketplace)
+    act(() => vi.advanceTimersByTime(1800))
+    expect(props.onOpen).toHaveBeenCalledOnce()
+  })
+
   it('dispatches login from the whitelisted terminal command', () => {
     const { props } = renderHero()
     fireEvent.pointerDown(window)
