@@ -21,6 +21,7 @@ const WirePage           = lazy(() => import('./core/WirePage.jsx'))
 const MarketPage         = lazy(() => import('./core/MarketPage.jsx'))
 const MerchantPage       = lazy(() => import('./core/MerchantPage.jsx'))
 const OperatorPage       = lazy(() => import('./core/OperatorPage.jsx'))
+const LandingMock        = lazy(() => import('./core/LandingMock.jsx'))
 
 function RequireAuth({ children }) {
   const { user, authLoading } = useStore()
@@ -119,6 +120,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Login />} />
+        <Route path="/landing-mock" element={<Suspense fallback={<Spin/>}><LandingMock /></Suspense>} />
         <Route path="/dashboard" element={<RequireAuth><Shell /></RequireAuth>}>
           <Route index element={<GuardedRoute><Dashboard /></GuardedRoute>} />
           <Route path="bytes"          element={<GuardedRoute><Suspense fallback={<Spin/>}><BytesPage /></Suspense></GuardedRoute>} />
