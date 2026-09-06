@@ -69,9 +69,9 @@ export const PROGRAMS = [
   },
   {
     id: 'casino', label: 'Byte Casino', shortLabel: 'CASINO', command: 'casino',
-    aliases: ['casino', 'poker', 'blackjack'], route: null, group: 'future',
+    aliases: ['casino', 'poker', 'blackjack', 'baccarat', 'roulette'], route: null, group: 'future',
     availability: 'coming-soon', publicPrimary: true,
-    publicSummary: 'Byte-based table games will join the Toolbox as a separate program.',
+    publicSummary: 'Play multiplayer poker, blackjack, baccarat, and roulette using Bytes.',
     visualizationMode: 'casino', operatorOnly: false, previewComponent: 'casino', prefetch: null,
   },
   {

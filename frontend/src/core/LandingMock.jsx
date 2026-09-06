@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import useStore from '../store.js'
 import { PROGRAMS, PUBLIC_PROGRAMS } from '../system/programRegistry.js'
+import HeroInstrumentFrame from './landing/HeroInstrumentFrame.jsx'
 import './landing-public.css'
 
 const AUTH_ERROR_MESSAGES = {
@@ -22,27 +23,6 @@ const MODULE_DETAIL = {
   contracts: ['Responsibility', 'Terms and timeout', 'Full state history'],
   market: ['Market index', 'Buyer intent', 'Watched criteria'],
   bytes: ['Balance', 'Reason', 'Action reference'],
-}
-
-function MiniTerminal() {
-  return (
-    <div className="lp-terminal" aria-label="Toolbox interface preview">
-      <div className="lp-terminal-head"><span>hftoolbox / public-interface</span><b>GUEST</b></div>
-      <div className="lp-terminal-body">
-        <div className="lp-terminal-prompt"><span>guest@hftoolbox:~$</span> programs</div>
-        <div className="lp-terminal-programs">
-          <div><span>01</span><strong>MY BUSINESS</strong><small>contracts / buyers / thread health</small><b>READY</b></div>
-          <div><span>02</span><strong>BUMP SERVICE</strong><small>scheduler / fees / results</small><b>READY</b></div>
-          <div><span>03</span><strong>MARKETPLACE</strong><small>index / buyer intent / watches</small><b>READY</b></div>
-          <div><span>04</span><strong>POSTING</strong><small>draft / preview / confirm</small><b>READY</b></div>
-          <div><span>05</span><strong>CONTRACTS</strong><small>review / active / waiting</small><b>READY</b></div>
-          <div><span>06</span><strong>BYTES</strong><small>balance / ledger / references</small><b>READY</b></div>
-        </div>
-        <div className="lp-terminal-result"><span>6 programs available</span><b>Use the directory below or sign in to continue.</b></div>
-        <div className="lp-terminal-command"><span>guest@hftoolbox:~$</span> open business <i /></div>
-      </div>
-    </div>
-  )
 }
 
 function InterfaceSample() {
@@ -67,6 +47,7 @@ function InterfaceSample() {
 
 export default function LandingMock() {
   const user = useStore(state => state.user)
+  const authLoading = useStore(state => state.authLoading)
   const navigate = useNavigate()
   const query = new URLSearchParams(window.location.search)
   const authErrorCode = query.get('auth_error') || ''
@@ -95,21 +76,17 @@ export default function LandingMock() {
         <button type="button" className="lp-login lp-login-compact" onClick={() => user ? navigate('/dashboard') : beginLogin()}>{user ? 'Open Toolbox' : 'Login with HF'}</button>
       </header>
 
-      <section id="top" className="lp-hero">
-        <div className="lp-hero-copy">
-          <span className="lp-kicker">UNOFFICIAL HACK FORUMS TOOLBOX</span>
-          <h1><span>HF</span> Toolbox</h1>
-          <p className="lp-lead">A working console for contracts, marketplace research, posting, thread bumps, buyers, and Bytes.</p>
-          <p className="lp-hero-note">Open the program you need, handle the work, and return without losing the surrounding context.</p>
-          {authError && <div className="lp-auth-error" role="alert"><strong>Sign-in was not completed</strong><span>{authError}</span>{authReference && <small>Reference: {authReference}</small>}</div>}
-          <div className="lp-actions">
-            <button type="button" className="lp-login" onClick={() => user ? navigate('/dashboard') : beginLogin()}>{user ? 'Open Toolbox' : 'Login with Hack Forums'}</button>
-            <a href="#modules" className="lp-secondary">See what is inside</a>
-          </div>
-          <div className="lp-input-strip" aria-label="Supported input methods"><span>ONE ACCOUNT</span><span>DIRECT PROGRAM ROUTES</span><span>DESKTOP + MOBILE</span></div>
-        </div>
-        <MiniTerminal />
-      </section>
+      <div className="lp-hero-stage">
+        <HeroInstrumentFrame
+          programs={PROGRAMS}
+          user={user}
+          authLoading={authLoading}
+          authError={authError}
+          authReference={authReference}
+          onOpen={openProgram}
+          onLogin={() => user ? navigate('/dashboard') : beginLogin()}
+        />
+      </div>
 
       <section id="modules" className="lp-section lp-programs">
         <header className="lp-section-head">

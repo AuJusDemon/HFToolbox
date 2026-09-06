@@ -8,64 +8,168 @@ const VIEWPORTS = [
   { name: 'mobile-small', width: 360, height: 800 },
 ]
 
+async function waitForBoot(page) {
+  await expect(page.locator('.hero-instrument')).toHaveAttribute('data-boot-phase', 'ready', { timeout: 3000 })
+  await expect(page.getByLabel('Terminal command')).toBeEnabled()
+}
+
+async function runCommand(page, command) {
+  const input = page.getByLabel('Terminal command')
+  await input.fill(command)
+  await input.press('Enter')
+}
+
 for (const viewport of VIEWPORTS) {
-  test(`${viewport.name} layout remains width-contained and renders the terminal directory`, async ({ page }) => {
+  test(`${viewport.name} hero boots, accepts commands, and remains width-contained`, async ({ page }) => {
     await page.setViewportSize(viewport)
     await page.goto('/landing-mock')
-    await expect(page.getByRole('heading', { name: 'HF Toolbox' })).toBeVisible()
-    await expect(page.locator('.lp-terminal')).toBeVisible()
-    await expect(page.locator('.lp-terminal-programs > div')).toHaveCount(6)
+    const hero = page.locator('.hero-instrument')
+    const before = await hero.boundingBox()
+    await waitForBoot(page)
+    const after = await hero.boundingBox()
 
-    const layout = await page.evaluate(() => ({
+    expect(Math.abs((before?.height || 0) - (after?.height || 0))).toBeLessThanOrEqual(1)
+    await expect(page.getByRole('heading', { name: 'HF Toolbox' })).toBeVisible()
+    await expect(page.locator('.hero-program-grid button')).toHaveCount(7)
+    await hero.screenshot({ path: `test-results/${viewport.name}-hero.png` })
+
+    await runCommand(page, 'help')
+    await runCommand(page, 'programs')
+    await runCommand(page, 'about casino')
+    await runCommand(page, 'not-a-command')
+    const log = page.getByRole('log')
+    await expect(log).toContainText('Example: about bumps')
+    await expect(log).toContainText("Texas Hold'em")
+    await expect(log).toContainText('command not found: not-a-command')
+
+    const dimensions = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
       viewportWidth: window.innerWidth,
       bodyHeight: document.body.scrollHeight,
       viewportHeight: window.innerHeight,
+      clippedPrograms: [...document.querySelectorAll('.hero-program-grid button')].filter(element => element.scrollWidth > element.clientWidth + 1).length,
+      heroBottom: document.querySelector('.hero-instrument').getBoundingClientRect().bottom,
+      lastProgramBottom: [...document.querySelectorAll('.hero-program-grid button')].at(-1).getBoundingClientRect().bottom,
+      heroFooterBottom: document.querySelector('.hero-instrument-foot').getBoundingClientRect().bottom,
+      directoryTop: document.querySelector('#modules .lp-kicker').getBoundingClientRect().top,
     }))
-    expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth)
-    expect(layout.bodyHeight).toBeGreaterThan(layout.viewportHeight)
+    expect(dimensions.bodyWidth).toBeLessThanOrEqual(dimensions.viewportWidth)
+    expect(dimensions.bodyHeight).toBeGreaterThan(dimensions.viewportHeight)
+    expect(dimensions.clippedPrograms).toBe(0)
+    expect(dimensions.lastProgramBottom).toBeLessThanOrEqual(dimensions.heroBottom + 1)
+    expect(dimensions.heroFooterBottom).toBeLessThanOrEqual(dimensions.heroBottom + 1)
+    if (viewport.name === 'desktop') expect(dimensions.directoryTop).toBeLessThan(viewport.height)
 
+    await page.locator('#modules').scrollIntoViewIfNeeded()
+    await expect(page.getByRole('heading', { name: 'The work is already separated for you.' })).toBeVisible()
     await page.screenshot({ path: `test-results/${viewport.name}.png`, fullPage: true })
   })
 }
 
-test('all program information is available on one page without tabs', async ({ page }) => {
+test('boot can be skipped without changing hero dimensions', async ({ page }) => {
   await page.goto('/landing-mock')
-  await expect(page.getByRole('heading', { name: 'The work is already separated for you.' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Know what the scheduler is doing.' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Byte Casino' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: "Texas Hold'em" })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Blackjack' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Baccarat' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Roulette' })).toBeVisible()
-  await expect(page.getByRole('tab')).toHaveCount(0)
+  const hero = page.locator('.hero-instrument')
+  const before = await hero.boundingBox()
+  await page.keyboard.press('Escape')
+  await expect(hero).toHaveAttribute('data-boot-phase', 'ready')
+  const after = await hero.boundingBox()
+  expect(Math.abs((before?.height || 0) - (after?.height || 0))).toBeLessThanOrEqual(1)
 })
 
-test('mobile exposes the program directory in the normal page flow', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 })
+test('reduced motion renders the completed instrument immediately', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/landing-mock')
-  await page.getByRole('heading', { name: 'The work is already separated for you.' }).scrollIntoViewIfNeeded()
-  await expect(page.getByRole('button', { name: /Marketplace/ })).toBeVisible()
-  await page.screenshot({ path: 'test-results/program-market-mobile.png', fullPage: true })
+  await expect(page.locator('.hero-instrument')).toHaveAttribute('data-boot-phase', 'ready')
+  await expect(page.getByLabel('Terminal command')).toBeEnabled()
+  await expect(page.locator('.hero-program-grid button').first()).toBeVisible()
 })
 
-test('guest OAuth carries only the selected internal program route', async ({ page }) => {
+test('keyboard history, completion, escape, and clear work in the browser', async ({ page }) => {
+  await page.goto('/landing-mock')
+  await waitForBoot(page)
+  const input = page.getByLabel('Terminal command')
+  await runCommand(page, 'help')
+  await runCommand(page, 'programs')
+  await input.press('ArrowUp')
+  await expect(input).toHaveValue('programs')
+  await input.press('ArrowUp')
+  await expect(input).toHaveValue('help')
+  await input.press('ArrowDown')
+  await expect(input).toHaveValue('programs')
+  await input.fill('about poke')
+  await input.press('Tab')
+  await expect(input).toHaveValue('about poker')
+  await input.press('Escape')
+  await expect(input).toHaveValue('')
+  await input.press('Control+l')
+  await expect(page.getByRole('log')).toContainText('HF.TOOLBOX public interface')
+  await expect(page.getByRole('log')).not.toContainText('business')
+})
+
+test('every Program Bus entry follows its registry behavior', async ({ page }) => {
+  const destinations = [
+    ['My Business', '/dashboard/merchant'], ['Bump Service', '/dashboard/bumper'],
+    ['Posting', '/dashboard/posting'], ['Contracts', '/dashboard/contracts'],
+    ['Marketplace', '/dashboard/market'], ['Bytes', '/dashboard/bytes'],
+  ]
+  await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
+
+  for (const [label, route] of destinations) {
+    await page.goto('/landing-mock')
+    await page.keyboard.press('Escape')
+    const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
+    await page.locator('.hero-program-grid').getByRole('button', { name: new RegExp(label) }).click()
+    const request = await requestPromise
+    expect(request.url()).toContain(`next=${encodeURIComponent(route)}`)
+  }
+
+  await page.goto('/landing-mock')
+  await page.keyboard.press('Escape')
+  await page.locator('.hero-program-grid').getByRole('button', { name: /Byte Casino/ }).click()
+  await expect(page).toHaveURL(/\/landing-mock$/)
+  await expect(page.getByRole('log')).toContainText('Byte Casino is coming soon.')
+})
+
+test('terminal open command preserves the selected internal OAuth route', async ({ page }) => {
   await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
   await page.goto('/landing-mock?next=//example.invalid')
+  await waitForBoot(page)
   const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
-  await page.getByRole('button', { name: /Marketplace/ }).click()
+  await runCommand(page, 'open market')
   const request = await requestPromise
   expect(request.url()).toContain('next=%2Fdashboard%2Fmarket')
   expect(request.url()).not.toContain('example.invalid')
 })
 
-test('authenticated program entry navigates directly to its dashboard route', async ({ page }) => {
-  await page.route('**/auth/me', route => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ uid: '761578', username: 'PreviewUser', groups: [] }),
-  }))
+test('authenticated Program Bus entry navigates directly to its dashboard route', async ({ page }) => {
+  await page.route('**/auth/me', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ uid: '761578', username: 'PreviewUser', groups: [] }) }))
   await page.goto('/landing-mock')
-  await page.getByRole('button', { name: /Bump Service/ }).first().click()
+  await page.keyboard.press('Escape')
+  await page.locator('.hero-program-grid').getByRole('button', { name: /Bump Service/ }).click()
   await expect(page).toHaveURL(/\/dashboard\/bumper$/)
+})
+
+test('OAuth errors appear inside the terminal with their reference', async ({ page }) => {
+  await page.goto('/landing-mock?auth_error=cancelled&auth_ref=test-ref-123')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('log')).toContainText('Authorization was cancelled. No changes were made.')
+  await expect(page.getByRole('log')).toContainText('Reference: test-ref-123')
+})
+
+test('mobile prompt remains visible when focused and normal landing sections remain present', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/landing-mock')
+  await page.keyboard.press('Escape')
+  const input = page.getByLabel('Terminal command')
+  await input.focus()
+  const prompt = await page.locator('.hero-terminal-prompt').boundingBox()
+  expect(prompt?.x).toBeGreaterThanOrEqual(0)
+  expect((prompt?.x || 0) + (prompt?.width || 0)).toBeLessThanOrEqual(390)
+  await expect(page.getByRole('heading', { name: 'Know what the scheduler is doing.' })).toBeAttached()
+  await expect(page.getByRole('heading', { name: 'Byte Casino' })).toBeAttached()
+  await expect(page.getByRole('heading', { name: "Texas Hold'em" })).toBeAttached()
+  await expect(page.getByRole('heading', { name: 'Blackjack' })).toBeAttached()
+  await expect(page.getByRole('heading', { name: 'Baccarat' })).toBeAttached()
+  await expect(page.getByRole('heading', { name: 'Roulette' })).toBeAttached()
+  await expect(page.getByRole('tab')).toHaveCount(0)
 })
