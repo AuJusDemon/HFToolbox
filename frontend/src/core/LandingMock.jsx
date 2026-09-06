@@ -12,6 +12,7 @@ const MODULES = [
     code: 'BUSINESS',
     title: 'My Business',
     status: 'READY',
+    href: '/dashboard/merchant',
     text: 'Sales threads, contracts, buyers, leads, ratings, and follow-up work in one place.',
     metrics: ['open replies', 'active contracts', 'thread health'],
   },
@@ -19,6 +20,7 @@ const MODULES = [
     code: 'BUMPS',
     title: 'Bump Service',
     status: 'READY',
+    href: '/dashboard/bumper',
     text: 'Run bump jobs, track next bump time, monitor spend, and see if bumps create movement.',
     metrics: ['next bump', 'bytes spent', 'post-bump replies'],
   },
@@ -26,6 +28,7 @@ const MODULES = [
     code: 'MARKET',
     title: 'Marketplace',
     status: 'READY',
+    href: '/dashboard/market',
     text: 'Browse indexed market activity, buyer demand, contract movement, and watched threads.',
     metrics: ['buyer intent', 'market movement', 'watch rules'],
   },
@@ -33,6 +36,7 @@ const MODULES = [
     code: 'CASINO',
     title: 'Byte Casino',
     status: 'SOON',
+    href: '#casino',
     text: 'A separate Toolbox module for table games and Byte-based play once the casino work is ready.',
     metrics: ['poker tables', 'blackjack tables', 'fairness logs'],
   },
@@ -45,6 +49,17 @@ const BOOT_LINES = [
   ['business.workspace', 'ready'],
   ['bump.service', 'ready'],
   ['byte.casino', 'queued'],
+]
+
+const ACTIVITY_LINES = [
+  ['market.watch', 'buyer request matched'],
+  ['business.reply', 'sales thread reply queued'],
+  ['bump.timer', 'next bump recalculated'],
+  ['contracts.sync', 'contract status changed'],
+  ['posting.draft', 'reply template saved'],
+  ['casino.table', 'module waiting'],
+  ['bytes.ledger', 'balance event indexed'],
+  ['thread.health', 'movement snapshot updated'],
 ]
 
 function LoginButton({ authError, requestedReturn }) {
@@ -77,7 +92,7 @@ function TerminalWindow({ title, children, className = '' }) {
 
 function ModuleCard({ item }) {
   return (
-    <article className="landing-module-card">
+    <a className="landing-module-card" href={item.href}>
       <div className="landing-module-top">
         <span>{item.code}</span>
         <b className={item.status === 'SOON' ? 'soon' : ''}>{item.status}</b>
@@ -87,7 +102,33 @@ function ModuleCard({ item }) {
       <div className="landing-module-metrics">
         {item.metrics.map(metric => <small key={metric}>{metric}</small>)}
       </div>
-    </article>
+    </a>
+  )
+}
+
+function LiveTerminal() {
+  return (
+    <TerminalWindow title="system.activity">
+      <div className="landing-live-head">
+        <span>event</span>
+        <span>state</span>
+      </div>
+      <div className="landing-live-feed" aria-label="Animated Toolbox activity feed">
+        <div>
+          {[...ACTIVITY_LINES, ...ACTIVITY_LINES].map(([name, state], index) => (
+            <p key={`${name}-${index}`}>
+              <span>{name}</span>
+              <b>{state}</b>
+            </p>
+          ))}
+        </div>
+      </div>
+      <div className="landing-command">
+        <span>root@hftoolbox:~$</span>
+        <strong>tail -f activity.log</strong>
+        <i />
+      </div>
+    </TerminalWindow>
   )
 }
 
@@ -153,7 +194,7 @@ export default function LandingMock() {
         <nav>
           <a href="#modules">Modules</a>
           <a href="#bump-service">Bump Service</a>
-          <a href="#roadmap">Roadmap</a>
+          <a href="#casino">Casino</a>
         </nav>
         <LoginButton authError={authError} requestedReturn={requestedReturn} />
       </header>
@@ -179,21 +220,19 @@ export default function LandingMock() {
           </div>
         </div>
 
-        <TerminalWindow title="system.boot">
-          <div className="landing-boot">
-            {BOOT_LINES.map(([name, state], index) => (
-              <div key={name} style={{ '--i': index }}>
-                <span>load {name}</span>
-                <b>{state}</b>
-              </div>
-            ))}
-          </div>
-          <div className="landing-command">
-            <span>root@hftoolbox:~$</span>
-            <strong>open workspace</strong>
-            <i />
-          </div>
-        </TerminalWindow>
+        <div className="landing-terminal-stack">
+          <TerminalWindow title="system.boot">
+            <div className="landing-boot">
+              {BOOT_LINES.map(([name, state], index) => (
+                <div key={name} style={{ '--i': index }}>
+                  <span>load {name}</span>
+                  <b>{state}</b>
+                </div>
+              ))}
+            </div>
+          </TerminalWindow>
+          <LiveTerminal />
+        </div>
       </section>
 
       <section id="modules" className="landing-section">
@@ -249,33 +288,30 @@ export default function LandingMock() {
         </div>
       </section>
 
-      <section id="roadmap" className="landing-section landing-roadmap">
-        <div className="landing-section-head">
-          <span>Roadmap</span>
-          <h2>More Toolbox sections can come online later.</h2>
-          <p>
-            Byte Casino should be visible as future direction without taking over the
-            marketplace-focused product today.
-          </p>
+      <section id="casino" className="landing-split landing-casino">
+        <div>
+          <div className="landing-section-head compact">
+            <span>Coming Soon</span>
+            <h2>Byte Casino joins the Toolbox later.</h2>
+            <p>
+              The casino should feel like another module in the same console, not a
+              replacement for the marketplace tools already here.
+            </p>
+          </div>
+          <div className="landing-bullets">
+            <p><b>Table games</b><span>Poker and blackjack can live beside the seller tools as separate sections.</span></p>
+            <p><b>Byte balance</b><span>The same account shell can show available, in-play, and pending balances.</span></p>
+            <p><b>Game records</b><span>Hands, fairness checks, and table history can stay inspectable from the console.</span></p>
+          </div>
         </div>
-        <div className="landing-roadmap-grid">
-          <TerminalWindow title="byte-casino.soon">
-            <div className="landing-roadmap-terminal">
-              <p><span>poker.tables</span><b>in progress</b></p>
-              <p><span>blackjack.tables</span><b>planned</b></p>
-              <p><span>byte.cashier</span><b>planned</b></p>
-              <p><span>fairness.logs</span><b>planned</b></p>
-            </div>
-          </TerminalWindow>
-          <TerminalWindow title="toolbox.core">
-            <div className="landing-roadmap-terminal">
-              <p><span>my.business</span><b>ready</b></p>
-              <p><span>bump.service</span><b>ready</b></p>
-              <p><span>marketplace</span><b>ready</b></p>
-              <p><span>posting</span><b>ready</b></p>
-            </div>
-          </TerminalWindow>
-        </div>
+        <TerminalWindow title="byte-casino.preview">
+          <div className="landing-casino-table">
+            <div><span>poker.room</span><b>building</b></div>
+            <div><span>blackjack.room</span><b>queued</b></div>
+            <div><span>cashier</span><b>drafting</b></div>
+            <div><span>fairness.center</span><b>drafting</b></div>
+          </div>
+        </TerminalWindow>
       </section>
 
       <section className="landing-final">
