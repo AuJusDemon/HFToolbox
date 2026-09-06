@@ -21,7 +21,7 @@ function initialProgram() {
   return findProgram(saved) || PROGRAMS[0]
 }
 
-export function useSystemRuntime({ onLogin } = {}) {
+export function useSystemRuntime({ onLogin, identity = 'guest' } = {}) {
   const [activeProgram, setActiveProgram] = useState(initialProgram)
   const [phase, setPhase] = useState('power-on')
   const [bootLines, setBootLines] = useState([])
@@ -31,7 +31,10 @@ export function useSystemRuntime({ onLogin } = {}) {
     return typeof window === 'undefined' || localStorage.getItem('hftb_os_motion') !== 'off'
   })
   const [output, setOutput] = useState([
-    { tone: 'dim', text: 'Type help for commands or select a program.' },
+    { tone: 'dim', text: 'interface.mount ........ terminal geometry ready' },
+    { tone: 'dim', text: `programs.register ...... ${PROGRAMS.length} entries indexed` },
+    { tone: 'accent', text: 'input.channel .......... pointer / touch / command' },
+    { tone: 'normal', text: 'Type help for commands or select a program.' },
   ])
   const [history, setHistory] = useState([])
   const [impulse, setImpulse] = useState(0)
@@ -81,14 +84,19 @@ export function useSystemRuntime({ onLogin } = {}) {
     setOutput(current => [...current.slice(-5), { text, tone }])
   }, [])
 
+  const pulse = useCallback(() => {
+    setImpulse(value => value + 1)
+  }, [])
+
   const openProgram = useCallback((program, announce = true) => {
     if (!program || program.operatorOnly) return
     setActiveProgram(program)
     sessionStorage.setItem('hftb_os_program', program.id)
     prefetchProgram(program)
-    setImpulse(value => value + 1)
+    pulse()
     if (announce) emit(`program opened: ${program.command}`, program.availability === 'coming-soon' ? 'warn' : 'accent')
-  }, [emit])
+    if (announce) emit(program.publicSummary, 'dim')
+  }, [emit, pulse])
 
   const replayBoot = useCallback(() => {
     sessionStorage.removeItem(BOOT_STORAGE_KEY)
@@ -110,12 +118,24 @@ export function useSystemRuntime({ onLogin } = {}) {
     const parts = command.toLowerCase().split(/\s+/)
     const [verb, ...args] = parts
     if (verb === 'help') {
-      emit('help | programs [--all] | open <program> | login | clear | replay boot | motion on|off', 'dim')
+      emit('help | ls | programs [--all] | open <program> | status | whoami | login | clear | replay boot | motion on|off', 'dim')
       return
     }
-    if (verb === 'programs') {
+    if (verb === 'programs' || verb === 'ls') {
       const source = args.includes('--all') ? PROGRAMS.filter(program => !program.operatorOnly) : PUBLIC_PROGRAMS
       emit(source.map(program => program.command).join('  '), 'accent')
+      return
+    }
+    if (verb === 'status') {
+      emit(`program=${activeProgram.command} availability=${activeProgram.availability} motion=${motionEnabled ? 'on' : 'off'}`, 'accent')
+      return
+    }
+    if (verb === 'whoami') {
+      emit(identity === 'guest' ? 'guest / Hack Forums authentication not started' : `${identity} / authenticated`, identity === 'guest' ? 'dim' : 'accent')
+      return
+    }
+    if (verb === 'back') {
+      openProgram(PROGRAMS[0])
       return
     }
     if (verb === 'open' || verb === 'launch') {
@@ -147,11 +167,11 @@ export function useSystemRuntime({ onLogin } = {}) {
       return
     }
     emit(`command not found: ${verb}`, 'error')
-  }, [activeProgram.route, emit, onLogin, openProgram, replayBoot])
+  }, [activeProgram, emit, identity, motionEnabled, onLogin, openProgram, replayBoot])
 
   const completions = useMemo(() => {
     const programNames = PROGRAMS.filter(program => !program.operatorOnly).flatMap(program => [program.command, ...program.aliases])
-    return ['help', 'programs', 'programs --all', 'login', 'clear', 'replay boot', 'motion on', 'motion off', ...programNames.map(name => `open ${name}`)]
+    return ['help', 'ls', 'programs', 'programs --all', 'status', 'whoami', 'back', 'login', 'clear', 'replay boot', 'motion on', 'motion off', ...programNames.map(name => `open ${name}`)]
   }, [])
 
   const complete = useCallback((value) => {
@@ -172,6 +192,7 @@ export function useSystemRuntime({ onLogin } = {}) {
     openProgram,
     output,
     phase,
+    pulse,
     replayBoot,
     setMotionEnabled,
   }

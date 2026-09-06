@@ -1,13 +1,18 @@
 import { useEffect, useRef } from 'react'
 
-const MODE_LABELS = {
+const COLORS = {
+  bg: '#020502', faint: 'rgba(70, 110, 70, .14)', line: 'rgba(92, 154, 92, .34)',
+  dim: '#4f694f', sub: '#7f9d7f', text: '#cbdacb', green: '#39ff14', amber: '#ffba18', cyan: '#58c7c4',
+}
+
+const LABELS = {
   home: ['BUSINESS', 'BUMPS', 'MARKET', 'CONTRACTS', 'POSTING', 'BYTES'],
-  business: ['REPLY', 'REVIEW', 'ACTIVE', 'WAIT', 'DONE'],
-  bumps: ['QUEUE', 'TIMER', 'POST', 'RESULT'],
-  market: ['BAZAAR', 'PREMIUM', 'SERVICES', 'AUX'],
-  contracts: ['REVIEW', 'ACTIVE', 'WAIT', 'DONE'],
-  posting: ['DRAFT', 'PREVIEW', 'SUBMIT', 'WATCH'],
-  bytes: ['BALANCE', 'SPEND', 'RECEIVE', 'LEDGER'],
+  business: ['REVIEW', 'ACTIVE', 'WAITING', 'FOLLOW-UP'],
+  bumps: ['ELIGIBLE', 'QUEUED', 'POSTED', 'MEASURED'],
+  market: ['BAZAAR', 'PREMIUM', 'SERVICES', 'AUXILIARY'],
+  contracts: ['REVIEW', 'PROGRESS', 'WAITING', 'CLOSED'],
+  posting: ['DRAFT', 'PREVIEW', 'CONFIRM', 'WATCH'],
+  bytes: ['BALANCE', 'DEBIT', 'CREDIT', 'REFERENCE'],
   casino: ['POKER', 'BLACKJACK', 'CASHIER', 'VERIFY'],
 }
 
@@ -24,180 +29,279 @@ function setupCanvas(canvas, width, height) {
   canvas.style.height = `${height}px`
   const context = canvas.getContext('2d')
   context.setTransform(ratio, 0, 0, ratio, 0, 0)
+  context.textBaseline = 'middle'
   return context
 }
 
-function drawBackdrop(context, width, height, time, seed) {
-  context.fillStyle = '#030603'
+function text(context, value, x, y, color = COLORS.sub, size = 9, align = 'left') {
+  context.fillStyle = color
+  context.font = `${size}px "Share Tech Mono", monospace`
+  context.textAlign = align
+  context.fillText(value, x, y)
+}
+
+function line(context, x1, y1, x2, y2, color = COLORS.line) {
+  context.strokeStyle = color
+  context.lineWidth = 1
+  context.beginPath()
+  context.moveTo(x1, y1)
+  context.lineTo(x2, y2)
+  context.stroke()
+}
+
+function frame(context, x, y, width, height, label = '') {
+  context.strokeStyle = COLORS.line
+  context.strokeRect(x, y, width, height)
+  const notch = Math.min(58, width * .3)
+  context.fillStyle = COLORS.bg
+  context.fillRect(x + 8, y - 4, notch, 9)
+  if (label) text(context, label, x + 12, y, COLORS.dim, 7)
+  line(context, x, y + 15, x + width, y + 15, COLORS.faint)
+  const corner = 7
+  line(context, x, y, x + corner, y, COLORS.green)
+  line(context, x, y, x, y + corner, COLORS.green)
+  line(context, x + width - corner, y + height, x + width, y + height, COLORS.dim)
+  line(context, x + width, y + height - corner, x + width, y + height, COLORS.dim)
+}
+
+function node(context, x, y, label, active = false, side = 'right') {
+  const color = active ? COLORS.green : COLORS.sub
+  context.strokeStyle = active ? COLORS.green : COLORS.line
+  context.strokeRect(x - 4, y - 4, 8, 8)
+  context.fillStyle = active ? COLORS.green : COLORS.dim
+  context.fillRect(x - 1, y - 1, 2, 2)
+  text(context, label, x + (side === 'right' ? 10 : -10), y, color, 8, side === 'right' ? 'left' : 'right')
+}
+
+function backdrop(context, width, height, time, seed, pointer, impulse) {
+  context.fillStyle = COLORS.bg
   context.fillRect(0, 0, width, height)
-  context.font = '11px "Share Tech Mono", monospace'
-  context.textBaseline = 'middle'
-  context.fillStyle = 'rgba(72, 126, 72, .18)'
-  const cellX = width < 420 ? 22 : 18
-  const cellY = 19
-  for (let y = 13; y < height; y += cellY) {
-    for (let x = 10; x < width; x += cellX) {
+  const cellX = width < 420 ? 23 : 19
+  const cellY = 18
+  const glyphs = ['.', ':', '+', '-', '|']
+  for (let y = 12; y < height; y += cellY) {
+    for (let x = 9; x < width; x += cellX) {
       const noise = hash(x / cellX, y / cellY, seed)
-      if (noise > .76) {
-        const glyphs = '.:+-|'
-        const offset = Math.floor((noise * glyphs.length + time * .00025) % glyphs.length)
-        context.fillText(glyphs[offset], x, y)
+      const pointerDistance = pointer.active ? Math.hypot(x / width - pointer.x, y / height - pointer.y) : 1
+      const energized = pointerDistance < .16 || Math.abs(noise - ((impulse * .13) % 1)) < .025
+      if (noise > .8 || energized) {
+        const glyph = energized ? '+' : glyphs[Math.floor((noise * glyphs.length + time * .00016) % glyphs.length)]
+        text(context, glyph, x, y, energized ? 'rgba(255,186,24,.55)' : COLORS.faint, 8)
       }
     }
   }
 }
 
-function drawNode(context, x, y, label, active = false) {
-  context.strokeStyle = active ? '#39ff14' : 'rgba(93, 171, 93, .55)'
-  context.fillStyle = active ? '#39ff14' : '#739473'
-  context.lineWidth = active ? 1.5 : 1
-  context.strokeRect(x - 4, y - 4, 8, 8)
-  context.font = '10px "Share Tech Mono", monospace'
-  context.fillText(label, x + 10, y)
+function scopeHeader(context, width, mode, time, motion) {
+  text(context, `HF.TOOLBOX / ${mode.toUpperCase()} FIELD`, 12, 13, COLORS.sub, 7)
+  text(context, motion ? 'RUNTIME DYNAMIC' : 'RUNTIME STATIC', width - 12, 13, motion ? COLORS.green : COLORS.amber, 7, 'right')
+  line(context, 12, 25, width - 12, 25)
+  const scan = motion ? ((time * .06) % Math.max(1, width - 24)) : width * .42
+  line(context, 12 + scan, 22, 12 + scan, 28, COLORS.green)
 }
 
-function drawNetwork(context, width, height, labels, time, pointer, impulse) {
-  const center = { x: width * .48, y: height * .48 }
-  const radiusX = Math.min(width * .31, 170)
-  const radiusY = Math.min(height * .3, 105)
+function compactField(context, width, height, time, impulse, mode) {
+  const labels = LABELS[mode] || LABELS.home
+  const active = Math.floor(time / 800 + impulse) % labels.length
+  const left = 18
+  const right = width - 18
+  const y = Math.max(58, height * .57)
+  frame(context, 12, 36, width - 24, Math.max(45, height - 48), `${mode.toUpperCase()} SIGNAL`)
+  line(context, left, y, right, y, COLORS.line)
+  labels.forEach((label, index) => {
+    const x = labels.length === 1 ? width / 2 : left + index * ((right - left) / (labels.length - 1))
+    context.strokeStyle = index === active ? COLORS.green : COLORS.line
+    context.strokeRect(x - 3, y - 3, 6, 6)
+    if (index === active) text(context, label, x, y - 14, COLORS.green, 7, 'center')
+  })
+  const progress = ((time / 1700) + impulse * .13) % 1
+  context.fillStyle = COLORS.amber
+  context.fillRect(left + (right - left) * progress - 2, y - 2, 4, 4)
+  text(context, `FOCUS ${labels[active]}`, 17, height - 8, COLORS.green, 7)
+  text(context, `${String(active + 1).padStart(2, '0')}/${String(labels.length).padStart(2, '0')}`, width - 17, height - 8, COLORS.dim, 7, 'right')
+}
+
+function homeField(context, width, height, time, impulse) {
+  const cx = width * .5
+  const cy = height * .43
+  const labels = LABELS.home
+  const rx = Math.min(width * .34, 175)
+  const ry = Math.min(height * .26, 128)
+  frame(context, 14, 38, width - 28, height - 86, 'PROGRAM TOPOLOGY')
   const nodes = labels.map((label, index) => {
-    const angle = (Math.PI * 2 * index / labels.length) - Math.PI / 2
-    return { label, x: center.x + Math.cos(angle) * radiusX, y: center.y + Math.sin(angle) * radiusY }
+    const angle = Math.PI * 2 * index / labels.length - Math.PI / 2
+    return { label, x: cx + Math.cos(angle) * rx, y: cy + Math.sin(angle) * ry }
   })
-  context.strokeStyle = 'rgba(57, 255, 20, .22)'
-  nodes.forEach(node => {
-    context.beginPath()
-    context.moveTo(center.x, center.y)
-    context.lineTo(node.x, node.y)
-    context.stroke()
+  const active = Math.floor(time / 760 + impulse) % labels.length
+  nodes.forEach((item, index) => {
+    line(context, cx, cy, item.x, item.y, index === active ? 'rgba(57,255,20,.55)' : COLORS.line)
+    node(context, item.x, item.y, item.label, index === active, item.x > cx ? 'right' : 'left')
   })
-  const active = Math.floor(time / 900 + impulse) % nodes.length
-  nodes.forEach((node, index) => drawNode(context, node.x, node.y, node.label, index === active))
-  drawNode(context, center.x, center.y, 'HF.TOOLBOX', true)
-  if (pointer.active) {
-    context.strokeStyle = 'rgba(255, 187, 0, .5)'
-    context.beginPath()
-    context.moveTo(center.x, center.y)
-    context.lineTo(pointer.x * width, pointer.y * height)
-    context.stroke()
-  }
+  context.strokeStyle = COLORS.green
+  context.strokeRect(cx - 31, cy - 12, 62, 24)
+  text(context, 'HF.TBX', cx, cy, COLORS.green, 10, 'center')
+  const progress = ((time / 2200) + impulse * .1) % 1
+  const target = nodes[active]
+  context.fillStyle = COLORS.amber
+  context.fillRect(cx + (target.x - cx) * progress - 2, cy + (target.y - cy) * progress - 2, 4, 4)
+  text(context, 'PROGRAM BUS', 18, height - 31, COLORS.dim, 7)
+  text(context, labels[active], width - 18, height - 31, COLORS.green, 8, 'right')
 }
 
-function drawPipeline(context, width, height, labels, time, impulse) {
-  const left = 30
-  const right = width - 30
-  const gap = (right - left) / Math.max(1, labels.length - 1)
-  const y = height * .52
-  context.strokeStyle = 'rgba(57, 255, 20, .32)'
-  context.beginPath()
-  context.moveTo(left, y)
-  context.lineTo(right, y)
-  context.stroke()
-  labels.forEach((label, index) => drawNode(context, left + gap * index, y, label, index === Math.floor(time / 850 + impulse) % labels.length))
-  const progress = ((time / 2400) + impulse * .12) % 1
-  context.fillStyle = '#ffbb00'
-  context.fillRect(left + (right - left) * progress - 3, y - 3, 6, 6)
+function pipelineField(context, width, height, time, impulse, mode) {
+  const labels = LABELS[mode]
+  const top = 54
+  const bottom = height - 50
+  const left = 26
+  const right = width - 28
+  frame(context, 14, 38, width - 28, height - 79, mode === 'contracts' ? 'CONTRACT STATE TREE' : 'WORK QUEUE')
+  const active = Math.floor(time / 820 + impulse) % labels.length
+  const laneH = (bottom - top) / labels.length
+  labels.forEach((label, index) => {
+    const y = top + laneH * index + laneH / 2
+    text(context, String(index + 1).padStart(2, '0'), left, y, COLORS.dim, 7)
+    text(context, label, left + 20, y, index === active ? COLORS.green : COLORS.sub, 8)
+    line(context, left + 90, y, right, y, index === active ? 'rgba(57,255,20,.55)' : COLORS.faint)
+    const blocks = 4 + index
+    for (let block = 0; block < blocks; block += 1) {
+      const x = left + 104 + block * 15
+      if (x < right - 10) {
+        context.fillStyle = block === ((Math.floor(time / 310) + impulse) % blocks) && index === active ? COLORS.amber : COLORS.line
+        context.fillRect(x, y - 3, 8, 6)
+      }
+    }
+  })
+  text(context, `FOCUS ${labels[active]}`, 18, height - 25, COLORS.green, 7)
+  text(context, 'STATE / OWNER / NEXT ACTION', width - 18, height - 25, COLORS.dim, 7, 'right')
 }
 
-function drawBumps(context, width, height, time, impulse) {
-  const cx = width * .47
-  const cy = height * .5
-  const radius = Math.min(width, height) * .27
-  context.strokeStyle = 'rgba(57, 255, 20, .28)'
-  context.lineWidth = 1
-  ;[1, .72, .42].forEach(scale => {
+function bumpField(context, width, height, time, impulse) {
+  const cx = width * .5
+  const cy = height * .43
+  const radius = Math.min(width, height) * .25
+  frame(context, 14, 38, width - 28, height - 79, 'SCHEDULER SCOPE')
+  ;[1, .72, .44].forEach((scale, index) => {
+    context.strokeStyle = index === 0 ? COLORS.line : COLORS.faint
     context.beginPath()
     context.arc(cx, cy, radius * scale, 0, Math.PI * 2)
     context.stroke()
   })
-  const angle = time * .0012 + impulse * .45
-  const x = cx + Math.cos(angle) * radius
-  const y = cy + Math.sin(angle) * radius
-  context.strokeStyle = '#39ff14'
-  context.beginPath()
-  context.moveTo(cx, cy)
-  context.lineTo(x, y)
-  context.stroke()
-  drawNode(context, x, y, 'NEXT BUMP', true)
-  drawNode(context, cx, cy, 'SCHEDULER', false)
+  line(context, cx - radius - 16, cy, cx + radius + 16, cy, COLORS.faint)
+  line(context, cx, cy - radius - 16, cx, cy + radius + 16, COLORS.faint)
+  const angle = -Math.PI / 2 + time * .001 + impulse * .42
+  line(context, cx, cy, cx + Math.cos(angle) * radius, cy + Math.sin(angle) * radius, COLORS.green)
+  context.fillStyle = COLORS.amber
+  context.fillRect(cx + Math.cos(angle) * radius - 3, cy + Math.sin(angle) * radius - 3, 6, 6)
+  text(context, 'NEXT WINDOW', cx, cy - 9, COLORS.dim, 7, 'center')
+  text(context, 'SCHEDULED', cx, cy + 6, COLORS.green, 10, 'center')
+  const labels = ['ELIGIBLE', 'QUEUED', 'POSTED', 'MEASURED']
+  labels.forEach((label, index) => text(context, `${index + 1} ${label}`, 20 + index * ((width - 40) / labels.length), height - 25, index === Math.floor(time / 900 + impulse) % 4 ? COLORS.green : COLORS.dim, 7))
 }
 
-function drawMarket(context, width, height, time) {
-  const labels = MODE_LABELS.market
-  const columns = width < 420 ? 8 : 13
-  const rows = 7
-  const cellW = (width - 48) / columns
-  const cellH = (height - 70) / rows
-  labels.forEach((label, index) => {
-    context.fillStyle = '#789678'
-    context.font = '9px "Share Tech Mono", monospace'
-    context.fillText(label, 24 + index * ((width - 48) / labels.length), 24)
-  })
+function marketField(context, width, height, time, impulse) {
+  frame(context, 14, 38, width - 28, height - 79, 'INDEX HEATMAP')
+  const labels = LABELS.market
+  const x0 = 25
+  const y0 = 64
+  const usableW = width - 50
+  const usableH = height - 128
+  const columns = width < 420 ? 9 : 15
+  const rows = 8
+  labels.forEach((label, index) => text(context, label, x0 + index * (usableW / labels.length), 53, COLORS.sub, 7))
   for (let row = 0; row < rows; row += 1) {
     for (let col = 0; col < columns; col += 1) {
-      const strength = hash(col, row, Math.floor(time / 700))
-      context.fillStyle = strength > .84 ? '#39ff14' : strength > .62 ? 'rgba(57,255,20,.36)' : 'rgba(80,120,80,.12)'
-      context.fillText(strength > .84 ? '#' : strength > .62 ? '+' : '.', 24 + col * cellW, 54 + row * cellH)
+      const x = x0 + col * (usableW / columns)
+      const y = y0 + row * (usableH / rows)
+      const strength = hash(col, row, Math.floor(time / 800) + impulse)
+      text(context, strength > .87 ? '#' : strength > .68 ? '+' : '.', x, y, strength > .87 ? COLORS.green : strength > .68 ? COLORS.sub : COLORS.faint, 9)
     }
   }
+  const sweep = (time * .035 + impulse * 19) % usableW
+  line(context, x0 + sweep, y0 - 8, x0 + sweep, y0 + usableH, 'rgba(88,199,196,.42)')
+  text(context, 'OBSERVED THREAD FIELD', 18, height - 25, COLORS.cyan, 7)
+  text(context, 'FILTER -> WATCH -> OPEN', width - 18, height - 25, COLORS.dim, 7, 'right')
 }
 
-function drawPosting(context, width, height, time) {
-  const max = width < 420 ? 20 : 34
-  const completed = Math.floor(time / 90) % (max + 8)
-  context.font = '11px "Share Tech Mono", monospace'
-  MODE_LABELS.posting.forEach((label, index) => {
-    const y = 46 + index * 48
-    context.fillStyle = '#718c71'
-    context.fillText(`${String(index + 1).padStart(2, '0')} ${label}`, 24, y)
-    context.fillStyle = index <= Math.floor(completed / 10) ? '#39ff14' : 'rgba(57,255,20,.2)'
-    context.fillText('='.repeat(Math.min(max, Math.max(0, completed - index * 7))), 120, y)
+function postingField(context, width, height, time, impulse) {
+  const x = 18
+  const y = 39
+  const w = width - 36
+  const h = height - 80
+  frame(context, x, y, w, h, 'POST ASSEMBLY')
+  const labels = LABELS.posting
+  const active = Math.floor(time / 900 + impulse) % labels.length
+  labels.forEach((label, index) => {
+    const rowY = y + 29 + index * 29
+    text(context, `${index === active ? '>' : ' '} ${String(index + 1).padStart(2, '0')} ${label}`, x + 11, rowY, index === active ? COLORS.green : COLORS.dim, 8)
+    const chars = Math.max(2, Math.floor((w - 115) / 9))
+    text(context, (index <= active ? '=' : '-').repeat(chars), x + 100, rowY, index === active ? COLORS.green : COLORS.faint, 7)
   })
+  const cursorX = x + 100 + ((time * .04 + impulse * 25) % Math.max(20, w - 120))
+  line(context, cursorX, y + 19, cursorX, y + h - 12, 'rgba(255,186,24,.36)')
+  text(context, 'PRIVATE UNTIL CONFIRMED', 18, height - 25, COLORS.amber, 7)
 }
 
-function drawBytes(context, width, height, time) {
-  const mid = height * .52
-  context.strokeStyle = 'rgba(57,255,20,.24)'
+function bytesField(context, width, height, time, impulse) {
+  frame(context, 14, 38, width - 28, height - 79, 'LEDGER SIGNAL')
+  const left = 24
+  const right = width - 24
+  const top = 62
+  const labels = ['BALANCE', 'SERVICE', 'FORUM', 'TRANSFER']
+  labels.forEach((label, index) => {
+    const y = top + index * 27
+    text(context, label, left, y, COLORS.dim, 7)
+    text(context, index % 2 ? '- BYTE ENTRY' : '+ BYTE ENTRY', right, y, index % 2 ? COLORS.amber : COLORS.green, 7, 'right')
+    line(context, left + 70, y, right - 78, y, COLORS.faint)
+  })
+  const mid = height - 69
+  context.strokeStyle = COLORS.green
   context.beginPath()
-  context.moveTo(20, mid)
-  for (let x = 20; x < width - 20; x += 5) {
-    const y = mid + Math.sin(x * .035 + time * .002) * 28 + Math.sin(x * .012 - time * .001) * 13
+  context.moveTo(left, mid)
+  for (let x = left; x <= right; x += 4) {
+    const y = mid + Math.sin(x * .045 + time * .002 + impulse) * 13 + Math.sin(x * .013 - time * .001) * 8
     context.lineTo(x, y)
   }
   context.stroke()
-  MODE_LABELS.bytes.forEach((label, index) => drawNode(context, 40 + index * ((width - 80) / 3), height * .78, label, index === Math.floor(time / 900) % 4))
+  text(context, 'AMOUNT / REASON / REFERENCE', 18, height - 25, COLORS.sub, 7)
 }
 
-function drawCasino(context, width, height, time) {
-  const cx = width * .48
-  const cy = height * .52
+function casinoField(context, width, height, time, impulse) {
+  frame(context, 14, 38, width - 28, height - 79, 'TABLE PROGRAM / RESERVED')
+  const cx = width * .5
+  const cy = height * .46
   const rx = Math.min(width * .34, 175)
-  const ry = Math.min(height * .27, 86)
-  context.strokeStyle = 'rgba(57,255,20,.36)'
+  const ry = Math.min(height * .22, 94)
+  context.strokeStyle = COLORS.line
   context.beginPath()
   context.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2)
   context.stroke()
-  MODE_LABELS.casino.forEach((label, index) => {
-    const angle = Math.PI * 2 * index / 4 + time * .00008
-    drawNode(context, cx + Math.cos(angle) * rx, cy + Math.sin(angle) * ry, label, index === 0)
+  context.beginPath()
+  context.ellipse(cx, cy, rx - 9, ry - 9, 0, 0, Math.PI * 2)
+  context.stroke()
+  LABELS.casino.forEach((label, index) => {
+    const angle = Math.PI * 2 * index / 4 - Math.PI / 2
+    node(context, cx + Math.cos(angle) * rx, cy + Math.sin(angle) * ry, label, index === (Math.floor(time / 1100 + impulse) % 4), Math.cos(angle) >= 0 ? 'right' : 'left')
   })
-  context.fillStyle = '#ffbb00'
-  context.font = '10px "Share Tech Mono", monospace'
-  context.fillText('COMING SOON', cx - 36, cy)
+  ;[-1, 0, 1].forEach((offset, index) => {
+    context.strokeStyle = index === 1 ? COLORS.amber : COLORS.line
+    context.strokeRect(cx + offset * 22 - 8, cy - 12, 16, 24)
+  })
+  text(context, 'COMING SOON', cx, cy + 26, COLORS.amber, 8, 'center')
+  text(context, 'NO SIMULATED TABLE ACTIVITY', 18, height - 25, COLORS.dim, 7)
 }
 
-function drawPointer(context, width, height, pointer, time) {
+function pointerReticle(context, width, height, pointer, time) {
   if (!pointer.active) return
   const x = pointer.x * width
   const y = pointer.y * height
-  const radius = 7 + (time * .01 % 10)
-  context.strokeStyle = 'rgba(255, 187, 0, .52)'
+  const radius = 9 + (time * .008 % 8)
+  context.strokeStyle = 'rgba(255,186,24,.62)'
   context.beginPath()
   context.arc(x, y, radius, 0, Math.PI * 2)
   context.stroke()
-  context.fillStyle = '#ffbb00'
-  context.font = '9px "Share Tech Mono", monospace'
-  context.fillText('+INPUT', x + 12, y - 9)
+  line(context, x - radius - 5, y, x - radius + 1, y, COLORS.amber)
+  line(context, x + radius - 1, y, x + radius + 5, y, COLORS.amber)
+  text(context, 'INPUT', x + 14, y - 11, COLORS.amber, 7)
 }
 
 export default function AsciiField({ mode = 'home', motion = true, impulse = 0, onInteract }) {
@@ -208,7 +312,7 @@ export default function AsciiField({ mode = 'home', motion = true, impulse = 0, 
     const canvas = canvasRef.current
     if (!canvas) return undefined
     let context
-    let frame = 0
+    let frameId = 0
     let width = 1
     let height = 1
     let visible = !document.hidden
@@ -226,18 +330,17 @@ export default function AsciiField({ mode = 'home', motion = true, impulse = 0, 
 
     const draw = (time = 0) => {
       if (!context) return
-      drawBackdrop(context, width, height, time, mode.length)
-      if (mode === 'home') drawNetwork(context, width, height, MODE_LABELS.home, time, pointerRef.current, impulse)
-      else if (mode === 'business' || mode === 'contracts') drawPipeline(context, width, height, MODE_LABELS[mode], time, impulse)
-      else if (mode === 'bumps') drawBumps(context, width, height, time, impulse)
-      else if (mode === 'market') drawMarket(context, width, height, time)
-      else if (mode === 'posting') drawPosting(context, width, height, time)
-      else if (mode === 'bytes') drawBytes(context, width, height, time)
-      else if (mode === 'casino') drawCasino(context, width, height, time)
-      drawPointer(context, width, height, pointerRef.current, time)
-      context.fillStyle = '#526b52'
-      context.font = '9px "Share Tech Mono", monospace'
-      context.fillText(`VIS/${mode.toUpperCase()}  ${motion ? 'DYNAMIC' : 'STATIC'}`, 12, height - 12)
+      backdrop(context, width, height, time, mode.length, pointerRef.current, impulse)
+      scopeHeader(context, width, mode, time, motion)
+      if (height < 180) compactField(context, width, height, time, impulse, mode)
+      else if (mode === 'home') homeField(context, width, height, time, impulse)
+      else if (mode === 'business' || mode === 'contracts') pipelineField(context, width, height, time, impulse, mode)
+      else if (mode === 'bumps') bumpField(context, width, height, time, impulse)
+      else if (mode === 'market') marketField(context, width, height, time, impulse)
+      else if (mode === 'posting') postingField(context, width, height, time, impulse)
+      else if (mode === 'bytes') bytesField(context, width, height, time, impulse)
+      else if (mode === 'casino') casinoField(context, width, height, time, impulse)
+      pointerReticle(context, width, height, pointerRef.current, time)
     }
 
     const loop = (time) => {
@@ -246,28 +349,28 @@ export default function AsciiField({ mode = 'home', motion = true, impulse = 0, 
         draw(time)
         previous = time
       }
-      frame = requestAnimationFrame(loop)
+      frameId = requestAnimationFrame(loop)
     }
     const visibility = () => { visible = !document.hidden }
     document.addEventListener('visibilitychange', visibility)
-    if (motion) frame = requestAnimationFrame(loop)
+    if (motion) frameId = requestAnimationFrame(loop)
     else draw(0)
 
     return () => {
-      cancelAnimationFrame(frame)
+      cancelAnimationFrame(frameId)
       observer.disconnect()
       document.removeEventListener('visibilitychange', visibility)
     }
   }, [impulse, mode, motion])
 
-  const updatePointer = (event) => {
+  const updatePointer = (event, fire = false) => {
     const rect = event.currentTarget.getBoundingClientRect()
     pointerRef.current = {
       x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
       y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
       active: true,
     }
-    onInteract?.()
+    if (fire) onInteract?.()
   }
 
   return (
@@ -276,7 +379,7 @@ export default function AsciiField({ mode = 'home', motion = true, impulse = 0, 
       className="os-ascii-canvas"
       aria-hidden="true"
       onPointerMove={updatePointer}
-      onPointerDown={updatePointer}
+      onPointerDown={event => updatePointer(event, true)}
       onPointerLeave={() => { pointerRef.current.active = false }}
     />
   )

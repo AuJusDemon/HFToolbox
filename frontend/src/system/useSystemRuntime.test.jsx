@@ -25,7 +25,7 @@ describe('useSystemRuntime', () => {
       result.current.execute('open market')
     })
     expect(result.current.activeProgram.id).toBe('market')
-    expect(result.current.output.at(-1).text).toContain('program opened: market')
+    expect(result.current.output.some(line => line.text === 'program opened: market')).toBe(true)
   })
 
   it('uses the short resume sequence after a completed session boot', () => {
@@ -57,5 +57,13 @@ describe('useSystemRuntime', () => {
     act(() => result.current.execute('open bumps'))
     act(() => result.current.execute('login'))
     expect(onLogin).toHaveBeenCalledWith('/dashboard/bumper')
+  })
+
+  it('reports authenticated identity and current program status', () => {
+    const { result } = renderHook(() => useSystemRuntime({ identity: 'PreviewUser' }))
+    act(() => result.current.execute('whoami'))
+    expect(result.current.output.at(-1)).toEqual({ text: 'PreviewUser / authenticated', tone: 'accent' })
+    act(() => result.current.execute('status'))
+    expect(result.current.output.at(-1).text).toContain('program=home')
   })
 })

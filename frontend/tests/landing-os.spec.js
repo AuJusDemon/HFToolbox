@@ -44,14 +44,15 @@ for (const viewport of VIEWPORTS) {
 test('program clicks and commands share the active program state', async ({ page }) => {
   await page.goto('/landing-mock')
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: /Bump Service/ }).click()
+  await page.getByLabel('Toolbox programs').getByRole('button', { name: /Bump Service/ }).click()
   await expect(page.getByRole('heading', { name: 'Bump Service' })).toBeVisible()
+  await page.screenshot({ path: 'test-results/program-bumps.png', fullPage: true })
 
   const command = page.getByLabel('Toolbox command')
   await command.fill('open casino')
   await command.press('Enter')
   await expect(page.getByRole('heading', { name: 'Byte Casino' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'PROGRAM NOT YET AVAILABLE' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'NOT YET AVAILABLE' })).toBeDisabled()
 })
 
 test('mobile program drawer opens and selects a program', async ({ page }) => {
@@ -60,8 +61,9 @@ test('mobile program drawer opens and selects a program', async ({ page }) => {
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'PROGRAMS' }).click()
   await expect(page.getByLabel('Toolbox programs')).toHaveClass(/is-open/)
-  await page.getByRole('button', { name: /Marketplace/ }).click()
+  await page.getByLabel('Toolbox programs').getByRole('button', { name: /Marketplace/ }).click()
   await expect(page.getByRole('heading', { name: 'Marketplace' })).toBeVisible()
+  await page.screenshot({ path: 'test-results/program-market-mobile.png', fullPage: true })
   await expect(page.getByLabel('Toolbox programs')).not.toHaveClass(/is-open/)
 })
 
@@ -69,9 +71,9 @@ test('guest OAuth carries only the selected internal program route', async ({ pa
   await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
   await page.goto('/landing-mock?next=//example.invalid')
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: /Marketplace/ }).click()
+  await page.getByLabel('Toolbox programs').getByRole('button', { name: /Marketplace/ }).click()
   const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
-  await page.getByRole('button', { name: 'OPEN MARKETPLACE' }).click()
+  await page.getByRole('button', { name: 'AUTHENTICATE AND ENTER' }).click()
   const request = await requestPromise
   expect(request.url()).toContain('next=%2Fdashboard%2Fmarket')
   expect(request.url()).not.toContain('example.invalid')
@@ -85,7 +87,7 @@ test('authenticated program entry navigates directly to its dashboard route', as
   }))
   await page.goto('/landing-mock')
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: /Bump Service/ }).click()
-  await page.getByRole('button', { name: 'OPEN BUMP SERVICE' }).click()
+  await page.getByLabel('Toolbox programs').getByRole('button', { name: /Bump Service/ }).click()
+  await page.getByRole('button', { name: 'ENTER PROGRAM' }).click()
   await expect(page).toHaveURL(/\/dashboard\/bumper$/)
 })

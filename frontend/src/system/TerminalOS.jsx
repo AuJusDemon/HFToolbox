@@ -9,8 +9,9 @@ export function SystemStatusRail({ activeProgram, user, phase, menuOpen, onToggl
   const ready = phase === 'ready'
   return (
     <header className="os-status-rail">
-      <div className="os-brand"><span>HF</span>.TOOLBOX</div>
-      <div className="os-path">SYS / PROGRAMS / {activeProgram.command.toUpperCase()}</div>
+      <div className="os-brand"><span>HF</span>.TOOLBOX <small>OS/03</small></div>
+      <div className="os-path"><span>ROOT</span><i>/</i><span>PROGRAMS</span><i>/</i><b>{activeProgram.command.toUpperCase()}</b></div>
+      <div className="os-clock" aria-hidden="true"><span>LOCAL SESSION</span><b>{String(activeProgram.id.length * 17).padStart(3, '0')}</b></div>
       <div className="os-session">
         <span>{user?.username || 'GUEST'}</span>
         <b className={ready ? 'is-ready' : ''}>{ready ? 'READY' : phase.toUpperCase()}</b>
@@ -31,7 +32,7 @@ export function ProgramRail({ activeProgram, open, onOpenProgram, onClose }) {
 
   return (
     <aside ref={railRef} className={`os-program-rail${open ? ' is-open' : ''}`} aria-label="Toolbox programs">
-      <div className="os-pane-label"><span>PROGRAMS</span><b>{String(PUBLIC_PROGRAMS.length).padStart(2, '0')}</b></div>
+      <div className="os-pane-label"><span>MOUNTED PROGRAMS</span><b>{String(PUBLIC_PROGRAMS.length).padStart(2, '0')}</b></div>
       <div className="os-program-list">
         {PUBLIC_PROGRAMS.map((program, index) => {
           const selected = program.id === activeProgram.id
@@ -45,7 +46,7 @@ export function ProgramRail({ activeProgram, open, onOpenProgram, onClose }) {
               onFocus={() => prefetchProgram(program)}
               onClick={() => { onOpenProgram(program); onClose?.() }}
             >
-              <span>{String(index + 1).padStart(2, '0')}</span>
+              <span>{selected ? '>' : String(index + 1).padStart(2, '0')}</span>
               <strong>{program.label}</strong>
               <small>{program.availability === 'coming-soon' ? 'SOON' : 'OPEN'}</small>
             </button>
@@ -53,8 +54,8 @@ export function ProgramRail({ activeProgram, open, onOpenProgram, onClose }) {
         })}
       </div>
       <div className="os-rail-hint">
-        <span>TYPE</span>
-        <code>open market</code>
+        <span>COMMAND ENTRY</span>
+        <code>open market</code><code>programs --all</code>
       </div>
     </aside>
   )
@@ -64,8 +65,8 @@ export function ProgramViewport({ activeProgram, children }) {
   return (
     <section className="os-program-viewport" aria-live="polite">
       <div className="os-pane-label">
-        <span>ACTIVE PROGRAM</span>
-        <b>{activeProgram.command.toUpperCase()}</b>
+        <span>PROGRAM / {activeProgram.group.toUpperCase()}</span>
+        <b>{activeProgram.command.toUpperCase()}::{activeProgram.availability === 'coming-soon' ? 'LOCKED' : 'READY'}</b>
       </div>
       <div className="os-program-content">{children}</div>
     </section>
@@ -75,8 +76,13 @@ export function ProgramViewport({ activeProgram, children }) {
 export function VisualViewport({ mode, children }) {
   return (
     <aside className="os-visual-viewport" aria-label={`${mode} system visualization`}>
-      <div className="os-pane-label"><span>ASCII FIELD</span><b>{mode.toUpperCase()}</b></div>
+      <div className="os-pane-label"><span>SIGNAL FIELD</span><b>MODE::{mode.toUpperCase()}</b></div>
       <div className="os-visual-content">{children}</div>
+      <div className="os-visual-legend" aria-hidden="true">
+        <span><i className="is-green" /> PROGRAM NODE</span>
+        <span><i className="is-amber" /> INPUT IMPULSE</span>
+        <b>PTR / KEY / CMD</b>
+      </div>
     </aside>
   )
 }
@@ -117,7 +123,7 @@ export function CommandDock({ runtime, user }) {
   return (
     <footer className="os-command-dock" onClick={() => inputRef.current?.focus()}>
       <div className="os-command-output" aria-live="polite">
-        {runtime.output.slice(-3).map((line, index) => (
+        {runtime.output.slice(-5).map((line, index) => (
           <div key={`${line.text}-${index}`} className={`tone-${line.tone}`}>{line.text}</div>
         ))}
       </div>
@@ -136,7 +142,7 @@ export function CommandDock({ runtime, user }) {
         />
         <span className="os-block-cursor" aria-hidden="true" />
       </form>
-      <div className="os-command-help">TAB COMPLETE / UP HISTORY / TYPE HELP</div>
+      <div className="os-command-help"><span>COMMAND CHANNEL</span><b>TAB COMPLETE / UP HISTORY / HELP</b></div>
     </footer>
   )
 }
@@ -145,8 +151,9 @@ export function BootScreen({ lines, phase, onSkip }) {
   if (phase === 'ready') return null
   return (
     <div className="os-boot" role="status" aria-label="HF Toolbox starting" onClick={onSkip}>
-      <div className="os-boot-mark">HF.TOOLBOX</div>
-      <div className="os-boot-version">TERMINAL OPERATING SYSTEM / 02</div>
+      <div className="os-boot-scope" aria-hidden="true"><span /><span /><span /><span /></div>
+      <div className="os-boot-mark"><span>HF</span>.TOOLBOX</div>
+      <div className="os-boot-version">TERMINAL OPERATING SYSTEM / BUILD 03</div>
       <div className="os-boot-lines">
         {lines.map(line => (
           <div key={line.label}>
@@ -156,6 +163,7 @@ export function BootScreen({ lines, phase, onSkip }) {
         ))}
       </div>
       <button type="button" onClick={onSkip}>SKIP BOOT [ESC]</button>
+      <div className="os-boot-rule" aria-hidden="true"><i /><b>INPUT READY AFTER INITIALIZATION</b><i /></div>
     </div>
   )
 }

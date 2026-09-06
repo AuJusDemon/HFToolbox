@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import useStore from '../store.js'
 import AsciiField from '../system/AsciiField.jsx'
+import ProgramPreview from '../system/ProgramPreviews.jsx'
 import {
   BootScreen,
   CommandDock,
@@ -9,8 +10,6 @@ import {
   ProgramViewport,
   SystemFrame,
   SystemStatusRail,
-  TerminalButton,
-  TerminalMeter,
   VisualViewport,
 } from '../system/TerminalOS.jsx'
 import { getProgramByRoute, PROGRAMS, PUBLIC_PROGRAMS } from '../system/programRegistry.js'
@@ -24,110 +23,6 @@ const AUTH_ERROR_MESSAGES = {
   hf_unavailable: 'Hack Forums is temporarily unavailable. Wait a moment and try again.',
   invalid_response: 'Hack Forums returned an incomplete sign-in response. Try again.',
   login_failed: 'Sign-in could not be completed. Try again.',
-}
-
-const PREVIEW_ROWS = {
-  home: [
-    ['MY BUSINESS', 'contracts, replies, buyers, threads'],
-    ['BUMP SERVICE', 'timing, spend, failures, results'],
-    ['MARKETPLACE', 'indexed threads and buyer intent'],
-    ['ACCOUNT TOOLS', 'posting, Bytes, contracts, Wire'],
-  ],
-  business: [
-    ['NEEDS REVIEW', 'open a contract and decide the next action'],
-    ['IN PROGRESS', 'keep current deals separate from waiting work'],
-    ['FOLLOW-UP', 'return to buyers, replies, and ratings'],
-    ['THREAD HEALTH', 'connect bumps and replies to actual movement'],
-  ],
-  bumps: [
-    ['QUEUE', 'eligible thread enters the service schedule'],
-    ['TIMER', 'next permitted bump stays visible'],
-    ['POST', 'successful attempts are recorded and charged'],
-    ['RESULT', 'inspect replies, views, contracts, and failures'],
-  ],
-  market: [
-    ['INDEX', 'browse observed marketplace threads'],
-    ['WATCH', 'save phrases and areas worth monitoring'],
-    ['MATCH', 'find buyer requests connected to your offers'],
-    ['CONTEXT', 'open thread activity and contract history together'],
-  ],
-  contracts: [
-    ['REVIEW', 'approve or deny contracts that need a decision'],
-    ['ACTIVE', 'track work that both sides have accepted'],
-    ['WAITING', 'see who needs to act next'],
-    ['CLOSED', 'separate completed, expired, cancelled, and disputed'],
-  ],
-  posting: [
-    ['DRAFT', 'write without immediately sending anything'],
-    ['PREVIEW', 'inspect the exact post before confirmation'],
-    ['SUBMIT', 'send through the supported account action'],
-    ['WATCH', 'return when the thread receives a reply'],
-  ],
-  bytes: [
-    ['BALANCE', 'see the current account value'],
-    ['LEDGER', 'inspect incoming and outgoing activity'],
-    ['SERVICE COST', 'identify Toolbox charges such as bumps'],
-    ['REFERENCE', 'retain the reason and related forum action'],
-  ],
-  casino: [
-    ['POKER', 'multiplayer table program'],
-    ['BLACKJACK', 'separate table program'],
-    ['CASHIER', 'available, in-play, and pending balances'],
-    ['VERIFY', 'inspect completed game records'],
-  ],
-}
-
-function ProgramPreview({ program, user, authError, authReference, onEnter }) {
-  const mode = program.previewComponent || 'home'
-  const rows = PREVIEW_ROWS[mode] || PREVIEW_ROWS.home
-  const comingSoon = program.availability === 'coming-soon'
-
-  return (
-    <div className="os-preview">
-      <div className="os-program-heading">
-        <span>{comingSoon ? 'COMING SOON' : mode === 'home' ? 'SYSTEM HOME' : 'PROGRAM PREVIEW'}</span>
-        <h1>{mode === 'home' ? 'HF Toolbox' : program.label}</h1>
-        <p>{program.publicSummary}</p>
-      </div>
-
-      {authError && (
-        <div className="os-auth-error" role="alert">
-          <strong>AUTHENTICATION NOT COMPLETED</strong>
-          <span>{authError}</span>
-          {authReference && <small>REFERENCE: {authReference}</small>}
-        </div>
-      )}
-
-      <div className="os-preview-rows">
-        {rows.map(([label, detail], index) => (
-          <div key={label}>
-            <span>{String(index + 1).padStart(2, '0')}</span>
-            <strong>{label}</strong>
-            <p>{detail}</p>
-          </div>
-        ))}
-      </div>
-
-      {mode === 'home' && (
-        <div className="os-home-meters">
-          <TerminalMeter label="ACCESS" value={user ? 'AUTHED' : 'GUEST'} detail={user ? user.username : 'HF login available'} />
-          <TerminalMeter label="PROGRAMS" value={String(PUBLIC_PROGRAMS.length).padStart(2, '0')} detail="public directory" />
-          <TerminalMeter label="INTERFACE" value="TUI/02" detail="keyboard, mouse, touch" />
-        </div>
-      )}
-
-      <div className="os-preview-action">
-        {comingSoon ? (
-          <TerminalButton disabled tone="warn">PROGRAM NOT YET AVAILABLE</TerminalButton>
-        ) : (
-          <TerminalButton onClick={() => onEnter(program)}>
-            {mode === 'home' ? (user ? 'OPEN TOOLBOX' : 'LOGIN WITH HACK FORUMS') : `OPEN ${program.label.toUpperCase()}`}
-          </TerminalButton>
-        )}
-        <span>{comingSoon ? 'This entry will activate when the Casino is ready.' : user ? `route ${program.route}` : 'OAuth returns to the selected program.'}</span>
-      </div>
-    </div>
-  )
 }
 
 export default function LandingMock() {
@@ -148,7 +43,7 @@ export default function LandingMock() {
     window.location.href = url
   }, [requestedReturn])
 
-  const runtime = useSystemRuntime({ onLogin: beginLogin })
+  const runtime = useSystemRuntime({ onLogin: beginLogin, identity: user?.username || 'guest' })
 
   useEffect(() => {
     if (requestedReturn) runtime.openProgram(getProgramByRoute(requestedReturn), false)
@@ -202,6 +97,8 @@ export default function LandingMock() {
             authError={authError}
             authReference={authReference}
             onEnter={enterProgram}
+            onOpenProgram={runtime.openProgram}
+            onPulse={runtime.pulse}
           />
         </ProgramViewport>
         <VisualViewport mode={runtime.activeProgram.visualizationMode}>
@@ -209,6 +106,8 @@ export default function LandingMock() {
             mode={runtime.activeProgram.visualizationMode}
             motion={runtime.motionEnabled}
             impulse={runtime.impulse}
+            program={runtime.activeProgram}
+            onInteract={runtime.pulse}
           />
         </VisualViewport>
       </div>
