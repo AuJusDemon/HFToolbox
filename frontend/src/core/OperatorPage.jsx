@@ -318,7 +318,7 @@ export default function OperatorPage() {
           ]} />
         </Section>
 
-        <Section title="Auto Bumper">
+        <Section title="Bump Service">
           <Rows rows={[
             { label: 'Total jobs', value: fmt(bump.jobs_total) },
             { label: 'Active jobs', value: fmt(bump.jobs_active) },

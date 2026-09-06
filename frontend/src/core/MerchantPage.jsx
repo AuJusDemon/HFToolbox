@@ -7,11 +7,13 @@ import MerchantPipeline  from './merchant/MerchantPipeline.jsx'
 import MerchantDeals     from './merchant/MerchantDeals.jsx'
 import MerchantCustomers from './merchant/MerchantCustomers.jsx'
 import MerchantThreadUpdates from './merchant/MerchantThreadUpdates.jsx'
+import MerchantPromotion from './merchant/MerchantPromotion.jsx'
 import MerchantReports   from './merchant/MerchantReports.jsx'
 
 const TABS = [
   { id:'overview',   label:'Today' },
   { id:'offers',     label:'Sales Threads' },
+  { id:'bumps',      label:'Bumps'         },
   { id:'pipeline',   label:'Leads'         },
   { id:'deals',      label:'Contracts'     },
   { id:'customers',  label:'Buyers'        },
@@ -23,6 +25,7 @@ const TABS = [
 const TAB_META = {
   overview:  ['Today in My Business', 'Contracts, ratings, replies, and sales thread problems waiting on you.'],
   offers:    ['Sales Threads', 'Track thread health, replies, contracts, and bump activity.'],
+  bumps:     ['Bumps', 'Review bump spend, thread movement, replies, and contracts after each bump.'],
   pipeline:  ['Leads', 'Review buyer conversations, priorities, and follow-up work.'],
   deals:     ['Contracts', 'Review, approve, complete, rate, and follow up on your contracts.'],
   customers: ['Buyers', 'Customer history, active contracts, follow-up dates, tags, and notes.'],
@@ -92,6 +95,7 @@ export default function MerchantPage({embedded=false, marketAccess=null}) {
   const content = {
     overview:  <MerchantOverview setTab={setTab} onGoToDeals={goToDealsWithStage} />,
     offers:    <MerchantOffers />,
+    bumps:     <MerchantPromotion />,
     pipeline:  <MerchantPipeline marketAccess={marketAccess} />,
     deals:     <MerchantDeals initialStage={dealStage} initialRatingFilter={dealRatingFilter} />,
     customers: <MerchantCustomers />,
@@ -101,7 +105,7 @@ export default function MerchantPage({embedded=false, marketAccess=null}) {
   }[tab]
 
   return (
-    <div className="content mhq-shell">
+    <div className={embedded ? 'content mhq-shell' : 'mhq-shell'}>
       <div className="mhq-page-head">
         <div><h2>{TAB_META[tab][0]}</h2><p>{TAB_META[tab][1]}</p></div>
         <div className="mhq-page-meta"><FreshnessBadge /></div>

@@ -2261,7 +2261,7 @@ function Composer({ onPosted }) {
           </label>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--sub)', cursor: 'pointer' }}>
             <button className={`tog${autoBump ? '' : ' off'}`} onClick={() => setAutoBump(!autoBump)} />
-            Add to Auto Bumper
+            Add to Bump Service
           </label>
           {autoBump && (
             <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--sub)' }}>
@@ -2318,7 +2318,7 @@ function Composer({ onPosted }) {
             <>
               ✓ {result.message}
               {result.replyCount > 0 && ` — ${result.replyCount} repl${result.replyCount > 1 ? 'ies' : 'y'} will be posted immediately after`}
-              {result.bumperAdded && ' · Added to Auto Bumper'}
+              {result.bumperAdded && ' · Added to Bump Service'}
               {result.tid && (
                 <a href={`https://hackforums.net/showthread.php?tid=${result.tid}`}
                   target="_blank" rel="noreferrer"

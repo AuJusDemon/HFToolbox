@@ -1,5 +1,5 @@
 // Shared clickable stat tile: label (small caps) → large value → optional sub-line,
-// colored left border. Originated in Seller HQ's Overview tab; reuse this instead of
+// colored left border. Originated in My Business' Overview tab; reuse this instead of
 // re-hand-rolling the same tile inline elsewhere.
 export default function StatTile({ label, value, sub, color, onClick }) {
   return (

@@ -19,6 +19,7 @@ const PostingPage        = lazy(() => import('./core/PostingPage.jsx'))
 const SigmarketPage      = lazy(() => import('./core/SigmarketPage.jsx'))
 const WirePage           = lazy(() => import('./core/WirePage.jsx'))
 const MarketPage         = lazy(() => import('./core/MarketPage.jsx'))
+const MerchantPage       = lazy(() => import('./core/MerchantPage.jsx'))
 const OperatorPage       = lazy(() => import('./core/OperatorPage.jsx'))
 
 function RequireAuth({ children }) {
@@ -130,7 +131,7 @@ export default function App() {
           <Route path="posting"        element={<GuardedRoute><Suspense fallback={<Spin/>}><PostingPage /></Suspense></GuardedRoute>} />
           <Route path="sigmarket"      element={<GuardedRoute><Suspense fallback={<Spin/>}><SigmarketPage /></Suspense></GuardedRoute>} />
           <Route path="wire"           element={<GuardedRoute><Suspense fallback={<Spin/>}><WirePage /></Suspense></GuardedRoute>} />
-          <Route path="merchant"       element={<Navigate to="/dashboard/market?tab=business" replace />} />
+          <Route path="merchant"       element={<GuardedRoute><Suspense fallback={<Spin/>}><MerchantPage /></Suspense></GuardedRoute>} />
           <Route path="market"         element={<GuardedRoute><Suspense fallback={<Spin/>}><MarketPage /></Suspense></GuardedRoute>} />
           <Route path="operator"       element={<GuardedRoute><Suspense fallback={<Spin/>}><OperatorPage /></Suspense></GuardedRoute>} />
         </Route>

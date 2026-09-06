@@ -16,6 +16,7 @@ export const ROUTE_PREFETCHERS = {
   '/dashboard/sigmarket': () => import('./SigmarketPage.jsx'),
   '/dashboard/wire': () => import('./WirePage.jsx'),
   '/dashboard/market': () => import('./MarketPage.jsx'),
+  '/dashboard/merchant': () => import('./MerchantPage.jsx'),
   '/dashboard/operator': () => import('./OperatorPage.jsx'),
   '/dashboard/settings': () => import('./Settings.jsx'),
 }
@@ -27,13 +28,14 @@ function prefetchRoute(to) {
 
 const NAV_ITEMS = [
   { to: '/dashboard',           label: 'Overview',    mobileLabel: 'HOME',     group: 'navigation' },
-  { to: '/dashboard/bytes',     label: 'Bytes',       mobileLabel: 'BYTES',    group: 'modules'    },
-  { to: '/dashboard/contracts', label: 'Contracts',   mobileLabel: 'DEALS',    group: 'modules'    },
-  { to: '/dashboard/bumper',    label: 'Auto Bumper', mobileLabel: 'BUMPER',   group: 'modules'    },
+  { to: '/dashboard/merchant',  label: 'My Business', mobileLabel: 'BIZ',      group: 'modules'    },
+  { to: '/dashboard/bumper',    label: 'Bump Service',mobileLabel: 'BUMPS',    group: 'modules'    },
   { to: '/dashboard/posting',   label: 'Posting',     mobileLabel: 'POST',     group: 'modules', badgeKey: 'replyCount' },
+  { to: '/dashboard/contracts', label: 'Contracts',   mobileLabel: 'DEALS',    group: 'modules'    },
+  { to: '/dashboard/market',    label: 'Marketplace', mobileLabel: 'MARKET',   group: 'modules'    },
+  { to: '/dashboard/bytes',     label: 'Bytes',       mobileLabel: 'BYTES',    group: 'modules'    },
   { to: '/dashboard/sigmarket', label: 'Sig Market',  mobileLabel: 'SIG MKT',  group: 'modules'    },
   { to: '/dashboard/wire',      label: 'The Wire',    mobileLabel: 'WIRE',     group: 'modules'    },
-  { to: '/dashboard/market',    label: 'Marketplace', mobileLabel: 'MARKET',   group: 'modules'    },
   { to: '/dashboard/operator',  label: 'Operator',    mobileLabel: 'OPS',      group: 'system', operatorOnly: true },
   { to: '/dashboard/settings',  label: 'Settings',    mobileLabel: 'SETTINGS', group: 'system'     },
 ]

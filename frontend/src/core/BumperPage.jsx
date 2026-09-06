@@ -126,7 +126,7 @@ function FeeDisclosure() {
       }}>
         <span style={{fontSize:11,color:'var(--yellow)'}}>⚠</span>
         <span style={{fontSize:11,color:'var(--yellow)',fontWeight:600,flex:1}}>
-          10 byte service fee per bump · Contract requirement coming soon
+          Bump service billing: 10 bytes per successful bump
         </span>
         <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)'}}>{open?'▾':'▸'}</span>
       </button>
@@ -137,7 +137,7 @@ function FeeDisclosure() {
           background:'var(--bg)',border:'1px solid var(--b1)',
           borderRadius:'var(--r)',fontSize:11,color:'var(--sub)',lineHeight:1.7,
         }}>
-          Each bump charges <strong style={{color:'var(--text)'}}>10 bytes</strong> service fee
+          Each successful bump charges <strong style={{color:'var(--text)'}}>10 bytes</strong> service fee
           + <strong style={{color:'var(--text)'}}>~50 byte Stanley fee</strong> (deducted by HF).
           Shows in your bytes history as{' '}
           <span style={{fontFamily:'var(--mono)',fontSize:10,background:'var(--s3)',
@@ -145,7 +145,7 @@ function FeeDisclosure() {
             HFToolbox | Bump Fee | TID: ...
           </span>
           <div style={{marginTop:7,color:'var(--red)',fontSize:10.5}}>
-            ⚠ A service contract with HFToolbox will be required soon. Jobs added now keep working.
+            Contract-backed access is planned. Existing jobs keep working while billing stays per bump.
           </div>
           <button onClick={dismiss} style={{
             marginTop:8,fontSize:10,fontFamily:'var(--mono)',
@@ -199,7 +199,7 @@ function BudgetSettings({ budgetData, onSave }) {
       {open && (
         <div style={{marginTop:8,padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--b1)',borderRadius:'var(--r)'}}>
           <p style={{fontSize:11.5,color:'var(--sub)',lineHeight:1.6,marginBottom:8}}>
-            Max bytes to spend on bumps per week. Each bump costs <strong style={{color:'var(--text)'}}>~50 bytes</strong> + 10 byte automation fee.
+            Max bytes to spend on bumps per week. Each bump costs <strong style={{color:'var(--text)'}}>~50 bytes</strong> + 10 byte service fee.
             Set to <strong style={{color:'var(--text)'}}>0</strong> for no limit.
           </p>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -536,11 +536,11 @@ export default function BumperPage() {
       <div className="card">
         <div className="card-head">
           <span className="card-icon">⬆</span>
-          <span className="card-title">Auto Bumper</span>
+          <span className="card-title">Bump Service</span>
           {jobs.length > 0 && <span className="badge badge-yel">{jobs.length} JOB{jobs.length>1?'S':''}</span>}
           {budgetOver && <span className="badge badge-red">BUDGET PAUSED</span>}
           <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',marginLeft:'auto'}}>
-            ~50 byte Stanley fee + 10 byte service fee per bump
+            ~50 byte Stanley fee + 10 byte service fee per successful bump
           </span>
         </div>
         <div className="card-body">

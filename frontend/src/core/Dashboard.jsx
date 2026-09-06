@@ -105,7 +105,7 @@ function BumperOverview({ initialCount = null, deferLoad = false }) {
   return (
     <div className="card" style={{cursor:'pointer'}} onClick={() => nav('/dashboard/bumper')}>
       <CardHeader
-        icon="⬆" title="Auto Bumper" to="/dashboard/bumper"
+        icon="⬆" title="Bump Service" to="/dashboard/bumper"
         badge={
           dueCount > 0
             ? `${dueCount} DUE NOW`
@@ -117,7 +117,7 @@ function BumperOverview({ initialCount = null, deferLoad = false }) {
       />
       <div className="card-body">
         {jobs.length === 0 ? (
-          <div style={{fontSize:11,color:'var(--sub)',fontStyle:'italic'}}>No bump jobs — add one on the bumper page</div>
+          <div style={{fontSize:11,color:'var(--sub)',fontStyle:'italic'}}>No bump jobs. Add one from Bump Service.</div>
         ) : (
           <>
             <div className="db-bump-hdr" style={{display:'grid',gridTemplateColumns:'1fr 80px 70px 64px',gap:8,padding:'0 0 5px',borderBottom:'1px solid var(--b1)',marginBottom:2}}>
@@ -521,7 +521,7 @@ function MerchantHQCard({ deferLoad = false }) {
   return (
     <div className="card" style={{cursor:'pointer'}} onClick={() => nav('/dashboard/merchant')}>
       <CardHeader
-        icon="MCH" title="Seller HQ" to="/dashboard/merchant"
+        icon="BIZ" title="My Business" to="/dashboard/merchant"
         badge={
           slaBreaches > 0 ? `${slaBreaches} LATE REPL${slaBreaches > 1 ? 'IES' : 'Y'}`
           : actionCount > 0 ? `${actionCount} ACTION${actionCount > 1 ? 'S' : ''}`
@@ -586,6 +586,61 @@ function DashGrid({ children }) {
   )
 }
 
+function ServiceMap() {
+  const nav = useNavigate()
+  const items = [
+    {
+      key: 'business',
+      label: 'My Business',
+      to: '/dashboard/merchant',
+      title: 'Run sales work',
+      detail: 'Contracts, buyers, leads, thread health, and ratings.',
+    },
+    {
+      key: 'bumps',
+      label: 'Bump Service',
+      to: '/dashboard/bumper',
+      title: 'Keep threads moving',
+      detail: 'Jobs, bump spend, page checks, and next-bump timing.',
+    },
+    {
+      key: 'posting',
+      label: 'Posting',
+      to: '/dashboard/posting',
+      title: 'Draft and publish',
+      detail: 'Thread drafts, replies, scheduled posts, and review steps.',
+    },
+    {
+      key: 'market',
+      label: 'Marketplace',
+      to: '/dashboard/market',
+      title: 'Read demand',
+      detail: 'Buyer intent, listing movement, contracts, and watch rules.',
+    },
+  ]
+
+  return (
+    <section className="toolbox-map" aria-labelledby="toolbox-map-title">
+      <div className="toolbox-map-head">
+        <div>
+          <h3 id="toolbox-map-title">Toolbox Services</h3>
+          <p>Sales work is grouped by what you are trying to do, not by backend module name.</p>
+        </div>
+        <span>DEV</span>
+      </div>
+      <div className="toolbox-map-grid">
+        {items.map(item => (
+          <button key={item.key} type="button" onClick={() => nav(item.to)}>
+            <span>{item.label}</span>
+            <b>{item.title}</b>
+            <small>{item.detail}</small>
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 export default function Dashboard() {
   const isEnabled = useStore(s => s.isEnabled)
   const throttle = useStore(s => s.throttle)
@@ -608,6 +663,7 @@ export default function Dashboard() {
 
   return (
     <>
+      <ServiceMap />
       {showBumper && <BumperOverview initialCount={snapshot?.job_count} deferLoad={!snapshotReady} />}
       <DashGrid>
         {showBytes     && <BytesOverview initialData={snapshot?.bytes} deferLoad={!snapshotReady} />}
