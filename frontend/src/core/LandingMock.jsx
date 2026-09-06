@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { Fragment, useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import useStore from '../store.js'
 import { PROGRAMS, PUBLIC_PROGRAMS } from '../system/programRegistry.js'
@@ -17,12 +17,54 @@ const AUTH_ERROR_MESSAGES = {
 const PRIMARY_MODULES = PUBLIC_PROGRAMS.filter(program => program.id !== 'casino')
 const SECONDARY_MODULES = PROGRAMS.filter(program => ['sigmarket', 'wire'].includes(program.id))
 const MODULE_DETAIL = {
-  merchant: ['Contract pipeline', 'Buyer history', 'Thread health'],
-  bumper: ['Next bump timing', 'Separate fee records', 'Failure visibility'],
-  posting: ['Draft and preview', 'Confirmation step', 'Reply monitoring'],
-  contracts: ['Responsibility', 'Terms and timeout', 'Full state history'],
-  market: ['Market index', 'Buyer intent', 'Watched criteria'],
-  bytes: ['Balance', 'Reason', 'Action reference'],
+  merchant: {
+    areas: ['Contract pipeline', 'Buyer history', 'Thread health'],
+    readout: [
+      ['HANDLES', 'Active deals, unanswered sales replies, repeat buyers, ratings, and follow-up work.'],
+      ['KEEPS TOGETHER', 'The buyer, contract, sales thread, notes, and latest activity.'],
+      ['RESULT', 'A work queue showing what needs attention and what happened next.'],
+    ],
+  },
+  bumper: {
+    areas: ['Next bump timing', 'Separate fee records', 'Failure visibility'],
+    readout: [
+      ['HANDLES', 'Owned-thread checks, permitted bump timing, queued jobs, and retry state.'],
+      ['KEEPS TOGETHER', 'Every attempt, its forum cost, the Toolbox fee, and thread movement.'],
+      ['RESULT', 'A visible schedule and an audit trail for each bump job.'],
+    ],
+  },
+  posting: {
+    areas: ['Draft and preview', 'Confirmation step', 'Reply monitoring'],
+    readout: [
+      ['HANDLES', 'New threads, replies, reusable drafts, previews, and watched responses.'],
+      ['KEEPS TOGETHER', 'The editor, target thread, final confirmation, and posted result.'],
+      ['RESULT', 'Forum posting without losing the surrounding conversation.'],
+    ],
+  },
+  contracts: {
+    areas: ['Responsibility', 'Terms and timeout', 'Full state history'],
+    readout: [
+      ['HANDLES', 'Review, approval, active work, waiting, completion, expiry, and disputes.'],
+      ['KEEPS TOGETHER', 'Both members, payment side, terms, timeout, and required next action.'],
+      ['RESULT', 'Contract state that can be checked without reconstructing the deal.'],
+    ],
+  },
+  market: {
+    areas: ['Market index', 'Buyer intent', 'Watched criteria'],
+    readout: [
+      ['HANDLES', 'Indexed sales threads, service requests, buyer phrases, and watched markets.'],
+      ['KEEPS TOGETHER', 'Opening posts, observed activity, contract counts, and matching criteria.'],
+      ['RESULT', 'A research view for finding demand and comparing active listings.'],
+    ],
+  },
+  bytes: {
+    areas: ['Balance', 'Reason', 'Action reference'],
+    readout: [
+      ['HANDLES', 'Balance changes, transfers, service charges, and related Toolbox actions.'],
+      ['KEEPS TOGETHER', 'Amount, direction, reason, timestamp, and source reference.'],
+      ['RESULT', 'A readable ledger explaining where Bytes moved.'],
+    ],
+  },
 }
 
 function InterfaceSample() {
@@ -48,6 +90,7 @@ function InterfaceSample() {
 export default function LandingMock() {
   const user = useStore(state => state.user)
   const authLoading = useStore(state => state.authLoading)
+  const [expandedProgram, setExpandedProgram] = useState('')
   const navigate = useNavigate()
   const query = new URLSearchParams(window.location.search)
   const authErrorCode = query.get('auth_error') || ''
@@ -90,20 +133,33 @@ export default function LandingMock() {
 
       <section id="modules" className="lp-section lp-programs">
         <header className="lp-section-head">
-          <div><span className="lp-kicker">PROGRAM DIRECTORY</span><h2>The work is already separated for you.</h2></div>
-          <p>Everything is visible here. Select a program to authenticate and land directly in it.</p>
+          <div><span className="lp-kicker">PROGRAM DIRECTORY</span><h2>Each job has its own workspace.</h2></div>
+          <p>Contracts, thread scheduling, posting, market research, and Bytes stay separated while sharing one HF account.</p>
         </header>
         <div className="lp-program-list">
-          {PRIMARY_MODULES.map((program, index) => (
-            <button type="button" key={program.id} onClick={() => openProgram(program)}>
-              <span>{String(index + 1).padStart(2, '0')}</span>
-              <div><strong>{program.label}</strong><p>{program.publicSummary}</p></div>
-              <ul aria-label={`${program.label} areas`}>{MODULE_DETAIL[program.id].map(item => <li key={item}>{item}</li>)}</ul>
-              <b>OPEN PROGRAM</b>
-            </button>
-          ))}
+          {PRIMARY_MODULES.map((program, index) => {
+            const detail = MODULE_DETAIL[program.id]
+            const expanded = expandedProgram === program.id
+            const panelId = `program-detail-${program.id}`
+            return (
+              <Fragment key={program.id}>
+                <button type="button" className={expanded ? 'is-expanded' : ''} aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpandedProgram(current => current === program.id ? '' : program.id)}>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <div><strong>{program.label}</strong><p>{program.publicSummary}</p></div>
+                  <ul aria-label={`${program.label} areas`}>{detail.areas.map(item => <li key={item}>{item}</li>)}</ul>
+                  <b>{expanded ? 'CLOSE DETAILS' : 'VIEW DETAILS'}</b>
+                </button>
+                <section id={panelId} className={`lp-program-readout${expanded ? ' is-open' : ''}`} aria-label={`${program.label} details`} hidden={!expanded}>
+                  <header><span>{program.command.toUpperCase()}.INFO</span><b>PROGRAM MANIFEST</b></header>
+                  <div>
+                    {detail.readout.map(([label, value]) => <p key={label}><span>{label}</span><strong>{value}</strong></p>)}
+                  </div>
+                </section>
+              </Fragment>
+            )
+          })}
         </div>
-        <div className="lp-secondary-programs"><span>ALSO MOUNTED</span>{SECONDARY_MODULES.map(program => <button type="button" key={program.id} onClick={() => openProgram(program)}>{program.label}</button>)}</div>
+        <div className="lp-secondary-programs"><span>ALSO MOUNTED</span>{SECONDARY_MODULES.map(program => <b key={program.id}>{program.label}</b>)}</div>
       </section>
 
       <section id="bump-service" className="lp-band">

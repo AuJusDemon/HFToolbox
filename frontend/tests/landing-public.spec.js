@@ -77,7 +77,7 @@ for (const viewport of VIEWPORTS) {
     if (viewport.name === 'desktop') expect(dimensions.directoryTop).toBeLessThan(viewport.height)
 
     await page.locator('#modules').scrollIntoViewIfNeeded()
-    await expect(page.getByRole('heading', { name: 'The work is already separated for you.' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Each job has its own workspace.' })).toBeVisible()
     await page.screenshot({ path: `test-results/${viewport.name}.png`, fullPage: true })
   })
 }
@@ -116,6 +116,48 @@ test('program click types the command and completes the route transfer before na
   await page.screenshot({ path: 'test-results/route-transfer.png' })
   await expect.poll(() => page.url()).toContain('/landing-mock')
   await expect(requestPromise).resolves.toBeTruthy()
+})
+
+test('Program Bus hover highlight clears when the pointer leaves', async ({ page }) => {
+  await page.goto('/landing-mock')
+  await waitForBoot(page)
+  const program = page.locator('.hero-program-grid').getByRole('button', { name: /Posting/ })
+  await program.hover()
+  await expect(program).toHaveClass(/is-active/)
+  await page.locator('.hero-status-rail').hover()
+  await expect(program).not.toHaveClass(/is-active/)
+  await expect(page.locator('.hero-program-bus')).not.toHaveClass(/has-selection/)
+  await runCommand(page, 'about casino')
+  await expect(page.locator('.hero-program-grid').getByRole('button', { name: /Byte Casino/ })).toHaveClass(/is-active/)
+  await expect(page.locator('.hero-program-grid').getByRole('button', { name: /Byte Casino/ })).not.toHaveClass(/is-active/, { timeout: 1000 })
+})
+
+test('lower Program Directory expands details without navigating or authenticating', async ({ page }) => {
+  let authRequests = 0
+  await page.route('**/auth/login**', route => {
+    authRequests += 1
+    return route.abort()
+  })
+  await page.goto('/landing-mock')
+  const row = page.locator('.lp-program-list').getByRole('button', { name: /My Business/ })
+  await row.click()
+  await expect(row).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('region', { name: 'My Business details' })).toContainText('Active deals, unanswered sales replies')
+  await page.locator('#modules').screenshot({ path: 'test-results/program-directory-expanded.png' })
+  await expect(page).toHaveURL(/\/landing-mock$/)
+  expect(authRequests).toBe(0)
+  await row.click()
+  await expect(row).toHaveAttribute('aria-expanded', 'false')
+})
+
+test('expanded Program Directory remains contained on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/landing-mock')
+  await page.locator('.lp-program-list').getByRole('button', { name: /Marketplace/ }).click()
+  await expect(page.getByRole('region', { name: 'Marketplace details' })).toBeVisible()
+  const widths = await page.evaluate(() => ({ body: document.body.scrollWidth, viewport: window.innerWidth }))
+  expect(widths.body).toBeLessThanOrEqual(widths.viewport)
+  await page.getByRole('region', { name: 'Marketplace details' }).screenshot({ path: 'test-results/mobile-program-detail.png' })
 })
 
 test('signal raster draws nonblank pixels and continues changing after boot', async ({ page }) => {

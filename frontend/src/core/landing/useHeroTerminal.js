@@ -130,6 +130,11 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
     if (result.program) {
       setActiveProgramId(result.program.id)
       pulse(result.program.id)
+      if (result.type !== 'open') {
+        scheduleInteraction(() => {
+          setActiveProgramId(current => current === result.program.id ? '' : current)
+        }, 420)
+      }
     }
     if (result.type === 'login') {
       interactionLockRef.current = true
@@ -147,7 +152,7 @@ export default function useHeroTerminal({ programs, authError, authReference, lo
       return
     }
     appendEntry(command, result)
-  }, [appendEntry, beginRouteTransfer, loginTarget, onLogin, onOpen, programs, pulse])
+  }, [appendEntry, beginRouteTransfer, loginTarget, onLogin, onOpen, programs, pulse, scheduleInteraction])
 
   const typeCommand = useCallback((command) => {
     if (!ready || interactionState !== 'idle' || interactionLockRef.current) return

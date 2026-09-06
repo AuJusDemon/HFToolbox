@@ -10,7 +10,7 @@ export default function HeroProgramBus({ runtime }) {
           const unavailable = program.availability !== 'available'
           const active = runtime.activeProgramId === program.id
           const pulsing = runtime.pulseProgramId === program.id
-          return <button key={program.id} type="button" style={{ '--program-index': index }} className={`${active ? 'is-active ' : ''}${pulsing ? 'is-pulsing' : ''}`.trim()} aria-pressed={active} disabled={!runtime.ready || runtime.interactionState !== 'idle'} onClick={() => runtime.selectProgram(program)} onMouseEnter={() => { runtime.setActiveProgramId(program.id); prefetchProgram(program) }} onFocus={() => { runtime.setActiveProgramId(program.id); prefetchProgram(program) }}>
+          return <button key={program.id} type="button" style={{ '--program-index': index }} className={`${active ? 'is-active ' : ''}${pulsing ? 'is-pulsing' : ''}`.trim()} aria-pressed={active} disabled={!runtime.ready || runtime.interactionState !== 'idle'} onClick={() => runtime.selectProgram(program)} onMouseEnter={() => { runtime.setActiveProgramId(program.id); prefetchProgram(program) }} onMouseLeave={() => runtime.setActiveProgramId('')} onFocus={() => { runtime.setActiveProgramId(program.id); prefetchProgram(program) }} onBlur={() => runtime.setActiveProgramId('')}>
             <span>{String(index + 1).padStart(2, '0')}</span>
             <strong>{program.label}</strong>
             <small>{unavailable ? 'COMING SOON' : `OPEN ${program.command.toUpperCase()}`}</small>
