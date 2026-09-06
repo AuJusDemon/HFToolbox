@@ -27,6 +27,10 @@ backend/deploy_info.json
 ## Frontend build
 frontend/node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/test-results/
+frontend/playwright-report/
 
 ## Windows binaries / SQLite tools
 *.exe

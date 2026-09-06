@@ -2,43 +2,31 @@ import { useState, useEffect, useRef } from 'react'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import useStore from '../store.js'
 import { api } from './api.js'
+import { getProgramByRoute, prefetchProgram, PROGRAMS } from '../system/programRegistry.js'
 
 // Set to null to make The Wire public for all users.
 
 // Single source of truth for dashboard nav. Sidebar and mobile nav both render from this.
 // group drives the sidebar's section labels ("navigation" / "modules" / "system");
 // mobileLabel is the compact all-caps form the bottom mobile nav uses.
-export const ROUTE_PREFETCHERS = {
-  '/dashboard/bytes': () => import('./BytesPage.jsx'),
-  '/dashboard/contracts': () => import('./ContractsPage.jsx'),
-  '/dashboard/bumper': () => import('./BumperPage.jsx'),
-  '/dashboard/posting': () => import('./PostingPage.jsx'),
-  '/dashboard/sigmarket': () => import('./SigmarketPage.jsx'),
-  '/dashboard/wire': () => import('./WirePage.jsx'),
-  '/dashboard/market': () => import('./MarketPage.jsx'),
-  '/dashboard/merchant': () => import('./MerchantPage.jsx'),
-  '/dashboard/operator': () => import('./OperatorPage.jsx'),
-  '/dashboard/settings': () => import('./Settings.jsx'),
-}
+export const ROUTE_PREFETCHERS = Object.fromEntries(
+  PROGRAMS.filter(program => program.route && program.prefetch).map(program => [program.route, program.prefetch]),
+)
 
 function prefetchRoute(to) {
-  const fn = ROUTE_PREFETCHERS[to]
-  if (fn) fn().catch(() => {})
+  prefetchProgram(PROGRAMS.find(program => program.route === to))
 }
 
-const NAV_ITEMS = [
-  { to: '/dashboard',           label: 'Overview',    mobileLabel: 'HOME',     group: 'navigation' },
-  { to: '/dashboard/merchant',  label: 'My Business', mobileLabel: 'BIZ',      group: 'modules'    },
-  { to: '/dashboard/bumper',    label: 'Bump Service',mobileLabel: 'BUMPS',    group: 'modules'    },
-  { to: '/dashboard/posting',   label: 'Posting',     mobileLabel: 'POST',     group: 'modules', badgeKey: 'replyCount' },
-  { to: '/dashboard/contracts', label: 'Contracts',   mobileLabel: 'DEALS',    group: 'modules'    },
-  { to: '/dashboard/market',    label: 'Marketplace', mobileLabel: 'MARKET',   group: 'modules'    },
-  { to: '/dashboard/bytes',     label: 'Bytes',       mobileLabel: 'BYTES',    group: 'modules'    },
-  { to: '/dashboard/sigmarket', label: 'Sig Market',  mobileLabel: 'SIG MKT',  group: 'modules'    },
-  { to: '/dashboard/wire',      label: 'The Wire',    mobileLabel: 'WIRE',     group: 'modules'    },
-  { to: '/dashboard/operator',  label: 'Operator',    mobileLabel: 'OPS',      group: 'system', operatorOnly: true },
-  { to: '/dashboard/settings',  label: 'Settings',    mobileLabel: 'SETTINGS', group: 'system'     },
-]
+const NAV_ITEMS = PROGRAMS
+  .filter(program => program.route && program.availability === 'available')
+  .map(program => ({
+    to: program.route,
+    label: program.id === 'home' ? 'Overview' : program.label,
+    mobileLabel: program.shortLabel,
+    group: program.group,
+    badgeKey: program.badgeKey,
+    operatorOnly: program.operatorOnly,
+  }))
 
 // Theme system
 export const THEMES = [
@@ -418,7 +406,7 @@ export default function Shell() {
     : null
 
   // Current path for topbar
-  const title = TITLE_MAP[loc.pathname] || ''
+  const title = TITLE_MAP[loc.pathname] || getProgramByRoute(loc.pathname).label || ''
   const pathDisplay = loc.pathname.replace('/dashboard', '') || '/'
   const visibleNavItems = NAV_ITEMS.filter(i => !i.operatorOnly || user?.is_operator)
 
