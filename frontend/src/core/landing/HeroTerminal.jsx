@@ -22,7 +22,7 @@ export default function HeroTerminal({ runtime }) {
 
   return (
     <section className={`hero-terminal${runtime.entries.at(-1)?.tone === 'error' ? ' has-error' : ''}${runtime.entries.at(-1)?.tone === 'waiting' ? ' has-interrupt' : ''}`} aria-label="Command terminal">
-      <header><span>COMMAND TERMINAL</span><b>{runtime.authorizing ? 'AUTHORIZING' : runtime.ready ? 'INPUT READY' : 'STARTING'}</b></header>
+      <header><span>COMMAND TERMINAL</span><b>{runtime.interactionState === 'typing' ? 'AUTO INPUT' : runtime.interactionState === 'resolving' ? 'ROUTE READY' : runtime.interactionState === 'transfer' ? 'TRANSFER' : runtime.ready ? 'INPUT READY' : 'STARTING'}</b></header>
       <div className="hero-terminal-screen">
         {!runtime.ready && <HeroBootSequence phaseIndex={runtime.phaseIndex} />}
         <div ref={outputRef} className={`hero-terminal-output${runtime.ready ? ' is-visible' : ''}`} role="log" aria-live="polite" aria-label="Terminal output">
@@ -35,9 +35,9 @@ export default function HeroTerminal({ runtime }) {
       <form className={`hero-terminal-prompt${runtime.ready ? ' is-visible' : ''}`} onSubmit={(event) => { event.preventDefault(); runtime.execute(runtime.input) }}>
         <label htmlFor="hero-command">Terminal command</label>
         <span aria-hidden="true">guest@hftoolbox:~$</span>
-        <input ref={runtime.inputRef} id="hero-command" value={runtime.input} onChange={event => runtime.setInput(event.target.value)} onKeyDown={runtime.handleKeyDown} autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck="false" disabled={!runtime.ready || runtime.authorizing} />
+        <input ref={runtime.inputRef} id="hero-command" value={runtime.input} onChange={event => runtime.setInput(event.target.value)} onKeyDown={runtime.handleKeyDown} autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck="false" disabled={!runtime.ready || runtime.interactionState !== 'idle'} />
         <i aria-hidden="true" />
-        <button type="submit" disabled={!runtime.input.trim() || runtime.authorizing}>RUN</button>
+        <button type="submit" disabled={!runtime.input.trim() || runtime.interactionState !== 'idle'}>RUN</button>
       </form>
       <InputTrace value={runtime.input} />
     </section>

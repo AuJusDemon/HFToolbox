@@ -30,6 +30,15 @@ describe('interactive terminal hero', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     mockMotion(false, false)
+    global.ResizeObserver = class ResizeObserver {
+      observe() {}
+      disconnect() {}
+    }
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
+      clearRect: vi.fn(), save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(),
+      moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(), fillRect: vi.fn(),
+      fillText: vi.fn(), setTransform: vi.fn(),
+    }))
   })
 
   afterEach(() => {
@@ -79,10 +88,35 @@ describe('interactive terminal hero', () => {
     const { props } = renderHero()
     fireEvent.pointerDown(window)
     fireEvent.click(screen.getByRole('button', { name: /Byte Casino/ }))
+    act(() => vi.advanceTimersByTime(1800))
     expect(screen.getByRole('log')).toHaveTextContent("Texas Hold'em")
     expect(props.onOpen).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: /Marketplace/ }))
+    act(() => vi.advanceTimersByTime(1800))
     expect(props.onOpen).toHaveBeenCalledWith(expect.objectContaining({ route: '/dashboard/market' }))
+  })
+
+  it('types a clicked program command before route transfer and navigation', () => {
+    const { props, container } = renderHero()
+    fireEvent.pointerDown(window)
+    fireEvent.click(screen.getByRole('button', { name: /Marketplace/ }))
+
+    act(() => vi.advanceTimersByTime(140))
+    expect(screen.getByLabelText('Terminal command').value).toMatch(/^open/)
+    expect(screen.getByLabelText('Terminal command')).not.toHaveValue('open market')
+    expect(props.onOpen).not.toHaveBeenCalled()
+
+    act(() => vi.advanceTimersByTime(500))
+    expect(screen.getByRole('log')).toHaveTextContent('Route selected: /dashboard/market')
+    expect(container.querySelector('.hero-route-transition')).toHaveClass('state-resolving')
+    expect(props.onOpen).not.toHaveBeenCalled()
+
+    act(() => vi.advanceTimersByTime(260))
+    expect(container.querySelector('.hero-route-transition')).toHaveClass('state-transfer')
+    expect(props.onOpen).not.toHaveBeenCalled()
+
+    act(() => vi.advanceTimersByTime(600))
+    expect(props.onOpen).toHaveBeenCalledOnce()
   })
 
   it('dispatches login from the whitelisted terminal command', () => {
@@ -91,7 +125,14 @@ describe('interactive terminal hero', () => {
     const input = screen.getByLabelText('Terminal command')
     fireEvent.change(input, { target: { value: 'login' } })
     fireEvent.keyDown(input, { key: 'Enter' })
+    act(() => vi.advanceTimersByTime(800))
     expect(props.onLogin).toHaveBeenCalledOnce()
+  })
+
+  it('renders the signal raster in running mode', () => {
+    const { container } = renderHero()
+    expect(container.querySelector('.hero-signal-raster')).toHaveAttribute('data-motion', 'running')
+    expect(HTMLCanvasElement.prototype.getContext).toHaveBeenCalledWith('2d')
   })
 
   it('renders mapped OAuth errors and references in terminal output', () => {

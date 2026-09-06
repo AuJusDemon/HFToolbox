@@ -82,6 +82,62 @@ test('reduced motion renders the completed instrument immediately', async ({ pag
   await expect(page.locator('.hero-instrument')).toHaveAttribute('data-boot-phase', 'ready')
   await expect(page.getByLabel('Terminal command')).toBeEnabled()
   await expect(page.locator('.hero-program-grid button').first()).toBeVisible()
+  await expect(page.locator('.hero-signal-raster')).toHaveAttribute('data-motion', 'still')
+})
+
+test('program click types the command and completes the route transfer before navigation', async ({ page }) => {
+  await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
+  await page.goto('/landing-mock')
+  await waitForBoot(page)
+
+  const input = page.getByLabel('Terminal command')
+  const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
+  await page.locator('.hero-program-grid').getByRole('button', { name: /Marketplace/ }).click()
+  await expect(input).not.toHaveValue('', { timeout: 500 })
+  await expect(input).toHaveValue('open market', { timeout: 1000 })
+  await expect(page.getByRole('log')).toContainText('Route selected: /dashboard/market')
+  await expect(page.locator('.hero-route-transition')).toHaveClass(/state-transfer/)
+  await page.screenshot({ path: 'test-results/route-transfer.png' })
+  await expect.poll(() => page.url()).toContain('/landing-mock')
+  await expect(requestPromise).resolves.toBeTruthy()
+})
+
+test('signal raster draws nonblank pixels and continues changing after boot', async ({ page }) => {
+  await page.goto('/landing-mock')
+  await waitForBoot(page)
+  const canvas = page.locator('.hero-signal-raster')
+  await expect(canvas).toHaveAttribute('data-motion', 'running')
+
+  const sample = () => canvas.evaluate(element => {
+    const context = element.getContext('2d')
+    const width = Math.min(element.width, 240)
+    const height = Math.min(element.height, 180)
+    const data = context.getImageData(0, 0, width, height).data
+    let sum = 0
+    for (let index = 3; index < data.length; index += 4) sum += data[index]
+    return sum
+  })
+  const first = await sample()
+  await page.waitForTimeout(180)
+  const second = await sample()
+  expect(first).toBeGreaterThan(0)
+  expect(second).toBeGreaterThan(0)
+  expect(second).not.toBe(first)
+})
+
+test('mobile route transfer remains contained inside the instrument', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
+  await page.goto('/landing-mock')
+  await page.keyboard.press('Escape')
+  const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
+  await page.locator('.hero-program-grid').getByRole('button', { name: /Bytes OPEN BYTES/ }).click()
+  await expect(page.locator('.hero-route-transition')).toHaveClass(/state-transfer/)
+  const bounds = await page.locator('.hero-route-transition').boundingBox()
+  expect(bounds?.x).toBeGreaterThanOrEqual(0)
+  expect((bounds?.x || 0) + (bounds?.width || 0)).toBeLessThanOrEqual(390)
+  await page.screenshot({ path: 'test-results/mobile-route-transfer.png' })
+  await expect(requestPromise).resolves.toBeTruthy()
 })
 
 test('keyboard history, completion, escape, and clear work in the browser', async ({ page }) => {

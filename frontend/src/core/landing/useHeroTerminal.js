@@ -13,7 +13,7 @@ function prefersReducedMotion() {
   return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 }
 
-export default function useHeroTerminal({ programs, authError, authReference, onOpen, onLogin }) {
+export default function useHeroTerminal({ programs, authError, authReference, loginTarget = '/auth/login', onOpen, onLogin }) {
   const reducedMotion = useMemo(prefersReducedMotion, [])
   const [phaseIndex, setPhaseIndex] = useState(reducedMotion ? BOOT_PHASES.length - 1 : 0)
   const [bootSkipped, setBootSkipped] = useState(reducedMotion)
@@ -26,9 +26,11 @@ export default function useHeroTerminal({ programs, authError, authReference, on
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [activeProgramId, setActiveProgramId] = useState('')
   const [pulseProgramId, setPulseProgramId] = useState('')
-  const [authorizing, setAuthorizing] = useState(false)
+  const [interactionState, setInteractionState] = useState('idle')
+  const [routeTarget, setRouteTarget] = useState('')
   const inputRef = useRef(null)
   const pulseTimerRef = useRef(null)
+  const interactionTimersRef = useRef(new Set())
   const entryIdRef = useRef(0)
   const phase = BOOT_PHASES[phaseIndex]
   const ready = phase === 'ready'
@@ -66,7 +68,20 @@ export default function useHeroTerminal({ programs, authError, authReference, on
     if (!active || active === document.body) inputRef.current?.focus({ preventScroll: true })
   }, [ready])
 
-  useEffect(() => () => window.clearTimeout(pulseTimerRef.current), [])
+  useEffect(() => () => {
+    window.clearTimeout(pulseTimerRef.current)
+    interactionTimersRef.current.forEach(window.clearTimeout)
+    interactionTimersRef.current.clear()
+  }, [])
+
+  const scheduleInteraction = useCallback((callback, delay) => {
+    const timer = window.setTimeout(() => {
+      interactionTimersRef.current.delete(timer)
+      callback()
+    }, delay)
+    interactionTimersRef.current.add(timer)
+    return timer
+  }, [])
 
   const pulse = useCallback((programId) => {
     setPulseProgramId('')
@@ -87,6 +102,17 @@ export default function useHeroTerminal({ programs, authError, authReference, on
     }])
   }, [])
 
+  const beginRouteTransfer = useCallback((target, callback) => {
+    setRouteTarget(target)
+    setInteractionState('resolving')
+    if (reducedMotion) {
+      callback()
+      return
+    }
+    scheduleInteraction(() => setInteractionState('transfer'), 240)
+    scheduleInteraction(callback, 760)
+  }, [reducedMotion, scheduleInteraction])
+
   const execute = useCallback((rawCommand) => {
     const command = String(rawCommand || '').trim()
     const result = resolveHeroCommand(command, programs)
@@ -105,21 +131,44 @@ export default function useHeroTerminal({ programs, authError, authReference, on
       pulse(result.program.id)
     }
     if (result.type === 'login') {
-      setAuthorizing(true)
-      appendEntry(command, { type: 'output', lines: ['Starting Hack Forums authorization...'] })
-      onLogin()
+      const authenticated = loginTarget === '/dashboard'
+      appendEntry(command, { type: 'output', lines: authenticated
+        ? ['Account route selected.', 'Opening Toolbox...']
+        : ['Authorization route selected.', 'Opening Hack Forums...'] })
+      beginRouteTransfer(loginTarget, onLogin)
       return
     }
     if (result.type === 'open') {
-      setAuthorizing(true)
-      appendEntry(command, { type: 'output', lines: [`Opening ${result.program.label}...`] })
-      onOpen(result.program)
+      appendEntry(command, { type: 'output', lines: [`Route selected: ${result.program.route}`, `Opening ${result.program.label}...`] })
+      beginRouteTransfer(result.program.route, () => onOpen(result.program))
       return
     }
     appendEntry(command, result)
-  }, [appendEntry, onLogin, onOpen, programs, pulse])
+  }, [appendEntry, beginRouteTransfer, loginTarget, onLogin, onOpen, programs, pulse])
 
-  const selectProgram = useCallback((program) => execute(`open ${program.command}`), [execute])
+  const typeCommand = useCallback((command) => {
+    if (!ready || interactionState !== 'idle') return
+    const value = String(command || '')
+    if (reducedMotion) {
+      setInput(value)
+      execute(value)
+      return
+    }
+
+    setInput('')
+    setInteractionState('typing')
+    const mobile = window.matchMedia('(max-width: 720px)').matches
+    const characterDelay = mobile ? 24 : 34
+    Array.from(value).forEach((_, index) => {
+      scheduleInteraction(() => setInput(value.slice(0, index + 1)), characterDelay * (index + 1))
+    })
+    scheduleInteraction(() => {
+      setInteractionState('idle')
+      execute(value)
+    }, characterDelay * value.length + 150)
+  }, [execute, interactionState, ready, reducedMotion, scheduleInteraction])
+
+  const selectProgram = useCallback((program) => typeCommand(`open ${program.command}`), [typeCommand])
 
   const handleKeyDown = useCallback((event) => {
     if (event.ctrlKey && event.key.toLowerCase() === 'l') {
@@ -155,8 +204,8 @@ export default function useHeroTerminal({ programs, authError, authReference, on
   }, [execute, history, historyIndex, input, programs])
 
   return {
-    activeProgramId, authorizing, bootSkipped, entries, execute, finishBoot, handleKeyDown,
+    activeProgramId, bootSkipped, entries, execute, finishBoot, handleKeyDown, interactionState,
     heroPrograms, input, inputRef, phase, phaseIndex, pulseProgramId, ready, selectProgram,
-    setActiveProgramId, setInput,
+    reducedMotion, routeTarget, setActiveProgramId, setInput, typeCommand,
   }
 }
