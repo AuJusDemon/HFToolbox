@@ -160,7 +160,7 @@ export default function LandingMock() {
           <div className="lp-copy-block lp-casino-copy">
             <span className="lp-kicker lp-kicker-amber">COMING SOON</span>
             <h2>Byte Casino</h2>
-            <p>A Vibe-themed multiplayer casino built for the HF community, with table games played using Bytes.</p>
+            <p>A multiplayer casino for the HF community. Play poker, blackjack, baccarat, and roulette using Bytes.</p>
             <div className="lp-casino-systems">
               <p><b>BYTE CASHIER</b><span>Available, in-play, and pending balances stay separate.</span></p>
               <p><b>FAIRNESS RECORDS</b><span>Completed games retain the records needed for verification.</span></p>
