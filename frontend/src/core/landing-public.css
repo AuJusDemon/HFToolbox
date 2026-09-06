@@ -57,12 +57,19 @@
 .lp-terminal::after { right: -1px; bottom: -1px; border-right: 2px solid var(--lp-green); border-bottom: 2px solid var(--lp-green); }
 .lp-terminal-head, .lp-sample-head { min-height: 36px; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--lp-dim); border-bottom: 1px solid var(--lp-border); font-size: 8px; text-transform: uppercase; }
 .lp-terminal-head b { color: var(--lp-green); font-weight: 400; }
-.lp-terminal-body { padding: 14px; }
-.lp-boot-copy { margin-bottom: 12px; }
-.lp-boot-copy p { margin: 0; padding: 5px 0; color: var(--lp-sub); font-size: 9px; }
-.lp-boot-copy span { color: var(--lp-green); }
-.lp-canvas-wrap { height: 320px; border-top: 1px solid var(--lp-border); border-bottom: 1px solid var(--lp-border); }
-.lp-canvas-wrap .os-ascii-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.lp-terminal-body { padding: 18px; }
+.lp-terminal-prompt { min-height: 34px; display: flex; align-items: center; gap: 8px; color: var(--lp-text); font-size: 10px; }
+.lp-terminal-prompt span { color: var(--lp-green); }
+.lp-terminal-programs { border-top: 1px solid var(--lp-border-strong); border-bottom: 1px solid var(--lp-border-strong); }
+.lp-terminal-programs > div { min-height: 54px; display: grid; grid-template-columns: 26px 128px minmax(0, 1fr) 42px; align-items: center; gap: 10px; border-bottom: 1px solid var(--lp-border); }
+.lp-terminal-programs > div:last-child { border-bottom: 0; }
+.lp-terminal-programs > div > span { color: var(--lp-dim); font-size: 8px; }
+.lp-terminal-programs strong { color: var(--lp-text); font-size: 10px; font-weight: 400; }
+.lp-terminal-programs small { min-width: 0; overflow: hidden; color: var(--lp-sub); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.lp-terminal-programs b { color: var(--lp-green-soft); font-size: 7px; font-weight: 400; text-align: right; }
+.lp-terminal-result { min-height: 54px; padding: 10px 0; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--lp-border); font-size: 8px; }
+.lp-terminal-result span { color: var(--lp-green); }
+.lp-terminal-result b { color: var(--lp-dim); font-weight: 400; text-align: right; }
 .lp-terminal-command { min-height: 44px; display: flex; align-items: center; gap: 7px; color: var(--lp-text); font-size: 10px; }
 .lp-terminal-command span { color: var(--lp-green); }
 .lp-terminal-command i { width: 7px; height: 13px; background: var(--lp-green); animation: lp-cursor 1s steps(1) infinite; }
@@ -128,11 +135,17 @@
 .lp-flow-line p { margin: 9px 0 0; color: var(--lp-sub); font-size: 11px; line-height: 1.55; }
 
 .lp-casino { background: #070905; }
-.lp-casino-map { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; align-items: center; border-top: 1px solid #68561e; border-bottom: 1px solid #68561e; }
-.lp-casino-map div { min-height: 120px; padding: 20px 12px; display: flex; flex-direction: column; justify-content: space-between; }
-.lp-casino-map span { color: var(--lp-dim); font-size: 8px; }
-.lp-casino-map b { color: var(--lp-amber); font: 22px 'VT323', monospace; font-weight: 400; }
-.lp-casino-map i { color: #68561e; font-style: normal; }
+.lp-casino .lp-band-inner { align-items: start; }
+.lp-casino-systems { margin-top: 28px; border-top: 1px solid #68561e; }
+.lp-casino-systems p { margin: 0; padding: 13px 0; display: grid; grid-template-columns: 138px 1fr; gap: 15px; border-bottom: 1px solid #342d13; }
+.lp-casino-systems b { color: var(--lp-amber); font-size: 8px; font-weight: 400; }
+.lp-casino-systems span { color: var(--lp-sub); font-size: 10px; line-height: 1.5; }
+.lp-game-list { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #68561e; border-left: 1px solid #68561e; }
+.lp-game-list article { min-height: 205px; padding: 22px; border-right: 1px solid #68561e; border-bottom: 1px solid #68561e; }
+.lp-game-list article > span { color: #7e6b2d; font-size: 8px; }
+.lp-game-list h3 { margin: 42px 0 8px; color: var(--lp-text); font: 28px/1 'VT323', monospace; font-weight: 400; }
+.lp-game-list article:first-child h3 { color: var(--lp-amber); }
+.lp-game-list p { margin: 0; color: var(--lp-sub); font-size: 10px; line-height: 1.6; }
 
 .lp-final { max-width: 1240px; margin: 0 auto; padding: 92px 24px; display: flex; flex-direction: column; align-items: center; text-align: center; }
 .lp-final h2 { margin-bottom: 26px; }
@@ -143,8 +156,7 @@
 
 @media (max-width: 900px) {
   .lp-hero { grid-template-columns: 1fr; }
-  .lp-terminal { min-height: 440px; }
-  .lp-canvas-wrap { height: 260px; }
+  .lp-terminal { min-height: 470px; }
   .lp-program-list > button { grid-template-columns: 36px minmax(230px, 1fr) minmax(210px, .8fr) 90px; gap: 13px; }
   .lp-band-inner { grid-template-columns: 1fr; }
   .lp-flow-line { grid-template-columns: 1fr 1fr; }
@@ -163,8 +175,13 @@
   .lp-secondary { width: 100%; }
   .lp-input-strip span { width: 100%; margin-right: 0; border-bottom: 1px solid var(--lp-border); }
   .lp-input-strip span:last-child { border-bottom: 0; }
-  .lp-terminal { min-height: 365px; }
-  .lp-canvas-wrap { height: 190px; }
+  .lp-terminal { min-height: 465px; }
+  .lp-terminal-body { padding: 13px; }
+  .lp-terminal-programs > div { min-height: 52px; grid-template-columns: 20px minmax(94px, .8fr) minmax(0, 1.2fr); gap: 7px; }
+  .lp-terminal-programs b { display: none; }
+  .lp-terminal-programs small { font-size: 7px; }
+  .lp-terminal-result { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .lp-terminal-result b { text-align: left; }
   .lp-section { padding: 60px 15px; }
   .lp-section-head { grid-template-columns: 1fr; gap: 15px; }
   .lp-section-head h2, .lp-copy-block h2, .lp-final h2 { font-size: 42px; }
@@ -182,9 +199,10 @@
   .lp-flow-line { grid-template-columns: 1fr; }
   .lp-flow-line > div { min-height: 145px; border-right: 0; border-bottom: 1px solid var(--lp-border); }
   .lp-flow-line > div:last-child { border-bottom: 0; }
-  .lp-casino-map { grid-template-columns: 1fr 1fr; }
-  .lp-casino-map i { display: none; }
-  .lp-casino-map div { min-height: 90px; border-bottom: 1px solid #443916; }
+  .lp-casino-systems p { grid-template-columns: 112px 1fr; }
+  .lp-game-list { grid-template-columns: 1fr; }
+  .lp-game-list article { min-height: 160px; }
+  .lp-game-list h3 { margin-top: 26px; }
   .lp-final { padding: 70px 15px; }
   .lp-footer { padding: 18px 15px; align-items: flex-start; flex-direction: column; }
 }

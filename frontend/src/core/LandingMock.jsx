@@ -1,7 +1,6 @@
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import useStore from '../store.js'
-import AsciiField from '../system/AsciiField.jsx'
 import { PROGRAMS, PUBLIC_PROGRAMS } from '../system/programRegistry.js'
 import './landing-public.css'
 
@@ -25,18 +24,22 @@ const MODULE_DETAIL = {
   bytes: ['Balance', 'Reason', 'Action reference'],
 }
 
-function MiniTerminal({ impulse, onPulse }) {
+function MiniTerminal() {
   return (
     <div className="lp-terminal" aria-label="Toolbox interface preview">
       <div className="lp-terminal-head"><span>hftoolbox / public-interface</span><b>GUEST</b></div>
       <div className="lp-terminal-body">
-        <div className="lp-boot-copy" aria-hidden="true">
-          <p><span>[OK]</span> program registry mounted</p>
-          <p><span>[OK]</span> public module directory ready</p>
-          <p><span>[--]</span> account data waits for authentication</p>
+        <div className="lp-terminal-prompt"><span>guest@hftoolbox:~$</span> programs</div>
+        <div className="lp-terminal-programs">
+          <div><span>01</span><strong>MY BUSINESS</strong><small>contracts / buyers / thread health</small><b>READY</b></div>
+          <div><span>02</span><strong>BUMP SERVICE</strong><small>scheduler / fees / results</small><b>READY</b></div>
+          <div><span>03</span><strong>MARKETPLACE</strong><small>index / buyer intent / watches</small><b>READY</b></div>
+          <div><span>04</span><strong>POSTING</strong><small>draft / preview / confirm</small><b>READY</b></div>
+          <div><span>05</span><strong>CONTRACTS</strong><small>review / active / waiting</small><b>READY</b></div>
+          <div><span>06</span><strong>BYTES</strong><small>balance / ledger / references</small><b>READY</b></div>
         </div>
-        <div className="lp-canvas-wrap"><AsciiField mode="home" impulse={impulse} motion onInteract={onPulse} /></div>
-        <div className="lp-terminal-command"><span>guest@hftoolbox:~$</span> programs <i /></div>
+        <div className="lp-terminal-result"><span>6 programs available</span><b>Use the directory below or sign in to continue.</b></div>
+        <div className="lp-terminal-command"><span>guest@hftoolbox:~$</span> open business <i /></div>
       </div>
     </div>
   )
@@ -65,7 +68,6 @@ function InterfaceSample() {
 export default function LandingMock() {
   const user = useStore(state => state.user)
   const navigate = useNavigate()
-  const [impulse, setImpulse] = useState(0)
   const query = new URLSearchParams(window.location.search)
   const authErrorCode = query.get('auth_error') || ''
   const authReference = query.get('auth_ref') || ''
@@ -106,7 +108,7 @@ export default function LandingMock() {
           </div>
           <div className="lp-input-strip" aria-label="Supported input methods"><span>ONE ACCOUNT</span><span>DIRECT PROGRAM ROUTES</span><span>DESKTOP + MOBILE</span></div>
         </div>
-        <MiniTerminal impulse={impulse} onPulse={() => setImpulse(value => value + 1)} />
+        <MiniTerminal />
       </section>
 
       <section id="modules" className="lp-section lp-programs">
@@ -155,9 +157,21 @@ export default function LandingMock() {
 
       <section id="casino" className="lp-band lp-casino">
         <div className="lp-band-inner">
-          <div className="lp-copy-block"><span className="lp-kicker lp-kicker-amber">COMING SOON</span><h2>Byte Casino will be another program, not another landing page.</h2><p>Poker, blackjack, cashier boundaries, and fairness records will use the same account shell when that system is ready.</p></div>
-          <div className="lp-casino-map" aria-label="Byte Casino areas">
-            <div><span>TABLE 01</span><b>POKER</b></div><i>+</i><div><span>TABLE 02</span><b>BLACKJACK</b></div><i>+</i><div><span>ACCOUNT</span><b>CASHIER</b></div><i>+</i><div><span>RECORDS</span><b>VERIFY</b></div>
+          <div className="lp-copy-block lp-casino-copy">
+            <span className="lp-kicker lp-kicker-amber">COMING SOON</span>
+            <h2>Byte Casino</h2>
+            <p>A Vibe-themed multiplayer casino built for the HF community, with table games played using Bytes.</p>
+            <div className="lp-casino-systems">
+              <p><b>BYTE CASHIER</b><span>Available, in-play, and pending balances stay separate.</span></p>
+              <p><b>FAIRNESS RECORDS</b><span>Completed games retain the records needed for verification.</span></p>
+              <p><b>SERVER CONTROL</b><span>Game state, legal actions, balances, and settlement stay authoritative.</span></p>
+            </div>
+          </div>
+          <div className="lp-game-list" aria-label="Byte Casino games">
+            <article><span>01 / TABLE GAME</span><h3>Texas Hold'em</h3><p>Two-to-six-player no-limit poker with blinds, betting rounds, side pots, all-ins, and showdowns.</p></article>
+            <article><span>02 / TABLE GAME</span><h3>Blackjack</h3><p>Casino blackjack with clear hand controls, table state, settlement, and round timing.</p></article>
+            <article><span>03 / TABLE GAME</span><h3>Baccarat</h3><p>Player, Banker, and Tie wagering with visible dealing, outcomes, and table history.</p></article>
+            <article><span>04 / TABLE GAME</span><h3>Roulette</h3><p>Full table wagering across numbers, colors, ranges, and standard roulette bet groups.</p></article>
           </div>
         </div>
       </section>

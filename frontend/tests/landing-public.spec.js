@@ -9,12 +9,12 @@ const VIEWPORTS = [
 ]
 
 for (const viewport of VIEWPORTS) {
-  test(`${viewport.name} layout remains width-contained and renders ASCII output`, async ({ page }) => {
+  test(`${viewport.name} layout remains width-contained and renders the terminal directory`, async ({ page }) => {
     await page.setViewportSize(viewport)
     await page.goto('/landing-mock')
     await expect(page.getByRole('heading', { name: 'HF Toolbox' })).toBeVisible()
-    await expect(page.locator('.os-ascii-canvas')).toBeVisible()
-    await page.waitForTimeout(150)
+    await expect(page.locator('.lp-terminal')).toBeVisible()
+    await expect(page.locator('.lp-terminal-programs > div')).toHaveCount(6)
 
     const layout = await page.evaluate(() => ({
       bodyWidth: document.body.scrollWidth,
@@ -25,16 +25,6 @@ for (const viewport of VIEWPORTS) {
     expect(layout.bodyWidth).toBeLessThanOrEqual(layout.viewportWidth)
     expect(layout.bodyHeight).toBeGreaterThan(layout.viewportHeight)
 
-    const paintedPixels = await page.locator('.os-ascii-canvas').evaluate(canvas => {
-      const context = canvas.getContext('2d')
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
-      let nonBlack = 0
-      for (let index = 0; index < pixels.length; index += 64) {
-        if (pixels[index] > 8 || pixels[index + 1] > 8 || pixels[index + 2] > 8) nonBlack += 1
-      }
-      return nonBlack
-    })
-    expect(paintedPixels).toBeGreaterThan(20)
     await page.screenshot({ path: `test-results/${viewport.name}.png`, fullPage: true })
   })
 }
@@ -43,7 +33,11 @@ test('all program information is available on one page without tabs', async ({ p
   await page.goto('/landing-mock')
   await expect(page.getByRole('heading', { name: 'The work is already separated for you.' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'Know what the scheduler is doing.' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: /Byte Casino will be another program/ })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Byte Casino' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: "Texas Hold'em" })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Blackjack' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Baccarat' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Roulette' })).toBeVisible()
   await expect(page.getByRole('tab')).toHaveCount(0)
 })
 
