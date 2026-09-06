@@ -2,9 +2,9 @@ import { Component, useEffect, Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate } from 'react-router-dom'
 import './index.css'
 import useStore    from './store.js'
-import Shell       from './core/Shell.jsx'
+import Shell       from './core/ShellV2.jsx'
 import Login       from './core/Login.jsx'
-import Dashboard   from './core/Dashboard.jsx'
+import Dashboard   from './core/OverviewDashboard.jsx'
 import { api }     from './core/api.js'
 
 // Heavy pages load only when routed. Shell, Login, and Dashboard stay eager.
