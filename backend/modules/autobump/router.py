@@ -12,6 +12,7 @@ from .autobump_db import (
     get_log, init, expire_jobs, get_settings, set_settings,
     get_job_stats, _db
 )
+from .fees import fee_breakdown
 try:
     from HFClient import AuthExpired as _AuthExpired
 except ImportError:
@@ -24,9 +25,12 @@ init()
 VALID_MODES  = {"timer", "page1"}
 MIN_INTERVAL = 6
 MAX_INTERVAL = 168
-STANLEY_FEE  = 50
-
 PAGE1_RECHECK_SECS = 1800
+
+
+def _fees_for_user(uid: str) -> dict[str, int]:
+    user = db.get_user(uid) or {}
+    return fee_breakdown(uid, user.get("groups"))
 
 
 def _uid(request: Request) -> str:
@@ -68,10 +72,14 @@ async def get_bumper_settings(request: Request):
     weekly_budget = int(s.get("weekly_budget") or 0)
     from .autobump_db import get_weekly_bump_count
     bump_count = await asyncio.get_event_loop().run_in_executor(None, get_weekly_bump_count, uid)
+    fees = await asyncio.get_event_loop().run_in_executor(None, _fees_for_user, uid)
+    bytes_this_week = bump_count * fees["total_cost"]
     return {
         "weekly_budget":   weekly_budget,
-        "bytes_this_week": bump_count * STANLEY_FEE,
+        "bytes_this_week": bytes_this_week,
         "bumps_this_week": bump_count,
+        "remaining_budget": max(0, weekly_budget - bytes_this_week) if weekly_budget else None,
+        **fees,
     }
 
 
@@ -198,6 +206,7 @@ async def job_stats(request: Request, tid: str):
     now  = int(time.time())
 
     stats = await asyncio.get_event_loop().run_in_executor(None, get_job_stats, uid, tid)
+    fees = await asyncio.get_event_loop().run_in_executor(None, _fees_for_user, uid)
 
     # All contracts for this TID, oldest first — so we can slot them into bump periods
     contracts = []
@@ -254,12 +263,13 @@ async def job_stats(request: Request, tid: str):
     return {
         "total_bumps":     stats["total_bumps"],
         "total_skips":     stats["total_skips"],
-        "bytes_spent":     stats["total_bumps"] * STANLEY_FEE,
+        "bytes_spent":     stats["total_bumps"] * fees["total_cost"],
         "total_contracts": len(contracts),
         "avg_reply_gain":  stats["avg_reply_gain"],
         "has_reply_data":  any(b["numreplies"] is not None for b in bumps),
         "job_info":        stats["job_info"],
         "bump_periods":    bump_periods,   # newest first, max 20
+        **fees,
     }
 
 

@@ -17,8 +17,8 @@ Page1 mode:
 
 Budget check:
   - If user has a weekly byte budget set, count bumps in the last 7 days
-  - Each bump costs ~50 bytes (Stanley fee)
-  - Skip all bumps for user if budget exceeded
+  - Use the member's HF fee plus the Toolbox service fee
+  - Skip when the next successful bump would exceed the budget
 """
 
 import time
@@ -28,14 +28,10 @@ from .router import router
 from scheduler import on_poll
 import db
 from hf_thread_stats import thread_reply_count
+from .fees import fee_breakdown
 
 log = logging.getLogger("autobump")
 
-# Stanley bump fee by group (display + budget tracking only — HF deducts this automatically on _bump)
-STANLEY_FEE_DEFAULT = 100   # Regular / L33t
-STANLEY_FEE_UBER    = 75    # Ub3r (GID 28)
-STANLEY_FEE_VENDOR  = 50    # Vendor (GID 67)
-MY_FEE           = 10        # bytes per bump sent to platform owner
 MY_UID           = os.getenv("PLATFORM_OWNER_UID", "")  # set in .env — exempt from fee
 TIDS_PER_CALL    = 4         # HF API max TIDs per _tid list
 PAGE1_RECHECK    = 1800      # seconds between page1 checks when thread is still on page 1
@@ -77,22 +73,16 @@ async def poll_autobump(polling_uid: str, polling_token: str) -> None:
         if weekly_budget > 0:
             bump_count_this_week = await asyncio.to_thread(get_weekly_bump_count, uid)
             # Pick Stanley fee based on user's group for accurate budget tracking
-            _ugroups = []
+            user_groups = []
             try:
-                _udata = db.get_user(uid)
-                if _udata:
-                    _ugroups = [str(g) for g in (_udata.get("groups") or [])]
+                user_data = db.get_user(uid)
+                if user_data:
+                    user_groups = user_data.get("groups") or []
             except Exception:
                 pass
-            if "67" in _ugroups:
-                _stanley = STANLEY_FEE_VENDOR
-            elif "28" in _ugroups:
-                _stanley = STANLEY_FEE_UBER
-            else:
-                _stanley = STANLEY_FEE_DEFAULT
-            cost_per_bump = _stanley if uid == MY_UID else _stanley + MY_FEE
+            cost_per_bump = fee_breakdown(uid, user_groups, MY_UID)["total_cost"]
             bytes_spent_this_week = bump_count_this_week * cost_per_bump
-            if bytes_spent_this_week >= weekly_budget:
+            if bytes_spent_this_week + cost_per_bump > weekly_budget:
                 log.info(
                     "Budget exceeded for uid=%s (%d/%d bytes this week) — skipping all bumps",
                     uid, bytes_spent_this_week, weekly_budget
@@ -101,7 +91,7 @@ async def poll_autobump(polling_uid: str, polling_token: str) -> None:
                     await asyncio.to_thread(
                         log_action, job["id"], uid, str(job["tid"]),
                         "skipped",
-                        f"Weekly budget exceeded ({bytes_spent_this_week}/{weekly_budget} bytes)"
+                        f"Next bump would exceed weekly budget ({bytes_spent_this_week}/{weekly_budget} bytes)"
                     )
                 try:
                     import time as _t
@@ -190,12 +180,13 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
         # Bump accepted — collect the fee
         # Small delay between back-to-back write calls.
         await asyncio.sleep(2)
-        if uid != MY_UID:
+        service_fee = fee_breakdown(uid, [], MY_UID)["service_fee"]
+        if service_fee:
             try:
                 fee_result = await asyncio.wait_for(client.write({
                     "bytes": {
                         "_uid":    int(MY_UID),
-                        "_amount": str(MY_FEE),
+                        "_amount": str(service_fee),
                         "_reason": f"HFToolbox | Bump Fee | TID: {tid_str}",
                     }
                 }, feature="autobump.fee", priority=2), timeout=12)
@@ -215,7 +206,7 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
                 await asyncio.to_thread(log_action, job["id"], uid, tid_str, "error",
                                         f"Fee send failed: {err}")
             else:
-                log.info("Fee collected: %d bytes from uid=%s tid=%s", MY_FEE, uid, tid_str)
+                log.info("Fee collected: %d bytes from uid=%s tid=%s", service_fee, uid, tid_str)
 
         # next_bump already set — just update bump_count and metadata
         await asyncio.to_thread(

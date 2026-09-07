@@ -11,7 +11,7 @@ import { api }     from './core/api.js'
 const BytesPage          = lazy(() => import('./core/BytesPage.jsx'))
 const Settings           = lazy(() => import('./core/Settings.jsx'))
 const ContractsPage      = lazy(() => import('./core/ContractsPage.jsx'))
-const BumperPage         = lazy(() => import('./core/BumperPage.jsx'))
+const BumperPage         = lazy(() => import('./core/BumperPageV2.jsx'))
 const ContractDetailPage = lazy(() => import('./core/ContractDetailPage.jsx'))
 const GroupsPage         = lazy(() => import('./core/GroupsPage.jsx'))
 const UserPage           = lazy(() => import('./core/UserPage.jsx'))

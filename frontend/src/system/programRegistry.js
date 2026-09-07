@@ -19,7 +19,7 @@ export const PROGRAMS = [
     availability: 'available', publicPrimary: true,
     publicSummary: 'Schedule thread bumps and inspect timing, spend, failures, and movement afterward.',
     visualizationMode: 'bumps', operatorOnly: false, previewComponent: 'bumps',
-    prefetch: () => import('../core/BumperPage.jsx'),
+    prefetch: () => import('../core/BumperPageV2.jsx'),
   },
   {
     id: 'posting', label: 'Posting', shortLabel: 'POST', command: 'posting',
