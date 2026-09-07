@@ -7,6 +7,7 @@ const baseJobs = [
 ]
 const attempt = { id:1, tid:'6319077', thread_title:'Spotify Premium Family Plan', action:'bumped', reason:'', ts:now - 43200 }
 const fees = { weekly_budget:1000, bytes_this_week:220, remaining_budget:780, bumps_this_week:2, hf_fee:100, service_fee:10, total_cost:110 }
+const promotion = { offers:baseJobs.map((job,index) => ({ tid:job.tid, since_last_bump:{ tracked_replies:index + 1, contracts_opened:index, contracts_completed:index } })) }
 const stats = { tid:'6319077',title:'Spotify Premium Family Plan',range:{key:'30d'},freshness:{thread_observed_at:now-60},current_period:{started_at:now-43200,replies_since_latest_bump:{value:2,source:'observed',available:true},contracts_opened:{value:1,source:'observed',available:true}},metrics:{successful_bumps:{value:18,source:'observed',available:true},skips:{value:5,source:'observed',available:true},failures:{value:0,source:'observed',available:true},tracked_replies:{value:12,source:'observed',available:true},contracts_opened:{value:23,source:'observed',available:true},contracts_completed:{value:8,source:'observed',available:true},contracts_per_bump:{value:1.28,source:'derived',available:true},average_reply_gain:{value:1.4,source:'derived',available:true},reply_period_rate:{value:40,source:'derived',available:true},estimated_bytes_spent:{value:1980,source:'estimated',available:true}},fees:{hf_fee:100,service_fee:10,total_cost:110,source:'estimated'},activity:[{kind:'quiet_group',count:17,start_ts:now-864000,end_ts:now-86400,summary:'No replies or contract activity'}],attempts:[attempt],pagination:{page:1,page_size:5,total_items:1,total_pages:1,has_previous:false,has_next:false} }
 
 async function mockBumper(page, state = 'populated') {
@@ -31,6 +32,7 @@ async function mockBumper(page, state = 'populated') {
     }
     if (url.pathname === '/api/autobump/log') return route.fulfill({ json:{ log:[attempt] } })
     if (url.pathname === '/api/autobump/settings') return route.fulfill({ json:state === 'budget' ? { ...fees, weekly_budget:250, bytes_this_week:220, remaining_budget:30 } : fees })
+    if (url.pathname === '/api/merchant/promotion') return route.fulfill({ json:promotion })
     if (/\/api\/autobump\/jobs\/\d+\/performance/.test(url.pathname)) {
       performanceRequests += 1
       if (state === 'slow-performance' && performanceRequests > 1) await new Promise(resolve => setTimeout(resolve, 800))
@@ -69,8 +71,8 @@ for (const state of ['empty', 'failure', 'paused', 'due', 'budget']) {
     await expect(page.getByRole('heading', { name:'Bump Service' })).toBeVisible()
     if (state === 'empty') await expect(page.getByRole('heading', { name:'No bump jobs yet' })).toBeVisible()
     if (state === 'failure') await expect(page.getByText('Scheduler unavailable')).toBeVisible()
-    if (state === 'paused') await expect(page.getByText('Paused').first()).toBeVisible()
-    if (state === 'due') await expect(page.getByText('Checking').first()).toBeVisible()
+    if (state === 'paused') await expect(page.locator('.bp-status', { hasText:'Paused' }).first()).toBeVisible()
+    if (state === 'due') await expect(page.locator('.bp-status', { hasText:'Checking' }).first()).toBeVisible()
     if (state === 'budget') await expect(page.getByText(/next successful bump would exceed/i)).toBeVisible()
     await page.screenshot({ path:`test-results/bumper-${state}.png`, fullPage:true })
   })
@@ -111,4 +113,18 @@ test('range changes keep the report mounted and do not navigate', async ({ page 
   await expect(page.locator('[data-mount-marker="preserved"]')).toBeVisible()
   expect(page.url()).toBe(originalUrl)
   await expect(page.getByText('Updating report...')).not.toBeVisible()
+})
+
+test('multi-job selection updates the URL and browser history', async ({ page }) => {
+  await mockBumper(page)
+  await page.goto('/dashboard/bumper?tid=6319077')
+  await expect(page.getByRole('heading', { name:'Spotify Premium Family Plan' })).toBeVisible()
+  await expect(page.getByText('1 replies')).toBeVisible()
+  await page.getByRole('button', { name:/Secondary sales thread/ }).click()
+  await expect(page).toHaveURL(/tid=6410000/)
+  await expect(page.getByRole('heading', { name:'Secondary sales thread' })).toBeVisible()
+  await expect(page.getByText('2 replies')).toBeVisible()
+  await page.goBack()
+  await expect(page).toHaveURL(/tid=6319077/)
+  await expect(page.getByRole('heading', { name:'Spotify Premium Family Plan' })).toBeVisible()
 })

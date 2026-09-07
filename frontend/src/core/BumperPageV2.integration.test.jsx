@@ -17,15 +17,17 @@ const jobs = [
 ]
 const log = [{ id: 10, tid: '222', thread_title: 'Broken thread', action: 'error', reason: 'HF request failed', ts: 200 }]
 const fees = { weekly_budget: 500, bytes_this_week: 110, remaining_budget: 390, bumps_this_week: 1, hf_fee: 100, service_fee: 10, total_cost: 110 }
+const promotion = { offers:[{ tid:'222', since_last_bump:{ tracked_replies:3, contracts_opened:2, contracts_completed:1 } }] }
 const stats = { tid:'222', range:{key:'30d'}, freshness:{thread_observed_at:null}, current_period:{started_at:null,replies_since_latest_bump:{value:null,available:false,source:'observed'},contracts_opened:{value:0,available:true,source:'observed'}}, metrics:{successful_bumps:{value:1,available:true,source:'observed'},skips:{value:0,available:true,source:'observed'},failures:{value:0,available:true,source:'observed'},tracked_replies:{value:0,available:true,source:'observed'},contracts_opened:{value:0,available:true,source:'observed'},estimated_bytes_spent:{value:110,available:true,source:'estimated'}},fees:{hf_fee:100,service_fee:10,total_cost:110},activity:[],attempts:[],pagination:{page:1,total_pages:1,has_previous:false,has_next:false} }
 const renderPage = (route = '/dashboard/bumper') => render(<MemoryRouter initialEntries={[route]}><BumperPageV2 /></MemoryRouter>)
 
-function mockLoads({ logFailure = false } = {}) {
+function mockLoads({ logFailure = false, feeData = fees } = {}) {
   apiMock.get.mockImplementation(path => {
     if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
     if (path === '/api/autobump/log') return logFailure ? Promise.reject(new Error('log down')) : Promise.resolve({ log })
-    if (path === '/api/autobump/settings') return Promise.resolve(fees)
-    if (path.includes('/performance?')) return Promise.resolve(stats)
+    if (path === '/api/autobump/settings') return Promise.resolve(feeData)
+    if (path === '/api/merchant/promotion') return Promise.resolve(promotion)
+    if (path.includes('/performance?')) return Promise.resolve({ ...stats, fees:{ hf_fee:feeData.hf_fee, service_fee:feeData.service_fee, total_cost:feeData.total_cost } })
     throw new Error(`Unexpected GET ${path}`)
   })
 }
@@ -42,6 +44,9 @@ describe('Bump Service page interactions', () => {
     renderPage()
     expect(await screen.findByRole('heading', { name: 'Broken thread' })).toBeInTheDocument()
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0)
+    expect(screen.getByText('The latest scheduler attempt failed')).toBeInTheDocument()
+    expect(screen.getByText('3 replies')).toBeInTheDocument()
+    expect(screen.getByText('2 contracts')).toBeInTheDocument()
   })
 
   it('switches the detail workspace and requests stats for that thread', async () => {
@@ -79,6 +84,7 @@ describe('Bump Service page interactions', () => {
       if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
       if (path === '/api/autobump/log') return Promise.resolve({ log })
       if (path === '/api/autobump/settings') return Promise.resolve(fees)
+      if (path === '/api/merchant/promotion') return Promise.resolve(promotion)
       if (path.includes('/performance?')) {
         performanceCalls += 1
         if (performanceCalls === 1) return Promise.resolve(stats)
@@ -103,6 +109,7 @@ describe('Bump Service page interactions', () => {
       if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
       if (path === '/api/autobump/log') return Promise.resolve({ log })
       if (path === '/api/autobump/settings') return Promise.resolve(fees)
+      if (path === '/api/merchant/promotion') return Promise.resolve(promotion)
       if (path.includes('/performance?')) {
         performanceCalls += 1
         if (performanceCalls === 1) return Promise.resolve(firstPage)
@@ -132,6 +139,14 @@ describe('Bump Service page interactions', () => {
     renderPage()
     expect(await screen.findByRole('heading', { name: 'Broken thread' })).toBeInTheDocument()
     expect(screen.getByText(/Attempt history is unavailable/)).toBeInTheDocument()
+  })
+
+  it('never presents invalid service-fee data as a zero cost', async () => {
+    mockLoads({ feeData:{ ...fees, service_fee:0, total_cost:100 } })
+    renderPage()
+    await screen.findByRole('heading', { name:'Broken thread' })
+    expect(screen.getByText('Toolbox service fee').parentElement).toHaveTextContent('Unavailable')
+    expect(screen.getByText('Total expected cost').parentElement).toHaveTextContent('Unavailable')
   })
 
   it('selects an owned thread from the query string and opens schedule editing', async () => {

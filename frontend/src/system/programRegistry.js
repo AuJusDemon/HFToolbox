@@ -24,7 +24,7 @@ export const PROGRAMS = [
     publicSummary: 'Schedule thread bumps and inspect timing, spend, failures, and movement afterward.',
     visualizationMode: 'bumps', operatorOnly: false, previewComponent: 'bumps',
     prefetch: () => import('../core/BumperPageV2.jsx'),
-    dataPaths: ['/api/autobump/jobs', '/api/autobump/log', '/api/autobump/settings'],
+    dataPaths: ['/api/autobump/jobs', '/api/autobump/log', '/api/autobump/settings', '/api/merchant/promotion'],
   },
   {
     id: 'posting', label: 'Posting', shortLabel: 'POST', command: 'posting',

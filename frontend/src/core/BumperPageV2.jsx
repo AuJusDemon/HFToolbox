@@ -12,6 +12,7 @@ const EXPIRIES = [[0, 'No end date'], [7, '1 week'], [14, '2 weeks'], [30, '1 mo
 
 export const isUpgraded = groups => (groups || []).some(group => ACCESS_GROUPS.has(String(group)))
 const number = value => Number(value || 0).toLocaleString()
+const bytes = value => value == null || value === '' ? '--' : `${number(value)} Bytes`
 const date = value => value ? new Date(value * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'No end date'
 const time = value => value ? new Date(value * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '--'
 const ago = value => {
@@ -32,6 +33,18 @@ const countdown = seconds => {
 }
 
 const latestForJob = (job, log) => (log || []).find(entry => String(entry.tid) === String(job.tid)) || (job.latest_action ? { action:job.latest_action, reason:job.latest_reason, ts:job.latest_result_at, tid:job.tid } : null)
+
+function stateDetail(state, job, latest, budget) {
+  if (!state || !job) return null
+  if (state.key === 'failed') return { tone:'error', title:'The latest scheduler attempt failed', body:latest?.reason || 'No failure detail was recorded. Inspect the HF thread before resuming normal operation.' }
+  if (state.key === 'blocked') return { tone:'warning', title:'Waiting for weekly budget', body:`The next success is expected to cost ${bytes(budget?.cost)}. Increase the limit or wait for the weekly counter to reset.` }
+  if (state.key === 'skipped') return { tone:'warning', title:'The last check was rescheduled', body:latest?.reason || 'The thread was not eligible to bump during the last check.' }
+  if (state.key === 'due') return { tone:'warning', title:'Timer is due', body:'The scheduler will process this job on its next polling cycle.' }
+  if (state.key === 'checking') return { tone:'warning', title:'Page 1 check is due', body:'The scheduler will check the forum page on its next polling cycle. It will bump only when the thread is eligible.' }
+  if (state.key === 'paused') return { tone:'muted', title:'This job is paused', body:'No scheduler attempts will run until the job is resumed.' }
+  if (state.key === 'expired') return { tone:'muted', title:'This schedule has ended', body:'Edit the end date and enable the job to schedule another attempt.' }
+  return null
+}
 
 export function classifyJob(job, log = [], budgetExceeded = false) {
   if (job.expired) return { key: 'expired', label: 'Expired', rank: 5 }
@@ -133,6 +146,7 @@ function AddJob({ fee, onAdded }) {
   const [error, setError] = useState('')
   const submit = async () => {
     if (!confirming) { setConfirming(true); return }
+    if (fee?.service_fee !== 10 || fee?.total_cost == null) { setError('Fee data is unavailable. Retry the page before creating this job.'); return }
     setBusy(true); setError('')
     try {
       const bumpUntil = expiry ? Math.floor(Date.now() / 1000) + expiry * 86400 : null
@@ -148,9 +162,9 @@ function AddJob({ fee, onAdded }) {
       <label>Mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="timer">Timer</option><option value="page1">Page 1 watch</option></select></label>
       <label>{mode === 'page1' ? 'Maximum interval' : 'Interval'}<select value={interval} onChange={event => setIntervalValue(event.target.value)}>{INTERVALS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       <label>End<select value={expiry} onChange={event => setExpiry(Number(event.target.value))}>{EXPIRIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      <button type="button" className="bp-primary" disabled={!tid || busy} onClick={submit}>{busy ? 'Adding...' : confirming ? 'Confirm and add' : 'Add job'}</button>
+      <button type="button" className="bp-primary" disabled={!tid || busy || (confirming && fee?.service_fee !== 10)} onClick={submit}>{busy ? 'Adding...' : confirming ? 'Confirm and add' : 'Add job'}</button>
     </div>
-    {confirming && <div className="bp-confirm" role="status">A successful bump is expected to cost {number(fee?.hf_fee)} HF fee + {number(fee?.service_fee)} service fee = {number(fee?.total_cost)} Bytes. <button type="button" onClick={() => setConfirming(false)}>Cancel</button></div>}
+    {confirming && <div className="bp-confirm" role="status">{fee?.service_fee === 10 && fee?.total_cost != null ? <>A successful bump is expected to cost {bytes(fee.hf_fee)} HF fee + {bytes(fee.service_fee)} service fee = {bytes(fee.total_cost)}.</> : <>Fee data is unavailable. Retry before creating this job.</>} <button type="button" onClick={() => setConfirming(false)}>Cancel</button></div>}
     <ErrorLine>{error}</ErrorLine>
   </section>
 }
@@ -171,7 +185,7 @@ function Periods({ periods = [] }) {
   </div>
 }
 
-function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, statsError, fee, busyTid, onToggle, onRemove, range, onRange, onPage, onSaved }) {
+function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, statsError, fee, budget, log, busyTid, onToggle, onRemove, range, onRange, onPage, onSaved }) {
   const [confirmRemove, setConfirmRemove] = useState(false)
   const [editing, setEditing] = useState(false)
   const [editError, setEditError] = useState('')
@@ -180,6 +194,8 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
   useEffect(() => { setEditing(false); setEditError('') }, [job?.tid])
   if (!job) return <section className="bp-pane bp-empty"><h2>No bump jobs yet</h2><p>Add a thread above to start tracking its scheduler state here.</p></section>
   const cost = performance?.fees || fee
+  const latest = latestForJob(job, log)
+  const notice = stateDetail(state, job, latest, budget)
   const saveSchedule = async draft => {
     setSaving(true); setEditError('')
     try {
@@ -194,6 +210,7 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
       <div><span className="bp-kicker">ACTIVE WORKSPACE</span><h2 id="active-job-title">{job.thread_title || `Thread ${job.tid}`}</h2><p>TID {job.tid} {job.fid ? `/ FID ${job.fid}` : ''} / {job.mode === 'page1' ? 'Page 1 watch' : 'Timer mode'}</p></div>
       <Status state={state} />
     </div>
+    {notice && <div className={`bp-state-note is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}><strong>{notice.title}</strong><span>{notice.body}</span></div>}
     <div className="bp-work-grid">
       <div className="bp-schedule">
         <span className="bp-kicker">NEXT ATTEMPT</span><strong className="bp-countdown">{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</strong><span>{job.next_bump ? time(job.next_bump) : 'No attempt scheduled'}</span>
@@ -201,7 +218,7 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
       </div>
       <div className="bp-cost">
         <span className="bp-kicker">SUCCESSFUL BUMP COST</span>
-        <dl><div><dt>HF group fee</dt><dd>{number(cost?.hf_fee)} Bytes</dd></div><div><dt>Toolbox service fee</dt><dd>{number(cost?.service_fee)} Bytes</dd></div><div className="bp-total"><dt>Total expected cost</dt><dd>{number(cost?.total_cost)} Bytes</dd></div></dl>
+        <dl><div><dt>HF group fee</dt><dd>{bytes(cost?.hf_fee)}</dd></div><div><dt>Toolbox service fee</dt><dd>{cost?.service_fee === 10 ? bytes(cost.service_fee) : 'Unavailable'}</dd></div><div className="bp-total"><dt>Total expected cost</dt><dd>{cost?.service_fee === 10 ? bytes(cost?.total_cost) : 'Unavailable'}</dd></div></dl>
         <small>HF and service fees apply only after a confirmed successful bump.</small>
       </div>
     </div>
@@ -219,23 +236,25 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
   </section>
 }
 
-function JobNavigator({ jobs, log, budgetExceeded, selectedTid, onSelect }) {
+function JobNavigator({ jobs, log, outcomes, budgetExceeded, selectedTid, onSelect }) {
   if (!jobs.length) return null
   return <aside className="bp-pane bp-job-nav" aria-label="Bump jobs">
     <div className="bp-pane-head"><div><span className="bp-kicker">THREAD QUEUE</span><h2>Jobs</h2></div><strong>{jobs.length}</strong></div>
     <label className="bp-mobile-job-picker">Selected thread
       <select value={selectedTid || ''} onChange={event => onSelect(event.target.value)}>
-        {jobs.map(job => <option key={job.id} value={job.tid}>{job.thread_title || `Thread ${job.tid}`}</option>)}
+        {jobs.map(job => { const state = classifyJob(job, log, budgetExceeded); return <option key={job.id} value={job.tid}>{state.label} / {job.thread_title || `Thread ${job.tid}`}</option> })}
       </select>
     </label>
     <div className="bp-job-list">
       {jobs.map(job => {
         const state = classifyJob(job, log, budgetExceeded)
         const latest = latestForJob(job, log)
+        const outcome = outcomes?.[String(job.tid)]?.since_last_bump
         return <button type="button" className={String(job.tid) === String(selectedTid) ? 'is-selected' : ''} key={job.id} onClick={() => onSelect(String(job.tid))}>
           <span className="bp-job-row-head"><strong>{job.thread_title || `Thread ${job.tid}`}</strong><Status state={state} /></span>
           <span className="bp-job-row-meta"><small>TID {job.tid} / {job.mode === 'page1' ? 'Page 1' : `${job.interval_h}h timer`}</small><b>{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</b></span>
           <span className="bp-job-row-result">{latest ? `Last: ${latest.action}${latest.reason ? ` / ${latest.reason}` : ''}` : 'No attempts recorded'}</span>
+          <span className="bp-job-row-outcomes"><small>{outcome ? number(outcome.tracked_replies) : '--'} replies</small><small>{outcome ? number(outcome.contracts_opened) : '--'} contracts</small><small>{outcome ? number(outcome.contracts_completed) : '--'} complete</small></span>
         </button>
       })}
     </div>
@@ -256,6 +275,7 @@ export default function BumperPageV2() {
   const [jobs, setJobs] = useState([])
   const [logs, setLogs] = useState([])
   const [fee, setFee] = useState(null)
+  const [promotion, setPromotion] = useState(null)
   const [errors, setErrors] = useState({})
   const [loading, setLoading] = useState(true)
   const [selectedTid, setSelectedTid] = useState(null)
@@ -270,11 +290,12 @@ export default function BumperPageV2() {
   const statsRef = useRef(null)
 
   const load = useCallback(async () => {
-    const [jobResult, logResult, feeResult] = await Promise.allSettled([api.get('/api/autobump/jobs'), api.get('/api/autobump/log'), api.get('/api/autobump/settings')])
+    const [jobResult, logResult, feeResult, promotionResult] = await Promise.allSettled([api.get('/api/autobump/jobs'), api.get('/api/autobump/log'), api.get('/api/autobump/settings'), api.get('/api/merchant/promotion')])
     const nextErrors = {}
     if (jobResult.status === 'fulfilled') setJobs(jobResult.value?.jobs || []); else nextErrors.jobs = jobResult.reason?.message || 'Jobs unavailable'
     if (logResult.status === 'fulfilled') setLogs(logResult.value?.log || []); else nextErrors.logs = logResult.reason?.message || 'Attempts unavailable'
     if (feeResult.status === 'fulfilled') setFee(feeResult.value); else nextErrors.fee = feeResult.reason?.message || 'Budget unavailable'
+    if (promotionResult.status === 'fulfilled') setPromotion(promotionResult.value)
     setErrors(nextErrors); setLoading(false)
   }, [])
 
@@ -287,6 +308,7 @@ export default function BumperPageV2() {
 
   const budget = budgetState(fee)
   const ordered = useMemo(() => orderJobs(jobs, logs, budget.exceeded), [jobs, logs, budget.exceeded])
+  const outcomes = useMemo(() => Object.fromEntries((promotion?.offers || []).map(offer => [String(offer.tid), offer])), [promotion])
   useEffect(() => {
     if (!ordered.length) setSelectedTid(null)
     else {
@@ -303,6 +325,7 @@ export default function BumperPageV2() {
   const selected = ordered.find(job => String(job.tid) === String(selectedTid)) || ordered[0]
   const selectedState = selected ? classifyJob(selected, logs, budget.exceeded) : null
   const selectedStats = String(stats?.tid) === String(selected?.tid) ? stats : null
+  const nextJob = ordered.find(job => job.enabled && !job.expired)
 
   useEffect(() => {
     if (!selected?.tid) { statsRef.current = null; setStats(null); setStatsLoading(false); setStatsRefreshing(false); return }
@@ -336,16 +359,15 @@ export default function BumperPageV2() {
 
   return <main className="bp-page">
     <header className="bp-title"><div><span className="bp-kicker">AUTOMATED THREAD SCHEDULER</span><h1>Bump Service</h1><p>Track timing, costs, results, and contract movement without leaving the scheduler.</p></div><span className={`bp-scheduler-state ${errors.jobs ? 'is-error' : ''}`}>{loading ? 'LOADING' : errors.jobs ? 'DEGRADED' : apiPaused ? 'POLLING PAUSED' : 'SCHEDULER READY'}</span></header>
-    <div className="bp-status-strip"><Metric label="Active jobs" value={number(jobs.filter(job => job.enabled && !job.expired).length)} /><Metric label="Next attempt" value={selected ? countdown(selected.seconds_until_bump) : '--'} /><Metric label="Spent this week" value={`${number(fee?.bytes_this_week)} Bytes`} /><Metric label="Weekly limit" value={budget.unlimited ? 'Unlimited' : `${number(budget.limit)} Bytes`} /><Metric label="Remaining" value={budget.unlimited ? 'Unlimited' : `${number(budget.remaining)} Bytes`} /></div>
+    <div className="bp-status-strip"><Metric label="Active jobs" value={number(jobs.filter(job => job.enabled && !job.expired).length)} /><Metric label="Next attempt" value={nextJob ? countdown(nextJob.seconds_until_bump) : '--'} detail={nextJob?.thread_title} /><Metric label="Spent this week" value={bytes(fee?.bytes_this_week)} /><Metric label="Weekly limit" value={budget.unlimited ? 'Unlimited' : bytes(budget.limit)} /><Metric label="Remaining" value={budget.unlimited ? 'Unlimited' : bytes(budget.remaining)} /></div>
     <ErrorLine>{errors.jobs}</ErrorLine><ErrorLine>{errors.action}</ErrorLine>
     {errors.logs && <ErrorLine>Attempt history is unavailable. Job controls and thread reports remain available.</ErrorLine>}
     {loading ? <section className="bp-pane bp-loading" aria-label="Loading bump service"><i /><i /><i /></section> : <>
-      <BudgetPane data={fee} error={errors.fee} onReload={load} />
-      <AddJob fee={fee} onAdded={load} />
+      <section className="bp-control-grid" aria-label="Bump service controls"><BudgetPane data={fee} error={errors.fee} onReload={load} /><AddJob fee={fee} onAdded={load} /></section>
       {ordered.length ? <section className="bp-operations">
-        <JobNavigator jobs={ordered} log={logs} budgetExceeded={budget.exceeded} selectedTid={selected?.tid} onSelect={selectTid} />
+        <JobNavigator jobs={ordered} log={logs} outcomes={outcomes} budgetExceeded={budget.exceeded} selectedTid={selected?.tid} onSelect={selectTid} />
         <div className="bp-operation-detail">
-          <ActiveJob job={selected} state={selectedState} performance={selectedStats} statsLoading={statsLoading} statsRefreshing={statsRefreshing} statsError={statsError} fee={fee} busyTid={busyTid} onToggle={toggle} onRemove={remove} range={range} onRange={value => { setRange(value); setPage(1) }} onPage={setPage} onSaved={load} />
+          <ActiveJob job={selected} state={selectedState} performance={selectedStats} statsLoading={statsLoading} statsRefreshing={statsRefreshing} statsError={statsError} fee={fee} budget={budget} log={logs} busyTid={busyTid} onToggle={toggle} onRemove={remove} range={range} onRange={value => { setRange(value); setPage(1) }} onPage={setPage} onSaved={load} />
         </div>
       </section> : <ActiveJob job={null} />}
       <details className="bp-pane bp-details"><summary>Scheduling and fee details</summary><div><h3>Timer mode</h3><p>Attempts on the selected interval. Recent thread activity can move the next attempt forward.</p><h3>Page 1 watch</h3><p>Checks the forum page periodically and bumps after the thread leaves page 1, subject to HF timing limits.</p><h3>Fees</h3><p>A confirmed success uses the HF group fee shown above and the Toolbox service fee. Skips and failed attempts do not show as successful-bump spending.</p></div></details>

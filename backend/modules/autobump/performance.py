@@ -63,10 +63,10 @@ def build_performance(uid: str, tid: str, range_key: str = "30d", page: int = 1,
     latest_bump = next((row for row in logs if row.get("action") == "bumped"), None)
     current_gain = None
     current_observed_at = None
-    if snapshot and latest_bump and latest_bump.get("numreplies") is not None:
+    if snapshot and snapshot.get("replies") is not None and latest_bump and latest_bump.get("numreplies") is not None:
         current_observed_at = int(snapshot.get("observed_at") or 0) or None
         if current_observed_at and current_observed_at >= int(latest_bump.get("ts") or 0):
-            current_gain = int(snapshot.get("replies") or 0) - int(latest_bump["numreplies"])
+            current_gain = int(snapshot["replies"]) - int(latest_bump["numreplies"])
 
     fees = fees or {"hf_fee": 0, "service_fee": 10, "total_cost": 10}
     attempts = ranged_logs[:5]
@@ -82,8 +82,8 @@ def build_performance(uid: str, tid: str, range_key: str = "30d", page: int = 1,
             "started_at": current.get("bump_ts") if current else None,
             "replies_since_latest_bump": _metric(current_gain, "observed", current_gain is not None),
             "tracked_replies": _metric((detail.get("since_last_bump") or {}).get("tracked_replies", 0), "observed"),
-            "contracts_opened": _metric((detail.get("since_last_bump") or {}).get("contracts_opened", 0), "observed"),
-            "contracts_completed": _metric((detail.get("since_last_bump") or {}).get("contracts_completed", 0), "observed"),
+            "contracts_opened": _metric((detail.get("since_last_bump") or {}).get("contracts_opened"), "observed", current is not None),
+            "contracts_completed": _metric((detail.get("since_last_bump") or {}).get("contracts_completed"), "observed", current is not None),
         },
         "metrics": {
             "successful_bumps": _metric(successful, "observed"),

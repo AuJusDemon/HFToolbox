@@ -14,7 +14,7 @@ from .autobump_db import (
 )
 from .fees import fee_breakdown
 from .performance import build_performance
-from .schedule import calculate_updated_next
+from .schedule import calculate_updated_next, validate_interval
 try:
     from HFClient import AuthExpired as _AuthExpired
 except ImportError:
@@ -25,10 +25,6 @@ router = APIRouter(prefix="/api/autobump", tags=["autobump"])
 init()
 
 VALID_MODES  = {"timer", "page1"}
-MIN_INTERVAL = 6
-MAX_INTERVAL = 168
-
-
 def _fees_for_user(uid: str) -> dict[str, int]:
     user = db.get_user(uid) or {}
     return fee_breakdown(uid, user.get("groups"))
@@ -51,8 +47,9 @@ class AddJobRequest(BaseModel):
     def check_fields(self):
         if self.mode not in VALID_MODES:
             raise ValueError(f"mode must be one of: {', '.join(VALID_MODES)}")
-        if not (MIN_INTERVAL <= self.interval_h <= MAX_INTERVAL):
-            raise ValueError(f"Interval must be {MIN_INTERVAL}-{MAX_INTERVAL} hours")
+        validate_interval(self.interval_h)
+        if self.bump_until is not None and self.bump_until <= int(time.time()):
+            raise ValueError("End date must be in the future")
         return self
 
 
@@ -72,8 +69,7 @@ class UpdateScheduleRequest(BaseModel):
     def check_fields(self):
         if self.mode not in VALID_MODES:
             raise ValueError(f"mode must be one of: {', '.join(VALID_MODES)}")
-        if not (MIN_INTERVAL <= self.interval_h <= MAX_INTERVAL):
-            raise ValueError(f"Interval must be {MIN_INTERVAL}-{MAX_INTERVAL} hours")
+        validate_interval(self.interval_h)
         if self.bump_until is not None and self.bump_until <= int(time.time()):
             raise ValueError("End date must be in the future")
         return self
@@ -210,14 +206,18 @@ async def create_job(request: Request, body: AddJobRequest):
 @router.delete("/jobs/{tid}")
 async def delete_job(request: Request, tid: str):
     uid = _uid(request)
-    await asyncio.get_event_loop().run_in_executor(None, remove_job, uid, tid)
+    removed = await asyncio.get_event_loop().run_in_executor(None, remove_job, uid, tid)
+    if not removed:
+        raise HTTPException(404, "Bump job not found")
     return {"ok": True}
 
 
 @router.patch("/jobs/{tid}")
 async def toggle_job(request: Request, tid: str, body: ToggleRequest):
     uid = _uid(request)
-    await asyncio.get_event_loop().run_in_executor(None, set_job_enabled, uid, tid, body.enabled)
+    updated = await asyncio.get_event_loop().run_in_executor(None, set_job_enabled, uid, tid, body.enabled)
+    if not updated:
+        raise HTTPException(404, "Bump job not found")
     return {"ok": True}
 
 

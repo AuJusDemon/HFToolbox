@@ -133,9 +133,10 @@ def add_job(uid: str, tid: str, interval_h: int,
     return get_job(uid, str(tid))
 
 
-def remove_job(uid: str, tid: str) -> None:
+def remove_job(uid: str, tid: str) -> bool:
     with _db() as conn:
-        conn.execute("DELETE FROM bump_jobs WHERE uid=%s AND tid=%s", (uid, str(tid)))
+        cursor = conn.execute("DELETE FROM bump_jobs WHERE uid=%s AND tid=%s", (uid, str(tid)))
+        return cursor.rowcount > 0
 
 
 def get_job(uid: str, tid: str) -> dict | None:
@@ -204,12 +205,13 @@ def expire_jobs() -> list[str]:
         return [r["tid"] for r in rows]
 
 
-def set_job_enabled(uid: str, tid: str, enabled: bool) -> None:
+def set_job_enabled(uid: str, tid: str, enabled: bool) -> bool:
     with _db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "UPDATE bump_jobs SET enabled=%s WHERE uid=%s AND tid=%s",
             (int(enabled), uid, str(tid))
         )
+        return cursor.rowcount > 0
 
 
 def update_job_schedule(uid: str, tid: str, *, mode: str, interval_h: int,

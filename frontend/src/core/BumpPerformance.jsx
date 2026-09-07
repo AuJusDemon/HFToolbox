@@ -3,6 +3,14 @@ import './BumpPerformance.css'
 
 const n = value => value == null ? 'Unknown' : Number(value).toLocaleString()
 const stamp = value => value ? new Date(value * 1000).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : 'Unknown'
+const schedulerSummary = row => {
+  const events = row.period_skips || []
+  const failures = events.filter(event => event.action === 'error')
+  if (failures.length) return `${failures.length} failed: ${failures[0].reason || 'No reason recorded'}`
+  const skips = events.filter(event => event.action === 'skipped')
+  if (skips.length) return `${skips.length} skipped: ${skips[0].reason || 'Not eligible'}`
+  return events.length ? `${events.length} scheduler events` : 'No scheduler exceptions'
+}
 
 export function BumpRangeControl({ value, onChange }) {
   return <div className="bpr-ranges" aria-label="Performance range">
@@ -29,7 +37,7 @@ export function BumpPerformanceSummary({ data, variant = 'operations' }) {
     <div className="bpr-current">
       <div><span>Current period</span><strong>{current.started_at ? `Since ${stamp(current.started_at)}` : 'No successful bump yet'}</strong></div>
       <div><span>Replies since latest bump</span><strong>{latestReplies?.available ? n(latestReplies.value) : 'Unknown'}</strong><small>{latestReplies?.available ? 'observed thread count' : `last observation ${stamp(data.freshness?.thread_observed_at)}`}</small></div>
-      <div><span>Contracts since latest bump</span><strong>{n(current.contracts_opened?.value)}</strong><small>observed</small></div>
+      <div><span>Contracts since latest bump</span><strong>{current.contracts_opened?.available === false ? 'Unknown' : n(current.contracts_opened?.value)}</strong><small>{current.contracts_opened?.available === false ? 'no completed bump period' : 'observed'}</small></div>
     </div>
     <div className="bpr-metrics">{metrics.map(([label,metric,suffix]) => <Metric key={label} label={label} metric={metric} suffix={suffix} />)}</div>
   </section>
@@ -43,7 +51,7 @@ export function BumpActivityTimeline({ data, onPage }) {
     <div className="bpr-section-head"><div><span>PERFORMANCE PERIODS</span><strong>Activity, grouped where nothing changed</strong></div><span>Page {paging.page || 1} of {paging.total_pages || 1}</span></div>
     {!rows.length ? <p className="bpr-empty">No bump periods in this range.</p> : rows.map((row,index) => row.kind === 'quiet_group'
       ? <div className="bpr-quiet" key={`quiet-${row.start_ts}-${index}`}><strong>{row.count} successful bump{row.count === 1 ? '' : 's'}</strong><span>{row.summary}</span><small>{stamp(row.start_ts)} to {stamp(row.end_ts)}</small></div>
-      : <div className="bpr-event" key={`period-${row.bump_ts}-${index}`}><div><strong>{row.is_open ? 'Current period' : stamp(row.bump_ts)}</strong><small>{row.is_open ? 'In progress' : 'Completed period'}</small></div><span>{row.reply_gain == null ? 'Reply gain unknown' : `${row.reply_gain >= 0 ? '+' : ''}${row.reply_gain} replies`}</span><span>{row.contracts_opened || 0} opened / {row.contracts_completed || 0} completed</span><span>{row.period_skips?.length || 0} scheduler events</span></div>
+      : <div className="bpr-event" key={`period-${row.bump_ts}-${index}`}><div><strong>{row.is_open ? 'Current period' : stamp(row.bump_ts)}</strong><small>{row.is_open ? 'In progress' : 'Completed period'}</small></div><span>{row.reply_gain == null ? 'Reply gain unknown' : `${row.reply_gain >= 0 ? '+' : ''}${row.reply_gain} replies`}</span><span>{row.contracts_opened || 0} opened / {row.contracts_completed || 0} completed</span><span>{schedulerSummary(row)}</span></div>
     )}
     {(paging.has_previous || paging.has_next) && <div className="bpr-pages"><button type="button" disabled={!paging.has_previous} onClick={() => onPage(paging.page - 1)}>Previous</button><button type="button" disabled={!paging.has_next} onClick={() => onPage(paging.page + 1)}>Next</button></div>}
   </section>
