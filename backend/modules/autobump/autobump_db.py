@@ -149,7 +149,15 @@ def get_job(uid: str, tid: str) -> dict | None:
 def get_jobs_for_user(uid: str) -> list[dict]:
     with _db() as conn:
         rows = conn.execute(
-            "SELECT * FROM bump_jobs WHERE uid=%s ORDER BY created_at DESC", (uid,)
+            """SELECT bj.*,bl.action AS latest_action,bl.reason AS latest_reason,
+                      bl.ts AS latest_result_at
+               FROM bump_jobs bj
+               LEFT JOIN bump_log bl ON bl.id=(
+                   SELECT x.id FROM bump_log x
+                   WHERE x.uid=bj.uid AND x.tid=bj.tid
+                   ORDER BY x.ts DESC,x.id DESC LIMIT 1
+               )
+               WHERE bj.uid=%s ORDER BY bj.created_at DESC""", (uid,)
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -202,6 +210,32 @@ def set_job_enabled(uid: str, tid: str, enabled: bool) -> None:
             "UPDATE bump_jobs SET enabled=%s WHERE uid=%s AND tid=%s",
             (int(enabled), uid, str(tid))
         )
+
+
+def update_job_schedule(uid: str, tid: str, *, mode: str, interval_h: int,
+                        bump_until: int | None, enabled: bool,
+                        next_bump: int, audit_reason: str) -> dict | None:
+    """Update mutable schedule fields and write its audit row in one transaction."""
+    now = int(time.time())
+    with _db() as conn:
+        job = conn.execute(
+            "SELECT id FROM bump_jobs WHERE uid=%s AND tid=%s",
+            (uid, str(tid)),
+        ).fetchone()
+        if not job:
+            return None
+        conn.execute(
+            """UPDATE bump_jobs SET mode=%s,interval_h=%s,bump_until=%s,
+                      enabled=%s,next_bump=%s WHERE uid=%s AND tid=%s""",
+            (mode, interval_h, bump_until, int(enabled), next_bump, uid, str(tid)),
+        )
+        conn.execute(
+            """INSERT INTO bump_log
+               (job_id,uid,tid,action,reason,numreplies,ts)
+               VALUES (%s,%s,%s,'updated',%s,NULL,%s)""",
+            (job["id"], uid, str(tid), audit_reason, now),
+        )
+    return get_job(uid, str(tid))
 
 
 def update_after_bump(job_id: int, thread_title: str | None,

@@ -95,7 +95,7 @@ export default function MerchantPage({embedded=false, marketAccess=null}) {
   const content = {
     overview:  <MerchantOverview setTab={setTab} onGoToDeals={goToDealsWithStage} />,
     offers:    <MerchantOffers />,
-    bumps:     <MerchantPromotion />,
+    bumps:     <MerchantPromotion initialTid={initialTab === 'bumps' ? initialTid : null} />,
     pipeline:  <MerchantPipeline marketAccess={marketAccess} />,
     deals:     <MerchantDeals initialStage={dealStage} initialRatingFilter={dealRatingFilter} />,
     customers: <MerchantCustomers />,

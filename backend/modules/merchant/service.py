@@ -1582,7 +1582,7 @@ def get_promotion_detail(uid: str, tid: str) -> dict | None:
             and bump_ts <= completion_by_cid[str(c.get('cid',''))] < end_ts
         )
         period_skips = sorted([
-            {'ts': int(s.get('ts', 0)), 'reason': s.get('reason', '') or ''}
+            {'ts': int(s.get('ts', 0)), 'action': s.get('action', 'skipped'), 'reason': s.get('reason', '') or ''}
             for s in all_skips
             if bump_ts < int(s.get('ts', 0)) < end_ts
         ], key=lambda x: x['ts'])

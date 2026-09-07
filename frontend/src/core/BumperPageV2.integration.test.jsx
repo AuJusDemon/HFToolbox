@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { MemoryRouter } from 'react-router-dom'
 
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() }))
 
@@ -16,14 +17,15 @@ const jobs = [
 ]
 const log = [{ id: 10, tid: '222', thread_title: 'Broken thread', action: 'error', reason: 'HF request failed', ts: 200 }]
 const fees = { weekly_budget: 500, bytes_this_week: 110, remaining_budget: 390, bumps_this_week: 1, hf_fee: 100, service_fee: 10, total_cost: 110 }
-const stats = { total_bumps: 1, total_skips: 0, total_contracts: 0, bytes_spent: 110, hf_fee: 100, service_fee: 10, total_cost: 110, avg_reply_gain: null, bump_periods: [] }
+const stats = { tid:'222', range:{key:'30d'}, freshness:{thread_observed_at:null}, current_period:{started_at:null,replies_since_latest_bump:{value:null,available:false,source:'observed'},contracts_opened:{value:0,available:true,source:'observed'}}, metrics:{successful_bumps:{value:1,available:true,source:'observed'},skips:{value:0,available:true,source:'observed'},failures:{value:0,available:true,source:'observed'},tracked_replies:{value:0,available:true,source:'observed'},contracts_opened:{value:0,available:true,source:'observed'},estimated_bytes_spent:{value:110,available:true,source:'estimated'}},fees:{hf_fee:100,service_fee:10,total_cost:110},activity:[],attempts:[],pagination:{page:1,total_pages:1,has_previous:false,has_next:false} }
+const renderPage = (route = '/dashboard/bumper') => render(<MemoryRouter initialEntries={[route]}><BumperPageV2 /></MemoryRouter>)
 
 function mockLoads({ logFailure = false } = {}) {
   apiMock.get.mockImplementation(path => {
     if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
     if (path === '/api/autobump/log') return logFailure ? Promise.reject(new Error('log down')) : Promise.resolve({ log })
     if (path === '/api/autobump/settings') return Promise.resolve(fees)
-    if (path.includes('/stats')) return Promise.resolve(stats)
+    if (path.includes('/performance?')) return Promise.resolve(stats)
     throw new Error(`Unexpected GET ${path}`)
   })
 }
@@ -37,22 +39,22 @@ beforeEach(() => {
 
 describe('Bump Service page interactions', () => {
   it('automatically selects the failed job ahead of scheduled jobs', async () => {
-    render(<BumperPageV2 />)
+    renderPage()
     expect(await screen.findByRole('heading', { name: 'Broken thread' })).toBeInTheDocument()
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0)
   })
 
   it('switches the detail workspace and requests stats for that thread', async () => {
-    render(<BumperPageV2 />)
+    renderPage()
     await screen.findByRole('heading', { name: 'Broken thread' })
     fireEvent.click(screen.getByRole('button', { name: /Scheduled thread/ }))
     expect(await screen.findByRole('heading', { name: 'Scheduled thread' })).toBeInTheDocument()
-    await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/api/autobump/jobs/111/stats'))
+    await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/api/autobump/jobs/111/performance?range=30d&page=1&page_size=5'))
   })
 
   it('rolls an optimistic pause back when the request fails', async () => {
     apiMock.patch.mockRejectedValueOnce(new Error('pause failed'))
-    render(<BumperPageV2 />)
+    renderPage()
     const pause = await screen.findByRole('button', { name: 'Pause job' })
     fireEvent.click(pause)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Pause job' })).toBeInTheDocument())
@@ -60,7 +62,7 @@ describe('Bump Service page interactions', () => {
   })
 
   it('requires inline removal confirmation before deleting', async () => {
-    render(<BumperPageV2 />)
+    renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Remove job' }))
     expect(apiMock.delete).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Confirm remove' }))
@@ -69,8 +71,16 @@ describe('Bump Service page interactions', () => {
 
   it('keeps jobs usable when attempt history fails independently', async () => {
     mockLoads({ logFailure: true })
-    render(<BumperPageV2 />)
+    renderPage()
     expect(await screen.findByRole('heading', { name: 'Broken thread' })).toBeInTheDocument()
-    expect(screen.getByText('Attempt history is unavailable.')).toBeInTheDocument()
+    expect(screen.getByText(/Attempt history is unavailable/)).toBeInTheDocument()
+  })
+
+  it('selects an owned thread from the query string and opens schedule editing', async () => {
+    renderPage('/dashboard/bumper?tid=111')
+    expect(await screen.findByRole('heading', { name:'Scheduled thread' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name:'Edit schedule' }))
+    expect(screen.getByRole('region', { name:'Edit schedule' })).toHaveTextContent('cannot be changed here')
+    expect(screen.getByRole('button', { name:'Save schedule' })).toBeDisabled()
   })
 })

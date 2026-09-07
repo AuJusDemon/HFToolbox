@@ -4,15 +4,17 @@ import time
 import asyncio
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import Optional
 import db
 from .autobump_db import (
     add_job, remove_job, get_jobs_for_user, set_job_enabled,
     get_log, init, expire_jobs, get_settings, set_settings,
-    get_job_stats, _db
+    get_job_stats, get_job, update_job_schedule, _db
 )
 from .fees import fee_breakdown
+from .performance import build_performance
+from .schedule import calculate_updated_next
 try:
     from HFClient import AuthExpired as _AuthExpired
 except ImportError:
@@ -25,7 +27,6 @@ init()
 VALID_MODES  = {"timer", "page1"}
 MIN_INTERVAL = 6
 MAX_INTERVAL = 168
-PAGE1_RECHECK_SECS = 1800
 
 
 def _fees_for_user(uid: str) -> dict[str, int]:
@@ -57,6 +58,25 @@ class AddJobRequest(BaseModel):
 
 class ToggleRequest(BaseModel):
     enabled: bool
+
+
+class UpdateScheduleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: str
+    interval_h: int
+    bump_until: Optional[int] = None
+    enabled: bool
+
+    @model_validator(mode="after")
+    def check_fields(self):
+        if self.mode not in VALID_MODES:
+            raise ValueError(f"mode must be one of: {', '.join(VALID_MODES)}")
+        if not (MIN_INTERVAL <= self.interval_h <= MAX_INTERVAL):
+            raise ValueError(f"Interval must be {MIN_INTERVAL}-{MAX_INTERVAL} hours")
+        if self.bump_until is not None and self.bump_until <= int(time.time()):
+            raise ValueError("End date must be in the future")
+        return self
 
 
 class SettingsRequest(BaseModel):
@@ -121,6 +141,9 @@ async def list_jobs(request: Request):
             "lastposter":         j.get("lastposter"),
             "bump_until":         bump_until,
             "expired":            bool(bump_until and bump_until <= now),
+            "latest_action":      j.get("latest_action"),
+            "latest_reason":      j.get("latest_reason"),
+            "latest_result_at":   j.get("latest_result_at"),
         })
     return {"jobs": result}
 
@@ -196,6 +219,47 @@ async def toggle_job(request: Request, tid: str, body: ToggleRequest):
     uid = _uid(request)
     await asyncio.get_event_loop().run_in_executor(None, set_job_enabled, uid, tid, body.enabled)
     return {"ok": True}
+
+
+@router.put("/jobs/{tid}/schedule")
+async def put_job_schedule(request: Request, tid: str, body: UpdateScheduleRequest):
+    uid = _uid(request)
+    current = await asyncio.to_thread(get_job, uid, tid)
+    if not current:
+        raise HTTPException(404, "Bump job not found")
+    next_bump = calculate_updated_next(current, body.mode, body.interval_h)
+    changes = []
+    labels = {"timer": "Timer", "page1": "Page 1 watch"}
+    if current.get("mode") != body.mode:
+        changes.append(f"mode {labels.get(current.get('mode'), current.get('mode'))} -> {labels[body.mode]}")
+    if int(current.get("interval_h") or 0) != body.interval_h:
+        changes.append(f"interval {current.get('interval_h')}h -> {body.interval_h}h")
+    if current.get("bump_until") != body.bump_until:
+        changes.append("end date changed")
+    if bool(current.get("enabled")) != body.enabled:
+        changes.append("resumed" if body.enabled else "paused")
+    updated = await asyncio.to_thread(
+        update_job_schedule, uid, tid, mode=body.mode, interval_h=body.interval_h,
+        bump_until=body.bump_until, enabled=body.enabled, next_bump=next_bump,
+        audit_reason="; ".join(changes) or "schedule saved without changes",
+    )
+    return {"ok": True, "job": updated, "next_bump": next_bump, "changes": changes}
+
+
+@router.get("/jobs/{tid}/performance")
+async def job_performance(request: Request, tid: str, range: str = "30d", page: int = 1,
+                          page_size: int = 5):
+    uid = _uid(request)
+    fees = await asyncio.to_thread(_fees_for_user, uid)
+    try:
+        result = await asyncio.to_thread(
+            build_performance, uid, tid, range, page, page_size, fees
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not result:
+        raise HTTPException(404, "Thread performance not found")
+    return result
 
 
 # ── Stats ─────────────────────────────────────────────────────────────────────

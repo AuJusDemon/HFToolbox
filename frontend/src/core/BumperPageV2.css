@@ -121,6 +121,10 @@
 
 .bp-operations { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 14px; align-items: start; }
 .bp-operation-detail { display: grid; min-width: 0; gap: 14px; }
+.bp-performance-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding: 14px 0 10px; border-top: 1px solid var(--bp-line); }
+.bp-performance-head p { margin: 3px 0 0; color: var(--bp-dim); font-size: 12px; }
+.bp-performance-head p { color: var(--dim); }
+.bp-workspace > .bpr-summary,.bp-workspace > .bpr-timeline,.bp-workspace > .bpr-attempts,.bp-workspace > .bpr-editor { margin-bottom: 12px; }
 .bp-job-nav { position: sticky; top: 72px; padding: 0; min-width: 0; max-height: calc(100vh - 90px); overflow: hidden; }
 .bp-job-nav .bp-pane-head { min-height: 58px; align-items: center; margin: 0; padding: 11px 13px; border-bottom: 1px solid var(--b2); }
 .bp-job-nav .bp-pane-head strong { color: var(--sub); font: 700 13px var(--mono); }
@@ -181,6 +185,12 @@
   .bp-work-grid { grid-template-columns: 1fr; }
   .bp-schedule { padding-right: 0; border-right: 0; border-bottom: 1px solid var(--bp-line); }
   .bp-cost { padding-left: 0; }
+  .bp-operations { grid-template-columns: 1fr; }
+  .bp-job-nav { position: static; max-height: none; padding: 14px; overflow: visible; }
+  .bp-job-nav .bp-pane-head { min-height: auto; margin-bottom: 12px; padding: 0 0 10px; }
+  .bp-job-list { display: none; }
+  .bp-mobile-job-picker { display: block; color: var(--dim); font: 10px var(--mono); text-transform: uppercase; }
+  .bp-mobile-job-picker select { display: block; margin-top: 6px; color: var(--text); text-transform: none; }
 }
 
 @media (max-width: 840px) {
