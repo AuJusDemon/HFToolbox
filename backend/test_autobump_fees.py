@@ -25,7 +25,7 @@ class AutoBumpFeeTests(unittest.TestCase):
 
     def test_service_fee_and_owner_exemption(self):
         self.assertEqual(fee_breakdown("42", ["28"], owner_uid="761578"), {"hf_fee": 75, "service_fee": 10, "total_cost": 85})
-        self.assertEqual(fee_breakdown("761578", ["67"], owner_uid="761578"), {"hf_fee": 50, "service_fee": 0, "total_cost": 50})
+        self.assertEqual(fee_breakdown("761578", ["67"], owner_uid="761578"), {"hf_fee": 50, "service_fee": 10, "total_cost": 60})
 
 
 if __name__ == "__main__":

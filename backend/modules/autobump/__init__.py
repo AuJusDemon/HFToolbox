@@ -181,7 +181,7 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
         # Small delay between back-to-back write calls.
         await asyncio.sleep(2)
         service_fee = fee_breakdown(uid, [], MY_UID)["service_fee"]
-        if service_fee:
+        if service_fee and uid != MY_UID:
             try:
                 fee_result = await asyncio.wait_for(client.write({
                     "bytes": {

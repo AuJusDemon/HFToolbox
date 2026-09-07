@@ -192,7 +192,10 @@ function ActiveJob({ job, state, stats, statsError, busyTid, onToggle, onRemove 
     </div>
     {statsError ? <ErrorLine>Statistics could not be loaded. Scheduler controls remain available.</ErrorLine> : <>
       <div className="bp-metrics"><Metric label="Successful bumps" value={number(stats?.total_bumps)} /><Metric label="Skips" value={number(stats?.total_skips)} /><Metric label="Contracts" value={number(stats?.total_contracts)} /><Metric label="Contracts per bump" value={contractsPerBump} /><Metric label="Reply movement" value={stats?.avg_reply_gain == null ? '--' : stats.avg_reply_gain} /><Metric label="Bytes spent" value={number(stats?.bytes_spent)} detail="Estimated from successful bumps" /></div>
-      <div className="bp-subhead"><h3>Bump Periods</h3><span>Contract movement after each success</span></div><Periods periods={stats?.bump_periods} />
+      <details className="bp-period-drawer">
+        <summary><span>Bump periods</span><small>{stats?.bump_periods?.length || 0} recent periods / contract movement</small></summary>
+        <Periods periods={stats?.bump_periods} />
+      </details>
     </>}
     <div className="bp-actions">
       <button onClick={() => onToggle(job)} disabled={busyTid === job.tid}>{job.enabled ? 'Pause job' : 'Resume job'}</button>

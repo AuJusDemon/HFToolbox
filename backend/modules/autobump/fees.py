@@ -1,7 +1,6 @@
 """Authoritative fee rules for the Auto-Bump service."""
 
 import json
-import os
 from collections.abc import Iterable
 
 
@@ -38,11 +37,9 @@ def hf_fee_for_groups(groups) -> int:
 
 
 def fee_breakdown(uid: str, groups, owner_uid: str | None = None) -> dict[str, int]:
-    owner_uid = os.getenv("PLATFORM_OWNER_UID", "") if owner_uid is None else str(owner_uid)
     hf_fee = hf_fee_for_groups(groups)
-    service_fee = 0 if owner_uid and str(uid) == owner_uid else SERVICE_FEE
     return {
         "hf_fee": hf_fee,
-        "service_fee": service_fee,
-        "total_cost": hf_fee + service_fee,
+        "service_fee": SERVICE_FEE,
+        "total_cost": hf_fee + SERVICE_FEE,
     }

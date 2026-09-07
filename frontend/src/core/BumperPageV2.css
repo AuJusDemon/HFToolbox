@@ -1,6 +1,6 @@
 .bp-page {
-  --bp-line: color-mix(in srgb, var(--acc) 22%, transparent);
-  --bp-line-strong: color-mix(in srgb, var(--acc) 46%, transparent);
+  --bp-line: var(--b1);
+  --bp-line-strong: var(--b3);
   display: grid;
   gap: 14px;
   width: 100%;
@@ -28,7 +28,7 @@
 .bp-scheduler-state { flex: 0 0 auto; border: 1px solid var(--bp-line-strong); padding: 7px 9px; color: var(--acc); font: 700 10px var(--mono); }
 .bp-scheduler-state.is-error { border-color: color-mix(in srgb, var(--red) 55%, transparent); color: var(--red); }
 
-.bp-pane, .bp-status-strip { border: 1px solid var(--bp-line); background: color-mix(in srgb, var(--bg) 92%, var(--acc) 8%); }
+.bp-pane, .bp-status-strip { border: 1px solid var(--b2); background: var(--s1); }
 .bp-pane { padding: 18px; }
 .bp-pane-head, .bp-job-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .bp-pane-head h2, .bp-job-head h2 { margin-top: 3px; font: 700 17px var(--mono); letter-spacing: 0; }
@@ -123,7 +123,11 @@
 .bp-job-selector > button > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; }
 .bp-job-selector > button > small { grid-column: 1; color: var(--dim); }
 .bp-job-selector .bp-status { grid-column: 2; grid-row: 1 / 3; align-self: center; }
-.bp-job-selector > button.is-selected { border-color: var(--acc); background: color-mix(in srgb, var(--acc) 7%, var(--bg)); }
+.bp-job-selector > button.is-selected { border-color: var(--acc); background: var(--s2); }
+
+.bp-period-drawer { margin-top: 16px; border-top: 1px solid var(--b2); border-bottom: 1px solid var(--b2); }
+.bp-period-drawer > summary { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 4px; cursor: pointer; color: var(--text); font: 700 12px var(--mono); }
+.bp-period-drawer > summary small { color: var(--dim); font: 10px var(--mono); }
 
 .bp-attempt-head, .bp-attempt { display: grid; grid-template-columns: 120px minmax(140px, 1.2fr) 105px minmax(150px, 1.5fr) 120px 100px; gap: 10px; align-items: center; }
 .bp-attempt-head { padding: 7px 8px; border-bottom: 1px solid var(--bp-line-strong); color: var(--dim); font: 10px var(--mono); text-transform: uppercase; }
