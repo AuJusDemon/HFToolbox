@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import useStore from '../store.js'
 import { api } from './api.js'
-import { getProgramByRoute, PROGRAMS } from '../system/programRegistry.js'
-import { CommandLauncher, MobileProgramDrawer, ProgramNavigation } from '../system/AppNavigation.jsx'
+import { getProgramByRoute, prefetchProgram, PROGRAMS } from '../system/programRegistry.js'
+import { CommandLauncher, MobileProgramDrawer, ProgramNavigation, visiblePrograms } from '../system/AppNavigation.jsx'
+import { useApiQuery } from './useApiQuery.js'
 
 export const ROUTE_PREFETCHERS = Object.fromEntries(PROGRAMS.filter(p => p.route && p.prefetch).map(p => [p.route, p.prefetch]))
 
@@ -35,19 +36,16 @@ function ApiBanner() {
 }
 
 function RateLimit() {
-  const [data, setData] = useState(null)
   const settings = useStore(state => state.settings)
   const setApiPaused = useStore(state => state.setApiPaused)
   const setThrottle = useStore(state => state.setThrottle)
+  const rate = useApiQuery('/api/rate-limit', { refetchInterval: 10000 })
+  const data = rate.data
   useEffect(() => {
-    const load = () => api.get('/api/rate-limit').then(next => {
-      setData(next)
-      if (next?.throttle) setThrottle(next.throttle)
-      const remaining = Number(next?.remaining)
-      if (settings.apiFloorEnabled && Number.isFinite(remaining) && remaining < 9999) setApiPaused(remaining < (settings.apiFloor ?? 30))
-    }).catch(() => {})
-    load(); const timer = setInterval(load, 10000); return () => clearInterval(timer)
-  }, [settings.apiFloor, settings.apiFloorEnabled, setApiPaused, setThrottle])
+    if (data?.throttle) setThrottle(data.throttle)
+    const remaining = Number(data?.remaining)
+    if (settings.apiFloorEnabled && Number.isFinite(remaining) && remaining < 9999) setApiPaused(remaining < (settings.apiFloor ?? 30))
+  }, [data, settings.apiFloor, settings.apiFloorEnabled, setApiPaused, setThrottle])
   const remaining = Number(data?.remaining)
   const known = !data?.stale && Number.isFinite(remaining) && remaining < 9999
   const unavailable = data?.hf_api?.available === false
@@ -75,23 +73,33 @@ export default function ShellV2() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const notificationRef = useRef(null)
+  const shellData = useApiQuery('/api/shell-data', { refetchInterval: 60000 })
 
   useEffect(() => {
-    const load = () => api.get('/api/shell-data').then(data => {
-      if (data?.profile) setProfile(data.profile)
-      if (data?.reply_count != null) setReplyCount(Number(data.reply_count))
-      if (data?.notifications) setNotifications(data.notifications)
-      if (data?.unseen != null) setUnseen(Number(data.unseen))
-      if (data?.token_expiry != null) setTokenExpiry(Number(data.token_expiry))
-    }).catch(() => {})
-    load(); const timer = setInterval(load, 60000); return () => clearInterval(timer)
-  }, [setTokenExpiry])
+    const data = shellData.data
+    if (data?.profile) setProfile(data.profile)
+    if (data?.reply_count != null) setReplyCount(Number(data.reply_count))
+    if (data?.notifications) setNotifications(data.notifications)
+    if (data?.unseen != null) setUnseen(Number(data.unseen))
+    if (data?.token_expiry != null) setTokenExpiry(Number(data.token_expiry))
+  }, [shellData.data, setTokenExpiry])
 
   useEffect(() => { localStorage.setItem('hftb_nav_collapsed', collapsed ? '1' : '0') }, [collapsed])
   useEffect(() => {
     const close = event => { if (notificationRef.current && !notificationRef.current.contains(event.target)) setNotificationsOpen(false) }
     document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close)
   }, [])
+  useEffect(() => {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+    if (connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || '')) return undefined
+    const warm = () => visiblePrograms(user)
+      .filter(program => program.availability === 'available')
+      .forEach(program => prefetchProgram(program, { data: ['home', 'merchant', 'bumper', 'contracts', 'bytes'].includes(program.id) }))
+    const id = 'requestIdleCallback' in window
+      ? window.requestIdleCallback(warm, { timeout: 2500 })
+      : window.setTimeout(warm, 1200)
+    return () => 'cancelIdleCallback' in window ? window.cancelIdleCallback(id) : window.clearTimeout(id)
+  }, [user])
   useEffect(() => {
     const shortcut = event => {
       const target = event.target
@@ -121,6 +129,6 @@ export default function ShellV2() {
       <button type="button" className="app-menu-button" onClick={() => setDrawerOpen(true)} aria-label="Open navigation">Menu</button>
       <div className="app-route-title"><b>{title}</b>{nested.length > 0 && <span>/ {nested.join(' / ')}</span>}</div>
       <div className="tb-r"><span className={`tb-account-state ${accountState === 'Connected' ? 'connected' : 'warning'}`}>{accountState}</span><button type="button" className="command-trigger" onClick={() => setLauncherOpen(true)}>Open <kbd>Ctrl K</kbd></button><div className="app-notification-wrap" ref={notificationRef}><button type="button" className="app-header-button" onClick={() => { setNotificationsOpen(value => !value); if (!notificationsOpen && unseen) markRead() }} aria-label="Notifications">NT{unseen > 0 && <span>{unseen}</span>}</button>{notificationsOpen && <NotificationPanel notifications={notifications} unseen={unseen} onClose={() => setNotificationsOpen(false)} onRead={markRead} />}</div><button type="button" className="tb-account-button" onClick={() => navigate('/dashboard/settings')} aria-label="Open account settings">{initials}</button></div>
-    </header><div className="route-transfer" aria-hidden="true"><span>{activeProgram.shortLabel}</span></div><div className="content app-route-content" key={location.key}><Outlet /></div></main>
+    </header><div className="route-transfer" aria-hidden="true"><span>{activeProgram.shortLabel}</span></div><div className="content app-route-content"><Outlet /></div></main>
   </div><MobileProgramDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} user={user} counters={counters} account={user?.username || 'HF account'} /><CommandLauncher open={launcherOpen} onClose={() => setLauncherOpen(false)} user={user} /></div>
 }

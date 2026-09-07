@@ -86,7 +86,7 @@ export default function MerchantOverview({ setTab, onGoToDeals }) {
     return () => clearInterval(timer)
   }, [])
 
-  if (loading) return <div className="empty"><div className="spin" /></div>
+  if (loading && !data) return <div className="empty"><div className="spin" /></div>
   if (!data) return <div className="mhq-empty" style={{ color: 'var(--red)' }}>The business summary could not be loaded.</div>
 
   const counts = data.contract_stage_counts || {}

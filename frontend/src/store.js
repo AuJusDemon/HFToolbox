@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api } from './core/api.js'
+import { queryClient } from './core/queryClient.js'
 
 // Default settings — used when user has no saved settings yet
 export const SETTING_DEFAULTS = {
@@ -38,6 +39,7 @@ const useStore = create((set, get) => ({
       // Even if the request fails, clear local state and redirect
     }
     set({ user: null })
+    queryClient.clear()
     window.location.href = '/'
   },
 
@@ -187,8 +189,12 @@ const useStore = create((set, get) => ({
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
   bootstrap: async () => {
-    await Promise.all([get().fetchMe(), get().fetchModules()])
-    await Promise.all([get().fetchPrefs(), get().fetchSettings()])
+    await Promise.all([
+      get().fetchMe(),
+      get().fetchModules(),
+      get().fetchPrefs(),
+      get().fetchSettings(),
+    ])
   },
 
 }))

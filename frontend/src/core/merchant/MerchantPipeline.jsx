@@ -180,7 +180,7 @@ export default function MerchantPipeline({marketAccess=null}) {
       .catch(() => setOpportunities([]))
   }, [marketAccess?.paid])
 
-  if (loading) return <div className="empty"><div className="spin" /></div>
+  if (loading && !data) return <div className="empty"><div className="spin" /></div>
   if (!data)   return <div className="empty" style={{ color: 'var(--red)' }}>Failed to load replies</div>
 
   const { leads = [], summary = {}, sla_hours = 24 } = data

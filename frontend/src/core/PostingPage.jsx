@@ -2984,7 +2984,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
-  if (loading) return (
+  if (loading && myDrafts.length === 0 && sharedDrafts.length === 0) return (
     <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
       <div className="spin" />
     </div>
@@ -3860,6 +3860,16 @@ export default function PostingPage() {
   const fetchMe  = useStore(s => s.fetchMe)
   const user     = useStore(s => s.user)
   const upgraded = isUpgraded(user?.groups)
+  const prepareTab = key => {
+    const paths = {
+      compose: ['/api/posting/recents', '/api/settings'],
+      postthread: ['/api/posting/threads', '/api/settings'],
+      drafts: ['/api/posting/drafts', '/api/posting/drafts/shared'],
+      scheduled: ['/api/posting/queue', '/api/posting/sent'],
+      replies: ['/api/posting/replies'],
+    }[key] || []
+    paths.forEach(path => api.prefetch(path))
+  }
 
   // Auto-switch to drafts tab and open a specific draft when ?draft=ID is in the URL
   const location = useLocation()
@@ -3900,6 +3910,7 @@ export default function PostingPage() {
             ['replies',    'Replies',         replyCount],
           ].map(([key, label, badge]) => (
             <button key={key} className={`tab${tab === key ? ' on' : ''}`} onClick={() => setTab(key)}
+              onPointerEnter={() => prepareTab(key)} onPointerDown={() => prepareTab(key)} onTouchStart={() => prepareTab(key)} onFocus={() => prepareTab(key)}
               style={key === 'scheduled' && !upgraded ? { opacity: 0.55 } : undefined}>
               {label}
               {badge > 0 && (

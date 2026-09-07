@@ -19,7 +19,7 @@ export default function MerchantReports() {
       <span style={{flex:1,textAlign:'center',color:'var(--dim)'}}>{report ? `${absDate(report.week_start)} to ${absDate(report.week_end)}` : 'Loading period'}</span>
       <button className="btn" disabled={week===0} onClick={() => setWeek(value => Math.max(0,value-1))}>Next week</button>
     </div>
-    {loading ? <div className="empty"><div className="spin"/></div> : !report ? <div className="mhq-empty" style={{color:'var(--red)'}}>The report could not be loaded.</div> : <>
+    {loading && !report ? <div className="empty"><div className="spin"/></div> : !report ? <div className="mhq-empty" style={{color:'var(--red)'}}>The report could not be loaded.</div> : <>
       <div className="mhq-summary">
         <button type="button"><span className="mhq-summary-label">Completed</span><strong className="mhq-summary-value" style={{color:'var(--green)'}}>{report.completed_deals}</strong><span className="mhq-summary-note">completed during period</span></button>
         <button type="button"><span className="mhq-summary-label">New Contracts</span><strong className="mhq-summary-value">{report.new_contracts}</strong><span className="mhq-summary-note">created during period</span></button>

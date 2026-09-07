@@ -129,7 +129,7 @@ export default function MerchantPromotion({ initialTid = null } = {}) {
 
   if (selected) return <BumpDetail tid={selected} onBack={() => setSelected(null)} />
 
-  if (loading) return <div className="empty"><div className="spin" /></div>
+  if (loading && !data) return <div className="empty"><div className="spin" /></div>
   if (!data)   return <div className="empty" style={{color:'var(--red)'}}>Failed to load bump data</div>
 
   const { offers = [], summary = {} } = data

@@ -1082,7 +1082,7 @@ export default function MerchantDeals({ initialStage = null, initialRatingFilter
       )}
 
       {/* Contract queue */}
-      {loading
+      {loading && allDeals.length === 0
         ? <div className="empty"><div className="spin" /></div>
         : visible.length === 0
           ? <div className="mhq-empty">No contracts found.</div>

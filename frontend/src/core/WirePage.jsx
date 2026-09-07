@@ -673,7 +673,7 @@ function Feed({ me, onRead }) {
         </select>
       </div>
 
-      {loading ? (
+      {loading && !data ? (
         <div className="empty" style={{padding:60}}><div className="spin"/></div>
       ) : threads.length === 0 ? (
         <div className="empty" style={{padding:60}}>

@@ -73,3 +73,22 @@ test('reduced motion disables route transfer animation', async ({ page }) => {
   await page.goto('/dashboard')
   await expect(page.locator('.route-transfer')).toHaveCSS('display', 'none')
 })
+
+test('revisiting a program reuses its prefetched data without another request', async ({ page }) => {
+  let merchantRequests = 0
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/merchant/overview') merchantRequests += 1
+  })
+  await mockApp(page)
+  await page.goto('/dashboard')
+  await expect(page.getByRole('heading', { name:'Overview' })).toBeVisible()
+
+  await page.getByRole('button', { name:'My Business', exact:true }).click()
+  await expect(page.getByRole('heading', { name:'Today in My Business' })).toBeVisible()
+  const requestsAfterFirstVisit = merchantRequests
+  await page.getByRole('button', { name:'Overview', exact:true }).click()
+  await page.getByRole('button', { name:'My Business', exact:true }).click()
+  await expect(page.getByRole('heading', { name:'Today in My Business' })).toBeVisible()
+
+  expect(merchantRequests).toBe(requestsAfterFirstVisit)
+})

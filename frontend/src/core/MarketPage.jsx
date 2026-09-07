@@ -141,7 +141,7 @@ function Threads({preset={},onPresetUsed,access,onPurchase,forums=[]}) {
     for(const key of ['q','category','fid','market_type','contract_status','topic_id'])if(filters[key])p.set(key,filters[key])
     return p.toString()
   },[filters])
-  useEffect(()=>{if(!access)return;setData(null);api.get(`/api/market/threads?${query}`).then(setData).catch(()=>setData({threads:[],error:true}))},[query,access?.paid])
+  useEffect(()=>{if(!access)return;api.get(`/api/market/threads?${query}`).then(setData).catch(()=>setData({threads:[],error:true}))},[query,access?.paid])
   useEffect(()=>{if(!access||!selected){setDetail(null);return}api.get(`/api/market/threads/${selected}`).then(setDetail).catch(()=>setDetail(null))},[selected,access?.paid])
   const change=(key,value)=>setFilters(f=>({...f,[key]:value,page:1}))
   const changeSort=value=>{
@@ -241,7 +241,7 @@ function Movers({access,onPurchase}) {
 function Demand({access,onPurchase,openBrowse}) {
   const [data,setData]=useState(null),[selected,setSelected]=useState(null),[detail,setDetail]=useState(null),[days,setDays]=useState(90)
   const [query,setQuery]=useState(''),[view,setView]=useState('all'),[sortBy,setSortBy]=useState('buyers'),[page,setPage]=useState(1)
-  useEffect(()=>{const range=access?.paid?days:7;setData(null);api.get(`/api/market/topics?days=${range}&limit=50`).then(d=>setData({...d,topics:(d.topics||[]).filter(t=>(t.buyer_threads||0)>0)})).catch(()=>setData({topics:[],error:true}))},[access?.paid,days])
+  useEffect(()=>{const range=access?.paid?days:7;api.get(`/api/market/topics?days=${range}&limit=50`).then(d=>setData({...d,topics:(d.topics||[]).filter(t=>(t.buyer_threads||0)>0)})).catch(()=>setData({topics:[],error:true}))},[access?.paid,days])
   useEffect(()=>{if(!selected){setDetail(null);return}setDetail(null);api.get(`/api/market/topics/${selected.id}?days=${days}`).then(setDetail).catch(()=>setDetail({error:true}))},[selected?.id,days])
   if(!data)return <Empty>Loading demand topics...</Empty>
   const filtered=(data.topics||[]).filter(topic=>topic.name.toLowerCase().includes(query.toLowerCase())).filter(topic=>view==='unmet'?(topic.seller_threads||0)===0:view==='repeated'?(topic.buyer_threads||0)>1:view==='validated'?(topic.observed_contracts||0)>0:true).sort((a,b)=>sortBy==='requests'?Number(b.buyer_threads||0)-Number(a.buyer_threads||0):sortBy==='supply'?Number(a.seller_threads||0)-Number(b.seller_threads||0):sortBy==='evidence'?Number(b.observed_contracts||0)-Number(a.observed_contracts||0):Number(b.unique_buyers||0)-Number(a.unique_buyers||0))
@@ -261,7 +261,7 @@ function Demand({access,onPurchase,openBrowse}) {
 
 function Disputes({access,onPurchase}) {
   const [data,setData]=useState(null),[page,setPage]=useState(1)
-  useEffect(()=>{if(!access)return;setData(null);api.get(`/api/market/disputes?page=${page}&perpage=25`).then(setData).catch(()=>setData({disputes:[],total:0,error:true}))},[page,access?.paid])
+  useEffect(()=>{if(!access)return;api.get(`/api/market/disputes?page=${page}&perpage=25`).then(setData).catch(()=>setData({disputes:[],total:0,error:true}))},[page,access?.paid])
   if(!data)return <Empty>Loading recent disputes...</Empty>
   const pages=Math.max(1,Math.ceil(Number(data.total||0)/25))
   return <div>

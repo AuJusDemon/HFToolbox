@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { api } from './api.js'
 import { parseHfId } from './utils.js'
 import useStore from '../store.js'
+import { useApiQuery } from './useApiQuery.js'
 
 const ago = ts => {
   if (!ts) return '--'
@@ -66,8 +67,6 @@ const CAT_CODES = {
 }
 
 function BytesHistory({ data }) {
-  const [allTxns,  setAllTxns]  = useState([])
-  const [loading,  setLoading]  = useState(true)
   const [expanded, setExpanded] = useState(null)
   const [dir,      setDir]      = useState('all')
   const [cat,      setCat]      = useState('')
@@ -76,23 +75,12 @@ function BytesHistory({ data }) {
   const [page,     setPage]     = useState(1)
   const PERPAGE = 30
 
-  const [total, setTotal] = useState(0)
-
-  useEffect(() => {
-    setLoading(true)
-    const params = new URLSearchParams({ page: String(page), perpage: String(PERPAGE), direction: dir })
-    if (cat && CAT_CODES[cat]) params.set('type_filter', CAT_CODES[cat].join(','))
-    if (q) params.set('q', q)
-    api.get(`/api/bytes/history?${params.toString()}`)
-      .then(d => {
-        if (d) {
-          setAllTxns(d.transactions || [])
-          setTotal(Number(d.total || 0))
-        }
-        setLoading(false)
-      })
-      .catch(() => setLoading(false))
-  }, [page, dir, cat, q])
+  const params = new URLSearchParams({ page: String(page), perpage: String(PERPAGE), direction: dir })
+  if (cat && CAT_CODES[cat]) params.set('type_filter', CAT_CODES[cat].join(','))
+  if (q) params.set('q', q)
+  const history = useApiQuery(`/api/bytes/history?${params.toString()}`)
+  const allTxns = history.data?.transactions || []
+  const total = Number(history.data?.total || 0)
 
   const filtered = allTxns
   const totalPages = Math.max(1, Math.ceil(total / PERPAGE))
@@ -111,10 +99,10 @@ function BytesHistory({ data }) {
     ['bumps','Bumps'],['transfers','Transfers'],['bonuses','Bonuses'],['gambling','Gambling'],
   ]
 
-  if (loading) return <div style={{padding:'20px 0',textAlign:'center'}}><span className="spin"/></div>
+  if (history.isPending) return <div style={{padding:'20px 0',textAlign:'center'}}><span className="spin"/></div>
 
   return (
-    <div>
+    <div aria-busy={history.isFetching}>
       <div style={{display:'flex',gap:6,marginBottom:10,flexWrap:'wrap',alignItems:'center'}}>
         <div style={{display:'flex',gap:0,flex:'1 1 180px',minWidth:0}}>
           <input className="inp" placeholder="Search reason..." value={qInput}
@@ -334,11 +322,9 @@ function Section({ title, children }) {
 export default function BytesPage() {
   const apiPaused = useStore(s => s.apiPaused)
   const settings  = useStore(s => s.settings)
-  const [data,setData]=useState(null)
-  const loadBalance=useCallback(()=>api.get('/api/dash/bytes').then(d=>{if(d)setData(d)}).catch(()=>{}),[])
-
-  useEffect(()=>{loadBalance()},[])
-  usePolling(loadBalance, apiPaused ? null : settings.bytesInterval * 1000)
+  const balance = useApiQuery('/api/dash/bytes', { refetchInterval: apiPaused ? false : settings.bytesInterval * 1000 })
+  const data = balance.data || null
+  const loadBalance = balance.refetch
 
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>

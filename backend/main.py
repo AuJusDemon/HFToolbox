@@ -1154,11 +1154,13 @@ async def shell_data(request: Request):
     if not uid:
         return JSONResponse({"error": "unauthenticated"}, status_code=401)
     from modules.posting.posting_db import get_unread_count as _get_unread_count
-    profile      = await asyncio.to_thread(db.get_cached_profile, uid)
-    notifs       = await asyncio.to_thread(db.get_notifications, uid, 30)
-    unseen       = await asyncio.to_thread(db.get_unseen_count, uid)
-    reply_count  = await asyncio.to_thread(_get_unread_count, uid)
-    user_row     = await asyncio.to_thread(db.get_user, uid)
+    profile, notifs, unseen, reply_count, user_row = await asyncio.gather(
+        asyncio.to_thread(db.get_cached_profile, uid),
+        asyncio.to_thread(db.get_notifications, uid, 30),
+        asyncio.to_thread(db.get_unseen_count, uid),
+        asyncio.to_thread(_get_unread_count, uid),
+        asyncio.to_thread(db.get_user, uid),
+    )
     token_expiry = int((user_row or {}).get("token_expiry") or 0)
     return {
         "profile":       profile,
@@ -1199,14 +1201,16 @@ async def dashboard_snapshot(request: Request):
     from modules.posting.posting_db import get_unread_count as _get_unread
 
     # ── DB-only reads (zero HF calls) ────────────────────────────────────────
-    profile      = await asyncio.to_thread(db.get_cached_profile, uid)
-    notifs       = await asyncio.to_thread(db.get_notifications, uid, 30)
-    unseen       = await asyncio.to_thread(db.get_unseen_count, uid)
-    reply_count  = await asyncio.to_thread(_get_unread, uid)
-
-    # Bytes + contracts from crawl-populated dash_cache (5-min staleness max)
-    bytes_data   = await asyncio.to_thread(db.get_dash_cache, uid, "bytes",     7200) or {}
-    contracts    = await asyncio.to_thread(db.get_dash_cache, uid, "contracts", 7200) or {}
+    profile, notifs, unseen, reply_count, bytes_data, contracts = await asyncio.gather(
+        asyncio.to_thread(db.get_cached_profile, uid),
+        asyncio.to_thread(db.get_notifications, uid, 30),
+        asyncio.to_thread(db.get_unseen_count, uid),
+        asyncio.to_thread(_get_unread, uid),
+        asyncio.to_thread(db.get_dash_cache, uid, "bytes", 7200),
+        asyncio.to_thread(db.get_dash_cache, uid, "contracts", 7200),
+    )
+    bytes_data = bytes_data or {}
+    contracts = contracts or {}
 
     # Autobump job count
     try:
@@ -1357,7 +1361,8 @@ async def dash_contracts(request: Request, force: bool = False):
         }
 
     # Dashboard gets a small recent list. Full history stays on /api/contracts/history.
-    total_count = await asyncio.to_thread(db.get_contracts_history_count, uid)
+    count_data = await asyncio.to_thread(db.get_contracts_history_counts, uid)
+    total_count = count_data["total"]
     if total_count > 0 and not force:
         rows = await asyncio.to_thread(db.get_contracts_history, uid, 12, 0, None, "dateline", "desc")
         contracts = [_fmt(dict(r)) for r in rows]
@@ -1369,12 +1374,7 @@ async def dash_contracts(request: Request, force: bool = False):
             cp_uid  = str(c["otheruid"] if is_init else c["inituid"])
             c["counterparty_uid"]      = cp_uid
             c["counterparty_username"] = username_map.get(cp_uid, "")
-        counts = {
-            "active": await asyncio.to_thread(db.get_contracts_history_count, uid, "5"),
-            "awaiting": await asyncio.to_thread(db.get_contracts_history_count, uid, "1"),
-            "disputed": await asyncio.to_thread(db.get_contracts_history_count, uid, "7"),
-            "complete": await asyncio.to_thread(db.get_contracts_history_count, uid, "6"),
-        }
+        counts = {key: count_data[key] for key in ("active", "awaiting", "disputed", "complete")}
         return {"contracts": contracts, "uid": uid, "total_count": total_count, "counts": counts, "username_map": username_map}
 
     # ── DB empty or force refresh — fall back to HF API (page 1 only) ─────────

@@ -1,14 +1,41 @@
-import { useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from './api.js'
 import MerchantOverview  from './merchant/MerchantOverview.jsx'
-import MerchantOffers    from './merchant/MerchantOffers.jsx'
-import MerchantPipeline  from './merchant/MerchantPipeline.jsx'
-import MerchantDeals     from './merchant/MerchantDeals.jsx'
-import MerchantCustomers from './merchant/MerchantCustomers.jsx'
-import MerchantThreadUpdates from './merchant/MerchantThreadUpdates.jsx'
-import MerchantPromotion from './merchant/MerchantPromotion.jsx'
-import MerchantReports   from './merchant/MerchantReports.jsx'
+
+const TAB_LOADERS = {
+  offers: () => import('./merchant/MerchantOffers.jsx'),
+  pipeline: () => import('./merchant/MerchantPipeline.jsx'),
+  deals: () => import('./merchant/MerchantDeals.jsx'),
+  customers: () => import('./merchant/MerchantCustomers.jsx'),
+  updates: () => import('./merchant/MerchantThreadUpdates.jsx'),
+  bumps: () => import('./merchant/MerchantPromotion.jsx'),
+  reports: () => import('./merchant/MerchantReports.jsx'),
+}
+const MerchantOffers = lazy(TAB_LOADERS.offers)
+const MerchantPipeline = lazy(TAB_LOADERS.pipeline)
+const MerchantDeals = lazy(TAB_LOADERS.deals)
+const MerchantCustomers = lazy(TAB_LOADERS.customers)
+const MerchantThreadUpdates = lazy(TAB_LOADERS.updates)
+const MerchantPromotion = lazy(TAB_LOADERS.bumps)
+const MerchantReports = lazy(TAB_LOADERS.reports)
+
+const TAB_DATA = {
+  overview: ['/api/merchant/overview'],
+  offers: ['/api/merchant/offers?status=active', '/api/merchant/products'],
+  bumps: ['/api/merchant/promotion'],
+  pipeline: ['/api/merchant/pipeline', '/api/market/my-business/opportunities?days=30&limit=50'],
+  deals: ['/api/merchant/deals', '/api/merchant/pm-templates'],
+  customers: ['/api/merchant/customers?seller_only=true'],
+  updates: ['/api/merchant/thread-updates'],
+  reports: ['/api/merchant/reports/weekly?week=0'],
+  settings: ['/api/merchant/goals', '/api/merchant/pm-templates'],
+}
+
+function prefetchTab(id) {
+  TAB_LOADERS[id]?.().catch(() => {})
+  for (const path of TAB_DATA[id] || []) api.prefetch(path)
+}
 
 const TABS = [
   { id:'overview',   label:'Today' },
@@ -78,6 +105,14 @@ export default function MerchantPage({embedded=false, marketAccess=null}) {
   const [dealStage, setDealStage]             = useState(null)
   const [dealRatingFilter, setDealRatingFilter] = useState(null)
 
+  useEffect(() => {
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+    if (connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || '')) return undefined
+    const warm = () => Object.keys(TAB_LOADERS).forEach(prefetchTab)
+    const id = 'requestIdleCallback' in window ? window.requestIdleCallback(warm, { timeout: 2500 }) : window.setTimeout(warm, 1000)
+    return () => 'cancelIdleCallback' in window ? window.cancelIdleCallback(id) : window.clearTimeout(id)
+  }, [])
+
   // Navigate to Contracts - accepts optional stage and/or rating filter
   const goToDealsWithStage = (stage, ratingFilter = null) => {
     setDealStage(stage)
@@ -118,6 +153,10 @@ export default function MerchantPage({embedded=false, marketAccess=null}) {
             key={t.id}
             className={`tab${tab === t.id ? ' on' : ''}`}
             onClick={() => handleTabClick(t.id)}
+            onPointerEnter={() => prefetchTab(t.id)}
+            onPointerDown={() => prefetchTab(t.id)}
+            onTouchStart={() => prefetchTab(t.id)}
+            onFocus={() => prefetchTab(t.id)}
           >
             {t.label}
           </button>
@@ -125,7 +164,7 @@ export default function MerchantPage({embedded=false, marketAccess=null}) {
       </div>
 
       {/* Tab content */}
-      {content}
+      <Suspense fallback={<div className="empty"><div className="spin" /></div>}>{content}</Suspense>
 
     </div>
   )

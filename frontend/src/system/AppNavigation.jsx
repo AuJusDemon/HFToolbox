@@ -25,6 +25,7 @@ export function ProgramNavigation({ user, collapsed, counters = {}, onSelect }) 
   const location = useLocation()
   const programs = visiblePrograms(user)
 
+  const prepare = program => prefetchProgram(program, { data: true })
   const open = program => {
     if (!program.route || program.availability !== 'available') return
     navigate(program.route)
@@ -51,8 +52,10 @@ export function ProgramNavigation({ user, collapsed, counters = {}, onSelect }) 
                   aria-current={selected ? 'page' : undefined}
                   aria-disabled={unavailable || undefined}
                   title={collapsed ? `${program.label}${unavailable ? ' - Coming Soon' : ''}` : undefined}
-                  onPointerEnter={() => !unavailable && prefetchProgram(program)}
-                  onFocus={() => !unavailable && prefetchProgram(program)}
+                  onPointerEnter={() => !unavailable && prepare(program)}
+                  onPointerDown={() => !unavailable && prepare(program)}
+                  onTouchStart={() => !unavailable && prepare(program)}
+                  onFocus={() => !unavailable && prepare(program)}
                   onClick={() => open(program)}
                 >
                   <span className="app-program-glyph" aria-hidden="true">{program.glyph || program.shortLabel.slice(0, 2)}</span>
@@ -128,7 +131,7 @@ export function CommandLauncher({ open, onClose, user }) {
   useEffect(() => { if (active >= choices.length) setActive(0) }, [active, choices.length])
 
   if (!open) return null
-  const select = program => { onClose(); navigate(program.route) }
+  const select = program => { prefetchProgram(program, { data: true }); onClose(); navigate(program.route) }
   const keyDown = event => {
     if (event.key === 'Escape') { event.preventDefault(); onClose() }
     if (event.key === 'ArrowDown') { event.preventDefault(); setActive(i => Math.min(i + 1, choices.length - 1)) }
@@ -143,7 +146,7 @@ export function CommandLauncher({ open, onClose, user }) {
         <div className="command-input-row"><span aria-hidden="true">&gt;</span><input id="command-search" ref={inputRef} value={query} onChange={event => { setQuery(event.target.value); setActive(0) }} onKeyDown={keyDown} placeholder="Search programs or type an alias" autoComplete="off" /></div>
         <div className="command-results" role="listbox">
           {choices.map((program, index) => (
-            <button key={program.id} type="button" role="option" aria-selected={index === active} className={index === active ? 'active' : ''} onMouseEnter={() => setActive(index)} onClick={() => select(program)}>
+            <button key={program.id} type="button" role="option" aria-selected={index === active} className={index === active ? 'active' : ''} onMouseEnter={() => { setActive(index); prefetchProgram(program, { data: true }) }} onFocus={() => prefetchProgram(program, { data: true })} onClick={() => select(program)}>
               <span className="app-program-glyph" aria-hidden="true">{program.glyph}</span>
               <span><b>{program.id === 'home' ? 'Overview' : program.label}</b><small>{program.publicSummary}</small></span>
               <em>{program.group}</em>

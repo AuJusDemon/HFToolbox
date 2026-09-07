@@ -178,7 +178,7 @@ function AnalyticsPanel({ targetUid, hfPpd, price, duration }) {
 
   useEffect(() => { load(false) }, [load])
 
-  if (loading) return (
+  if (loading && !data) return (
     <div style={{ padding: '32px 0', display: 'flex', justifyContent: 'center' }}>
       <div className="spin" />
     </div>
@@ -1000,7 +1000,7 @@ function BrowseSection({ myUid }) {
               Your own listing is hidden.
             </div>
           )}
-          {loading ? (
+          {loading && !browseData ? (
             <div style={{ display: 'flex', justifyContent: 'center', padding: 32 }}><div className="spin" /></div>
           ) : !visible.length ? (
             <div style={{ padding: '14px', fontSize: 12, color: 'var(--dim)', fontStyle: 'italic' }}>

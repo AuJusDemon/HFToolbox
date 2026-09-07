@@ -1,9 +1,12 @@
+import { api } from '../core/api.js'
+
 export const PROGRAMS = [
   {
     id: 'home', label: 'Home', shortLabel: 'HOME', command: 'home', aliases: ['home', 'overview'],
     route: '/dashboard', group: 'core', availability: 'available', publicPrimary: false, glyph: 'OV',
     publicSummary: 'A single console for marketplace work, account tools, and future Toolbox programs.',
     visualizationMode: 'home', operatorOnly: false, previewComponent: 'home', prefetch: null,
+    dataPaths: ['/api/dashboard/snapshot', '/api/merchant/overview', '/api/autobump/jobs', '/api/posting/queue'],
   },
   {
     id: 'merchant', label: 'My Business', shortLabel: 'BIZ', command: 'business',
@@ -12,6 +15,7 @@ export const PROGRAMS = [
     publicSummary: 'Contracts, replies, buyers, sales threads, and follow-up work in one workspace.',
     visualizationMode: 'business', operatorOnly: false, previewComponent: 'business',
     prefetch: () => import('../core/MerchantPage.jsx'),
+    dataPaths: ['/api/merchant/overview', '/api/merchant/freshness'],
   },
   {
     id: 'bumper', label: 'Bump Service', shortLabel: 'BUMPS', command: 'bumps',
@@ -20,6 +24,7 @@ export const PROGRAMS = [
     publicSummary: 'Schedule thread bumps and inspect timing, spend, failures, and movement afterward.',
     visualizationMode: 'bumps', operatorOnly: false, previewComponent: 'bumps',
     prefetch: () => import('../core/BumperPageV2.jsx'),
+    dataPaths: ['/api/autobump/jobs', '/api/autobump/log', '/api/autobump/settings'],
   },
   {
     id: 'posting', label: 'Posting', shortLabel: 'POST', command: 'posting',
@@ -28,6 +33,7 @@ export const PROGRAMS = [
     publicSummary: 'Draft, preview, and manage forum posts and watched replies from one editor.',
     visualizationMode: 'posting', operatorOnly: false, previewComponent: 'posting',
     prefetch: () => import('../core/PostingPage.jsx'),
+    dataPaths: ['/api/posting/replies/count', '/api/posting/recents', '/api/settings'],
   },
   {
     id: 'contracts', label: 'Contracts', shortLabel: 'DEALS', command: 'contracts',
@@ -36,6 +42,7 @@ export const PROGRAMS = [
     publicSummary: 'Review contract state, outstanding actions, completion, expiry, and disputes.',
     visualizationMode: 'contracts', operatorOnly: false, previewComponent: 'contracts',
     prefetch: () => import('../core/ContractsPage.jsx'),
+    dataPaths: ['/api/dash/contracts', '/api/contracts/history?page=1&perpage=20', '/api/contracts/stats'],
   },
   {
     id: 'market', label: 'Marketplace', shortLabel: 'MARKET', command: 'market',
@@ -44,6 +51,7 @@ export const PROGRAMS = [
     publicSummary: 'Inspect indexed threads, buyer intent, watched phrases, and contract movement.',
     visualizationMode: 'market', operatorOnly: false, previewComponent: 'market',
     prefetch: () => import('../core/MarketPage.jsx'),
+    dataPaths: ['/api/market/access', '/api/market/forums', '/api/market/pulse'],
   },
   {
     id: 'bytes', label: 'Bytes', shortLabel: 'BYTES', command: 'bytes', aliases: ['bytes', 'ledger'],
@@ -51,6 +59,7 @@ export const PROGRAMS = [
     publicSummary: 'Review balance activity and the Toolbox actions that consume or move Bytes.',
     visualizationMode: 'bytes', operatorOnly: false, previewComponent: 'bytes',
     prefetch: () => import('../core/BytesPage.jsx'),
+    dataPaths: ['/api/dash/bytes', '/api/bytes/history?page=1&perpage=30&direction=all'],
   },
   {
     id: 'sigmarket', label: 'Sig Market', shortLabel: 'SIG MKT', command: 'sigmarket',
@@ -59,6 +68,7 @@ export const PROGRAMS = [
     publicSummary: 'Manage signature-market listings and status from the same account shell.',
     visualizationMode: 'market', operatorOnly: false, previewComponent: 'market',
     prefetch: () => import('../core/SigmarketPage.jsx'),
+    dataPaths: ['/api/sigmarket/status'],
   },
   {
     id: 'wire', label: 'The Wire', shortLabel: 'WIRE', command: 'wire', aliases: ['wire'],
@@ -66,6 +76,7 @@ export const PROGRAMS = [
     publicSummary: 'Read supported forum activity through the Toolbox interface.',
     visualizationMode: 'posting', operatorOnly: false, previewComponent: 'posting',
     prefetch: () => import('../core/WirePage.jsx'),
+    dataPaths: ['/api/wire/me', '/api/wire/threads?tag=all&page=1&sort=recent', '/api/wire/hf-news'],
   },
   {
     id: 'casino', label: 'Byte Casino', shortLabel: 'CASINO', command: 'casino',
@@ -80,6 +91,7 @@ export const PROGRAMS = [
     publicSummary: 'Owner-only service health and operational visibility.',
     visualizationMode: 'home', operatorOnly: true, previewComponent: null,
     prefetch: () => import('../core/OperatorPage.jsx'),
+    dataPaths: ['/api/operator/summary'],
   },
   {
     id: 'settings', label: 'Settings', shortLabel: 'SETTINGS', command: 'settings', aliases: ['settings', 'config'],
@@ -87,6 +99,7 @@ export const PROGRAMS = [
     publicSummary: 'Account preferences and Toolbox behavior.',
     visualizationMode: 'home', operatorOnly: false, previewComponent: null,
     prefetch: () => import('../core/Settings.jsx'),
+    dataPaths: ['/api/crawl/status', '/api/telegram/status', '/api/telegram/delivery-status'],
   },
 ]
 
@@ -104,6 +117,9 @@ export function getProgramByRoute(pathname) {
     .find(program => pathname === program.route || (program.route !== '/dashboard' && pathname.startsWith(program.route))) || PROGRAMS[0]
 }
 
-export function prefetchProgram(program) {
-  if (program?.prefetch) program.prefetch().catch(() => {})
+export function prefetchProgram(program, { data = false } = {}) {
+  const work = []
+  if (program?.prefetch) work.push(program.prefetch())
+  if (data) work.push(...(program?.dataPaths || []).map(path => api.prefetch(path)))
+  return Promise.allSettled(work)
 }

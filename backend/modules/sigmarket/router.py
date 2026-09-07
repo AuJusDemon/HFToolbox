@@ -148,6 +148,23 @@ async def get_status(request: Request):
     import hf_service
     import hf_cache as hfc
 
+    # A previously successful snapshot is preferable to blocking navigation on
+    # three sequential HF reads. Refresh it in the background and identify it
+    # as stale so the UI can communicate freshness accurately.
+    usable, _ = await asyncio.to_thread(hfc.get_usable, cache_key)
+    if not force and usable is None:
+        expired = await asyncio.to_thread(hfc.get_any, cache_key)
+        if expired is not None:
+            asyncio.create_task(warm_sigmarket_status(uid, token))
+            return {
+                **expired,
+                "_cache": {
+                    "stale": True,
+                    "age": hfc.get_age(cache_key),
+                    "refreshing": True,
+                },
+            }
+
     try:
         data, is_stale = await hf_service.get_or_fetch(
             cache_key     = cache_key,

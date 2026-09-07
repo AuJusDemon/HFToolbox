@@ -931,6 +931,24 @@ def get_contracts_history_count(uid: str, status_n: str | None = None) -> int:
         ).fetchone()[0]
 
 
+def get_contracts_history_counts(uid: str) -> dict[str, int]:
+    """Return dashboard contract counts in one indexed scan."""
+    with _db() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(status_n='5') AS active,
+                   SUM(status_n='1') AS awaiting,
+                   SUM(status_n='7') AS disputed,
+                   SUM(status_n='6') AS complete
+            FROM contracts_history WHERE uid=?
+            """,
+            (uid,),
+        ).fetchone()
+    values = dict(row or {})
+    return {key: int(values.get(key) or 0) for key in ('total', 'active', 'awaiting', 'disputed', 'complete')}
+
+
 def get_contracts_export(uid: str, status_n: str | None = None,
                           date_from: int | None = None, date_to: int | None = None) -> list:
     """Return ALL contracts for a user (no limit) for export. Optional filters."""

@@ -26,7 +26,7 @@ export default function BumpDetail({ tid, onBack, backLabel = 'Back to Bumps' })
     setLoading(true); setError('')
     api.get(`/api/autobump/jobs/${tid}/performance?range=${range}&page=${page}&page_size=5`)
       .then(result => { if (active) setData(result) })
-      .catch(err => { if (active) { setData(null); setError(err.message || 'Failed to load bump performance.') } })
+      .catch(err => { if (active) setError(err.message || 'Failed to load bump performance.') })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [tid, range, page])

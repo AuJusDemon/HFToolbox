@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useQueries } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { api, throttledInterval } from './api.js'
 import useStore from '../store.js'
@@ -29,7 +30,8 @@ function Pane({ title, label, action, children, className = '' }) {
 
 function OpenButton({ program, children }) {
   const navigate = useNavigate()
-  return <button type="button" className="overview-open" onPointerEnter={() => prefetchProgram(program)} onFocus={() => prefetchProgram(program)} onClick={() => navigate(program.route)}>{children || `Open ${program.label}`}</button>
+  const prepare = () => prefetchProgram(program, { data: true })
+  return <button type="button" className="overview-open" onPointerEnter={prepare} onPointerDown={prepare} onTouchStart={prepare} onFocus={prepare} onClick={() => navigate(program.route)}>{children || `Open ${program.label}`}</button>
 }
 
 function StatusStrip({ snapshot, merchant, jobs, loading }) {
@@ -98,17 +100,17 @@ function ActivityLedger({ snapshot, merchant, jobs }) {
 
 export default function OverviewDashboard() {
   const throttle = useStore(state => state.throttle)
-  const [data, setData] = useState({ snapshot:null, merchant:null, jobs:[], posting:null })
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const load = useCallback(() => Promise.allSettled([
-    api.get('/api/dashboard/snapshot'), api.get('/api/merchant/overview'), api.get('/api/autobump/jobs'), api.get('/api/posting/queue'),
-  ]).then(results => {
-    const [snapshot, merchant, jobs, posting] = results
-    if (snapshot.status === 'rejected') throw snapshot.reason
-    setData({ snapshot:snapshot.value, merchant:merchant.status === 'fulfilled' ? merchant.value : null, jobs:jobs.status === 'fulfilled' ? jobs.value?.jobs || [] : [], posting:posting.status === 'fulfilled' ? posting.value : null })
-    setError('')
-  }).catch(reason => setError(reason?.message || 'Snapshot request failed.')).finally(() => setLoading(false)), [])
-  useEffect(() => { load(); const timer = setInterval(load, throttledInterval(60000, throttle)); return () => clearInterval(timer) }, [load, throttle])
-  return <div className="overview-dashboard"><div className="overview-heading"><div><span>Account operations</span><h1>Overview</h1><p>Current work, service state, and recent account changes.</p></div><button type="button" onClick={load}>Refresh</button></div><StatusStrip {...data} loading={loading} /><WorkQueue merchant={data.merchant} jobs={data.jobs} posting={data.posting} loading={loading} error={error} /><div className="overview-services"><BusinessSummary merchant={data.merchant} /><BumpSummary jobs={data.jobs} snapshot={data.snapshot} /></div><ActivityLedger {...data} /></div>
+  const paths = ['/api/dashboard/snapshot', '/api/merchant/overview', '/api/autobump/jobs', '/api/posting/queue']
+  const queries = useQueries({ queries: paths.map(path => ({ ...api.queryOptions(path), refetchInterval: throttledInterval(60000, throttle) })) })
+  const [snapshotQuery, merchantQuery, jobsQuery, postingQuery] = queries
+  const data = {
+    snapshot: snapshotQuery.data || null,
+    merchant: merchantQuery.data || null,
+    jobs: jobsQuery.data?.jobs || [],
+    posting: postingQuery.data || null,
+  }
+  const loading = !data.snapshot && !data.merchant && !jobsQuery.data && !data.posting
+  const error = snapshotQuery.error?.message || ''
+  const refresh = () => queries.forEach(query => query.refetch())
+  return <div className="overview-dashboard"><div className="overview-heading"><div><span>Account operations</span><h1>Overview</h1><p>Current work, service state, and recent account changes.</p></div><button type="button" onClick={refresh} disabled={queries.some(query => query.isFetching)}>Refresh</button></div><StatusStrip {...data} loading={loading} /><WorkQueue merchant={data.merchant} jobs={data.jobs} posting={data.posting} loading={loading} error={error} /><div className="overview-services"><BusinessSummary merchant={data.merchant} /><BumpSummary jobs={data.jobs} snapshot={data.snapshot} /></div><ActivityLedger {...data} /></div>
 }
