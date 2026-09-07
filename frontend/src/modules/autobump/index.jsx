@@ -62,7 +62,7 @@ export default function AutoBumper() {
           <div className="pt">⬆️ Auto Bumper</div>
           <div className="ps">
             Smart bumping — skips if there is a recent post within your interval.
-            10 byte service fee + ~50 byte Stanley fee per bump.
+            10 byte service fee + the authenticated account's group-based HF bump fee.
           </div>
         </div>
         <div className="row" style={{ gap: 8 }}>
@@ -141,7 +141,7 @@ function AddJobForm({ onAdded }) {
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-dim)', marginTop: 10 }}>
         Min 6h interval. First bump fires after the first interval.
-        10 byte HF Toolbox fee + ~50 byte Stanley fee charged per bump.
+        10 byte HF Toolbox fee + the authenticated account's group-based HF bump fee per successful bump.
       </div>
     </div>
   )

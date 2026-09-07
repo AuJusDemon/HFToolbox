@@ -138,7 +138,7 @@ function FeeDisclosure() {
           borderRadius:'var(--r)',fontSize:11,color:'var(--sub)',lineHeight:1.7,
         }}>
           Each successful bump charges <strong style={{color:'var(--text)'}}>10 bytes</strong> service fee
-          + <strong style={{color:'var(--text)'}}>~50 byte Stanley fee</strong> (deducted by HF).
+          + the <strong style={{color:'var(--text)'}}>group-based HF bump fee</strong> (deducted by HF).
           Shows in your bytes history as{' '}
           <span style={{fontFamily:'var(--mono)',fontSize:10,background:'var(--s3)',
             padding:'1px 5px',borderRadius:3,color:'var(--text)'}}>
@@ -199,7 +199,7 @@ function BudgetSettings({ budgetData, onSave }) {
       {open && (
         <div style={{marginTop:8,padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--b1)',borderRadius:'var(--r)'}}>
           <p style={{fontSize:11.5,color:'var(--sub)',lineHeight:1.6,marginBottom:8}}>
-            Max bytes to spend on bumps per week. Each bump costs <strong style={{color:'var(--text)'}}>~50 bytes</strong> + 10 byte service fee.
+            Max bytes to spend on bumps per week. Each bump uses the authenticated account's group-based HF fee plus the 10 byte service fee.
             Set to <strong style={{color:'var(--text)'}}>0</strong> for no limit.
           </p>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -540,7 +540,7 @@ export default function BumperPage() {
           {jobs.length > 0 && <span className="badge badge-yel">{jobs.length} JOB{jobs.length>1?'S':''}</span>}
           {budgetOver && <span className="badge badge-red">BUDGET PAUSED</span>}
           <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',marginLeft:'auto'}}>
-            ~50 byte Stanley fee + 10 byte service fee per successful bump
+            Group-based HF fee + 10 byte service fee per successful bump
           </span>
         </div>
         <div className="card-body">
@@ -586,7 +586,7 @@ export default function BumperPage() {
                 <div style={{marginTop:8,padding:'10px 12px',background:'rgba(255,180,0,.08)',border:'1px solid rgba(255,180,0,.3)',borderRadius:'var(--r)',fontSize:12}}>
                   <div style={{marginBottom:8,color:'var(--text)'}}>
                     <strong>Confirm bytes cost</strong> — adding TID {tid} will charge
-                    {' '}<strong>~50 bytes Stanley fee + 10 bytes service fee</strong> per bump.
+                    {' '}<strong>the account's group-based HF fee + 10 bytes service fee</strong> per bump.
                   </div>
                   <div style={{display:'flex',gap:6}}>
                     <button className="btn btn-acc" style={{fontSize:11}} onClick={confirmFee}>Confirm &amp; Add</button>

@@ -59,7 +59,7 @@ export function BumpActivityTimeline({ data, onPage }) {
 
 export function BumpAttempts({ attempts = [], fees }) {
   return <section className="bpr-attempts"><div className="bpr-section-head"><div><span>RECENT ATTEMPTS</span><strong>Latest five for this thread</strong></div></div>
-    {!attempts.length ? <p className="bpr-empty">No attempts in this range.</p> : attempts.map(row => <div className="bpr-attempt" key={row.id}><span>{stamp(row.ts)}</span><strong className={`is-${row.action}`}>{row.action}</strong><span>{row.reason || 'No additional detail'}</span><small>{row.action === 'bumped' ? `${n(fees?.hf_fee)} + ${n(fees?.service_fee)} Bytes estimated` : 'No successful-bump charge'}</small></div>)}
+    {!attempts.length ? <p className="bpr-empty">No attempts in this range.</p> : attempts.map(row => <div className="bpr-attempt" key={row.id}><span>{stamp(row.ts)}</span><strong className={`is-${row.action}`}>{row.action}</strong><span>{row.reason || 'No additional detail'}</span><small>{row.action === 'bumped' ? `${n(fees?.hf_fee)} HF ${fees?.hf_fee_tier || 'group'} + ${n(fees?.service_fee)} service Bytes estimated` : 'No successful-bump charge'}</small></div>)}
   </section>
 }
 

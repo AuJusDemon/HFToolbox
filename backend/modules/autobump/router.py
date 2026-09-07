@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/autobump", tags=["autobump"])
 init()
 
 VALID_MODES  = {"timer", "page1"}
-def _fees_for_user(uid: str) -> dict[str, int]:
+def _fees_for_user(uid: str) -> dict[str, int | str]:
     user = db.get_user(uid) or {}
     return fee_breakdown(uid, user.get("groups"))
 

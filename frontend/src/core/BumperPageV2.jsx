@@ -164,7 +164,7 @@ function AddJob({ fee, onAdded }) {
       <label>End<select value={expiry} onChange={event => setExpiry(Number(event.target.value))}>{EXPIRIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       <button type="button" className="bp-primary" disabled={!tid || busy || (confirming && fee?.service_fee !== 10)} onClick={submit}>{busy ? 'Adding...' : confirming ? 'Confirm and add' : 'Add job'}</button>
     </div>
-    {confirming && <div className="bp-confirm" role="status">{fee?.service_fee === 10 && fee?.total_cost != null ? <>A successful bump is expected to cost {bytes(fee.hf_fee)} HF fee + {bytes(fee.service_fee)} service fee = {bytes(fee.total_cost)}.</> : <>Fee data is unavailable. Retry before creating this job.</>} <button type="button" onClick={() => setConfirming(false)}>Cancel</button></div>}
+    {confirming && <div className="bp-confirm" role="status">{fee?.service_fee === 10 && fee?.total_cost != null ? <>A successful bump is expected to cost {bytes(fee.hf_fee)} HF {fee.hf_fee_tier || 'group'} fee + {bytes(fee.service_fee)} service fee = {bytes(fee.total_cost)}.</> : <>Fee data is unavailable. Retry before creating this job.</>} <button type="button" onClick={() => setConfirming(false)}>Cancel</button></div>}
     <ErrorLine>{error}</ErrorLine>
   </section>
 }
@@ -218,7 +218,7 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
       </div>
       <div className="bp-cost">
         <span className="bp-kicker">SUCCESSFUL BUMP COST</span>
-        <dl><div><dt>HF group fee</dt><dd>{bytes(cost?.hf_fee)}</dd></div><div><dt>Toolbox service fee</dt><dd>{cost?.service_fee === 10 ? bytes(cost.service_fee) : 'Unavailable'}</dd></div><div className="bp-total"><dt>Total expected cost</dt><dd>{cost?.service_fee === 10 ? bytes(cost?.total_cost) : 'Unavailable'}</dd></div></dl>
+        <dl><div><dt>HF {cost?.hf_fee_tier || 'group'} fee</dt><dd>{bytes(cost?.hf_fee)}</dd></div><div><dt>Toolbox service fee</dt><dd>{cost?.service_fee === 10 ? bytes(cost.service_fee) : 'Unavailable'}</dd></div><div className="bp-total"><dt>Total expected cost</dt><dd>{cost?.service_fee === 10 ? bytes(cost?.total_cost) : 'Unavailable'}</dd></div></dl>
         <small>HF and service fees apply only after a confirmed successful bump.</small>
       </div>
     </div>
@@ -263,7 +263,7 @@ function JobNavigator({ jobs, log, outcomes, budgetExceeded, selectedTid, onSele
 
 function Attempts({ log, error, fee }) {
   return <section className="bp-pane" aria-labelledby="attempts-title"><div className="bp-pane-head"><div><span className="bp-kicker">AUDIT TRAIL</span><h2 id="attempts-title">Recent Attempts</h2></div></div>
-    {error ? <ErrorLine>Attempt history is unavailable.</ErrorLine> : !log.length ? <p className="bp-empty-line">No scheduler attempts recorded yet.</p> : <div className="bp-attempts"><div className="bp-attempt-head"><span>Time</span><span>Thread</span><span>Result</span><span>Reason</span><span>Estimated HF fee</span><span>Service fee</span></div>{log.map(entry => <div className="bp-attempt" key={entry.id}><span data-label="Time">{time(entry.ts)}</span><span data-label="Thread">{entry.thread_title || `TID ${entry.tid}`}</span><span data-label="Result"><Status state={{ key: entry.action === 'bumped' ? 'scheduled' : entry.action === 'error' ? 'failed' : 'skipped', label: entry.action }} /></span><span data-label="Reason">{entry.reason || '--'}</span><span data-label="Estimated HF fee">{entry.action === 'bumped' ? `${number(fee?.hf_fee)} Bytes estimated` : '--'}</span><span data-label="Service fee">{entry.action === 'bumped' ? `${number(fee?.service_fee)} Bytes expected` : '--'}</span></div>)}</div>}
+    {error ? <ErrorLine>Attempt history is unavailable.</ErrorLine> : !log.length ? <p className="bp-empty-line">No scheduler attempts recorded yet.</p> : <div className="bp-attempts"><div className="bp-attempt-head"><span>Time</span><span>Thread</span><span>Result</span><span>Reason</span><span>Estimated HF fee</span><span>Service fee</span></div>{log.map(entry => <div className="bp-attempt" key={entry.id}><span data-label="Time">{time(entry.ts)}</span><span data-label="Thread">{entry.thread_title || `TID ${entry.tid}`}</span><span data-label="Result"><Status state={{ key: entry.action === 'bumped' ? 'scheduled' : entry.action === 'error' ? 'failed' : 'skipped', label: entry.action }} /></span><span data-label="Reason">{entry.reason || '--'}</span><span data-label="Estimated HF fee">{entry.action === 'bumped' ? `${bytes(fee?.hf_fee)} estimated` : '--'}</span><span data-label="Service fee">{entry.action === 'bumped' ? `${bytes(fee?.service_fee)} expected` : '--'}</span></div>)}</div>}
   </section>
 }
 

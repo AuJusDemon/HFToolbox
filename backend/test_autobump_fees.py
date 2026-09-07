@@ -7,6 +7,7 @@ fees = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fees)
 fee_breakdown = fees.fee_breakdown
 hf_fee_for_groups = fees.hf_fee_for_groups
+hf_fee_tier_for_groups = fees.hf_fee_tier_for_groups
 normalize_groups = fees.normalize_groups
 
 
@@ -19,13 +20,19 @@ class AutoBumpFeeTests(unittest.TestCase):
         self.assertEqual(hf_fee_for_groups(["28"]), 75)
         self.assertEqual(hf_fee_for_groups(["28", "67"]), 50)
 
+    def test_fee_tier_identifies_the_group_used(self):
+        self.assertEqual(hf_fee_tier_for_groups([]), "standard")
+        self.assertEqual(hf_fee_tier_for_groups(["9"]), "L33t")
+        self.assertEqual(hf_fee_tier_for_groups(["28"]), "Ub3r")
+        self.assertEqual(hf_fee_tier_for_groups(["9", "28", "67"]), "Vendor")
+
     def test_serialized_groups_are_normalized(self):
         self.assertEqual(normalize_groups('["9", "28"]'), {"9", "28"})
         self.assertEqual(normalize_groups("9,67"), {"9", "67"})
 
     def test_service_fee_and_owner_exemption(self):
-        self.assertEqual(fee_breakdown("42", ["28"], owner_uid="761578"), {"hf_fee": 75, "service_fee": 10, "total_cost": 85})
-        self.assertEqual(fee_breakdown("761578", ["67"], owner_uid="761578"), {"hf_fee": 50, "service_fee": 10, "total_cost": 60})
+        self.assertEqual(fee_breakdown("42", ["28"], owner_uid="761578"), {"hf_fee": 75, "hf_fee_tier": "Ub3r", "service_fee": 10, "total_cost": 85})
+        self.assertEqual(fee_breakdown("761578", ["67"], owner_uid="761578"), {"hf_fee": 50, "hf_fee_tier": "Vendor", "service_fee": 10, "total_cost": 60})
 
 
 if __name__ == "__main__":

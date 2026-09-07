@@ -162,6 +162,18 @@ A few things that aren't obvious from the HF API docs and took testing to figure
 
 The HF API allows ~240 calls/hour per token. HFToolbox tracks remaining calls per token and displays them in the top nav bar. Background tasks (bytes crawler, auto-bumper) are designed to stay well within budget.
 
+## Auto-Bump Fees
+
+The HF bump fee is resolved from the authenticated account's stored HF groups for every settings, budget, and performance response. Vendor takes precedence over Ub3r when both groups are present.
+
+| Eligible HF group | HF bump fee | Toolbox service fee | Expected successful-bump total |
+|---|---:|---:|---:|
+| Standard / L33t | 100 Bytes | 10 Bytes | 110 Bytes |
+| Ub3r | 75 Bytes | 10 Bytes | 85 Bytes |
+| Vendor | 50 Bytes | 10 Bytes | 60 Bytes |
+
+The Toolbox service fee is attempted only after HF accepts the bump. Skipped and failed attempts are not counted as successful-bump spending. The API also returns `hf_fee_tier` so the interface identifies the group tier used instead of presenting a bare fee as a universal price.
+
 ---
 
 ## License
