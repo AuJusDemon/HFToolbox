@@ -42,6 +42,14 @@ describe('Bump Service page interactions', () => {
     expect(screen.getAllByText('Needs attention').length).toBeGreaterThan(0)
   })
 
+  it('switches the detail workspace and requests stats for that thread', async () => {
+    render(<BumperPageV2 />)
+    await screen.findByRole('heading', { name: 'Broken thread' })
+    fireEvent.click(screen.getByRole('button', { name: /Scheduled thread/ }))
+    expect(await screen.findByRole('heading', { name: 'Scheduled thread' })).toBeInTheDocument()
+    await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/api/autobump/jobs/111/stats'))
+  })
+
   it('rolls an optimistic pause back when the request fails', async () => {
     apiMock.patch.mockRejectedValueOnce(new Error('pause failed'))
     render(<BumperPageV2 />)

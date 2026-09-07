@@ -169,11 +169,12 @@ function Periods({ periods = [] }) {
   </div>
 }
 
-function ActiveJob({ job, state, stats, statsError, busyTid, onToggle, onRemove }) {
+function ActiveJob({ job, state, stats, statsLoading, statsError, fee, busyTid, onToggle, onRemove }) {
   const [confirmRemove, setConfirmRemove] = useState(false)
   useEffect(() => setConfirmRemove(false), [job?.tid])
   if (!job) return <section className="bp-pane bp-empty"><h2>No bump jobs yet</h2><p>Add a thread above to start tracking its scheduler state here.</p></section>
   const contractsPerBump = stats?.total_bumps ? (Number(stats.total_contracts || 0) / stats.total_bumps).toFixed(1) : '--'
+  const cost = stats || fee
   return <section className="bp-pane bp-workspace" aria-labelledby="active-job-title">
     <div className="bp-job-head">
       <div><span className="bp-kicker">ACTIVE WORKSPACE</span><h2 id="active-job-title">{job.thread_title || `Thread ${job.tid}`}</h2><p>TID {job.tid} {job.fid ? `/ FID ${job.fid}` : ''} / {job.mode === 'page1' ? 'Page 1 watch' : 'Timer mode'}</p></div>
@@ -186,11 +187,11 @@ function ActiveJob({ job, state, stats, statsError, busyTid, onToggle, onRemove 
       </div>
       <div className="bp-cost">
         <span className="bp-kicker">SUCCESSFUL BUMP COST</span>
-        <dl><div><dt>HF group fee</dt><dd>{number(stats?.hf_fee)} Bytes</dd></div><div><dt>Toolbox service fee</dt><dd>{number(stats?.service_fee)} Bytes</dd></div><div className="bp-total"><dt>Total expected cost</dt><dd>{number(stats?.total_cost)} Bytes</dd></div></dl>
+        <dl><div><dt>HF group fee</dt><dd>{number(cost?.hf_fee)} Bytes</dd></div><div><dt>Toolbox service fee</dt><dd>{number(cost?.service_fee)} Bytes</dd></div><div className="bp-total"><dt>Total expected cost</dt><dd>{number(cost?.total_cost)} Bytes</dd></div></dl>
         <small>HF and service fees apply only after a confirmed successful bump.</small>
       </div>
     </div>
-    {statsError ? <ErrorLine>Statistics could not be loaded. Scheduler controls remain available.</ErrorLine> : <>
+    {statsLoading ? <div className="bp-stat-loading" role="status">Loading statistics for TID {job.tid}...</div> : statsError ? <ErrorLine>Statistics could not be loaded. Scheduler controls remain available.</ErrorLine> : <>
       <div className="bp-metrics"><Metric label="Successful bumps" value={number(stats?.total_bumps)} /><Metric label="Skips" value={number(stats?.total_skips)} /><Metric label="Contracts" value={number(stats?.total_contracts)} /><Metric label="Contracts per bump" value={contractsPerBump} /><Metric label="Reply movement" value={stats?.avg_reply_gain == null ? '--' : stats.avg_reply_gain} /><Metric label="Bytes spent" value={number(stats?.bytes_spent)} detail="Estimated from successful bumps" /></div>
       <details className="bp-period-drawer">
         <summary><span>Bump periods</span><small>{stats?.bump_periods?.length || 0} recent periods / contract movement</small></summary>
@@ -203,6 +204,29 @@ function ActiveJob({ job, state, stats, statsError, busyTid, onToggle, onRemove 
       {!confirmRemove ? <button className="bp-danger" onClick={() => setConfirmRemove(true)}>Remove job</button> : <div className="bp-remove-confirm"><span>Remove this job?</span><button className="bp-danger" onClick={() => onRemove(job)}>Confirm remove</button><button onClick={() => setConfirmRemove(false)}>Cancel</button></div>}
     </div>
   </section>
+}
+
+function JobNavigator({ jobs, log, budgetExceeded, selectedTid, onSelect }) {
+  if (!jobs.length) return null
+  return <aside className="bp-pane bp-job-nav" aria-label="Bump jobs">
+    <div className="bp-pane-head"><div><span className="bp-kicker">THREAD QUEUE</span><h2>Jobs</h2></div><strong>{jobs.length}</strong></div>
+    <label className="bp-mobile-job-picker">Selected thread
+      <select value={selectedTid || ''} onChange={event => onSelect(event.target.value)}>
+        {jobs.map(job => <option key={job.id} value={job.tid}>{job.thread_title || `Thread ${job.tid}`}</option>)}
+      </select>
+    </label>
+    <div className="bp-job-list">
+      {jobs.map(job => {
+        const state = classifyJob(job, log, budgetExceeded)
+        const latest = latestForJob(job, log)
+        return <button className={String(job.tid) === String(selectedTid) ? 'is-selected' : ''} key={job.id} onClick={() => onSelect(String(job.tid))}>
+          <span className="bp-job-row-head"><strong>{job.thread_title || `Thread ${job.tid}`}</strong><Status state={state} /></span>
+          <span className="bp-job-row-meta"><small>TID {job.tid} / {job.mode === 'page1' ? 'Page 1' : `${job.interval_h}h timer`}</small><b>{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</b></span>
+          <span className="bp-job-row-result">{latest ? `Last: ${latest.action}${latest.reason ? ` / ${latest.reason}` : ''}` : 'No attempts recorded'}</span>
+        </button>
+      })}
+    </div>
+  </aside>
 }
 
 function Attempts({ log, error, fee }) {
@@ -222,6 +246,7 @@ export default function BumperPageV2() {
   const [loading, setLoading] = useState(true)
   const [selectedTid, setSelectedTid] = useState(null)
   const [stats, setStats] = useState(null)
+  const [statsLoading, setStatsLoading] = useState(false)
   const [statsError, setStatsError] = useState('')
   const [busyTid, setBusyTid] = useState(null)
   const pollRef = useRef(null)
@@ -252,9 +277,12 @@ export default function BumperPageV2() {
   const selectedState = selected ? classifyJob(selected, logs, budget.exceeded) : null
 
   useEffect(() => {
-    if (!selected?.tid) { setStats(null); return }
-    let alive = true; setStatsError('')
-    api.get(`/api/autobump/jobs/${selected.tid}/stats`).then(data => { if (alive) setStats(data) }).catch(err => { if (alive) { setStats(null); setStatsError(err.message) } })
+    if (!selected?.tid) { setStats(null); setStatsLoading(false); return }
+    let alive = true; setStats(null); setStatsError(''); setStatsLoading(true)
+    api.get(`/api/autobump/jobs/${selected.tid}/stats`)
+      .then(data => { if (alive) setStats(data) })
+      .catch(err => { if (alive) { setStats(null); setStatsError(err.message) } })
+      .finally(() => { if (alive) setStatsLoading(false) })
     return () => { alive = false }
   }, [selected?.tid, jobs])
 
@@ -281,9 +309,13 @@ export default function BumperPageV2() {
     {loading ? <section className="bp-pane bp-loading" aria-label="Loading bump service"><i /><i /><i /></section> : <>
       <BudgetPane data={fee} error={errors.fee} onReload={load} />
       <AddJob fee={fee} onAdded={load} />
-      <ActiveJob job={selected} state={selectedState} stats={stats} statsError={statsError} busyTid={busyTid} onToggle={toggle} onRemove={remove} />
-      {ordered.length > 1 && <section className="bp-pane bp-other"><div className="bp-pane-head"><div><span className="bp-kicker">JOB QUEUE</span><h2>Other Jobs</h2></div></div><div className="bp-job-selector">{ordered.filter(job => String(job.tid) !== String(selected?.tid)).map(job => { const state = classifyJob(job, logs, budget.exceeded); return <button key={job.id} onClick={() => setSelectedTid(String(job.tid))}><span>{job.thread_title || `Thread ${job.tid}`}</span><small>TID {job.tid} / {countdown(job.seconds_until_bump)}</small><Status state={state} /></button> })}</div></section>}
-      <Attempts log={logs} error={errors.logs} fee={fee} />
+      {ordered.length ? <section className="bp-operations">
+        <JobNavigator jobs={ordered} log={logs} budgetExceeded={budget.exceeded} selectedTid={selected?.tid} onSelect={setSelectedTid} />
+        <div className="bp-operation-detail">
+          <ActiveJob job={selected} state={selectedState} stats={stats} statsLoading={statsLoading} statsError={statsError} fee={fee} busyTid={busyTid} onToggle={toggle} onRemove={remove} />
+          <Attempts log={logs.filter(entry => String(entry.tid) === String(selected?.tid))} error={errors.logs} fee={fee} />
+        </div>
+      </section> : <ActiveJob job={null} />}
       <details className="bp-pane bp-details"><summary>Scheduling and fee details</summary><div><h3>Timer mode</h3><p>Attempts on the selected interval. Recent thread activity can move the next attempt forward.</p><h3>Page 1 watch</h3><p>Checks the forum page periodically and bumps after the thread leaves page 1, subject to HF timing limits.</p><h3>Fees</h3><p>A confirmed success uses the HF group fee shown above and the Toolbox service fee. Skips and failed attempts do not show as successful-bump spending.</p></div></details>
     </>}
   </main>
