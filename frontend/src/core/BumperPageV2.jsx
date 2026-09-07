@@ -5,10 +5,9 @@ import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 import './BumperPageV2.css'
 import { BumpActivityTimeline, BumpAttempts, BumpPerformanceSummary, BumpRangeControl, JobScheduleEditor } from './BumpPerformance.jsx'
+import { BUMP_EXPIRIES as EXPIRIES, BUMP_INTERVALS as INTERVALS, BUMP_MODES } from './autobumpModes.js'
 
 const ACCESS_GROUPS = new Set(['9', '28', '67'])
-const INTERVALS = [[6, '6 hours'], [8, '8 hours'], [12, '12 hours'], [16, '16 hours'], [24, '1 day'], [48, '2 days'], [72, '3 days'], [120, '5 days'], [168, '1 week']]
-const EXPIRIES = [[0, 'No end date'], [7, '1 week'], [14, '2 weeks'], [30, '1 month'], [60, '2 months']]
 
 export const isUpgraded = groups => (groups || []).some(group => ACCESS_GROUPS.has(String(group)))
 const number = value => Number(value || 0).toLocaleString()
@@ -159,7 +158,7 @@ function AddJob({ fee, onAdded }) {
     <div className="bp-pane-head"><div><span className="bp-kicker">SCHEDULER INPUT</span><h2 id="add-job-title">Add Job</h2></div></div>
     <div className="bp-add-grid">
       <label>Thread ID or URL<input value={tid} onChange={event => { setTid(parseHfId(event.target.value, 'tid')); setConfirming(false) }} placeholder="6319077" /></label>
-      <label>Mode<select value={mode} onChange={event => setMode(event.target.value)}><option value="timer">Timer</option><option value="page1">Page 1 watch</option></select></label>
+      <label>Mode<select value={mode} onChange={event => setMode(event.target.value)}>{BUMP_MODES.map(option => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>
       <label>{mode === 'page1' ? 'Maximum interval' : 'Interval'}<select value={interval} onChange={event => setIntervalValue(event.target.value)}>{INTERVALS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       <label>End<select value={expiry} onChange={event => setExpiry(Number(event.target.value))}>{EXPIRIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
       <button type="button" className="bp-primary" disabled={!tid || busy || (confirming && fee?.service_fee !== 10)} onClick={submit}>{busy ? 'Adding...' : confirming ? 'Confirm and add' : 'Add job'}</button>

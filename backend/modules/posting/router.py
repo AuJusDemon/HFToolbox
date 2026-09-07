@@ -49,7 +49,7 @@ from .posting_db import (
     init_posting_db,
     # scheduled threads
     create_scheduled_thread, get_scheduled_threads, get_sent_threads,
-    cancel_scheduled_thread, update_fire_at, cancel_to_draft,
+    cancel_scheduled_thread, update_fire_at, cancel_to_draft, retry_scheduled_thread,
     mark_thread_sending, mark_thread_sent, mark_thread_failed,
     # tracked threads / replies
     get_my_threads, get_reply_queue, get_unread_count, dismiss_reply,
@@ -174,17 +174,39 @@ async def queue_thread(request: Request):
     if fire_at <= 0:
         fire_at = int(time.time())
 
-    auto_bump        = bool(body.get("auto_bump", False))
-    bump_interval_h  = int(body.get("bump_interval_h", 12))
+    auto_bump = bool(body.get("auto_bump", False))
+    try:
+        bump_interval_h = int(body.get("bump_interval_h", 12))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "invalid bump interval"}, status_code=400)
+    bump_mode = str(body.get("bump_mode") or "timer").strip().lower()
+    bump_until_raw = body.get("bump_until")
+    try:
+        bump_until = int(bump_until_raw) if bump_until_raw else None
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "invalid bump end date"}, status_code=400)
     overflow_message   = str(body.get("overflow_message") or "").strip()
     overflow_message_2 = str(body.get("overflow_message_2") or "").strip()
-    if bump_interval_h < 6:  bump_interval_h = 6
-    if bump_interval_h > 24: bump_interval_h = 24
+    if bump_mode not in {"timer", "page1"}:
+        return JSONResponse({"error": "invalid bump mode"}, status_code=400)
+    if bump_interval_h not in {6, 8, 12, 16, 24, 48, 72, 120, 168}:
+        return JSONResponse({"error": "invalid bump interval"}, status_code=400)
+    if bump_until is not None and bump_until <= int(time.time()):
+        return JSONResponse({"error": "bump end date must be in the future"}, status_code=400)
+
+    if fire_at > int(time.time()) + 60 or auto_bump:
+        user = await asyncio.to_thread(db.get_user, uid) or {}
+        groups = {str(group) for group in (user.get("groups") or [])}
+        if not groups.intersection({"9", "28", "67"}):
+            return JSONResponse(
+                {"error": "This account cannot schedule threads or create bump jobs"},
+                status_code=403,
+            )
 
     row_id = await asyncio.to_thread(
         create_scheduled_thread,
         uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h,
-        overflow_message, overflow_message_2
+        bump_mode, bump_until, overflow_message, overflow_message_2
     )
     try:
         await asyncio.to_thread(touch_recent, uid, fid, forum_name, category_name)
@@ -197,7 +219,7 @@ async def queue_thread(request: Request):
         "id":        row_id,
         "scheduled": is_scheduled,
         "fire_at":   fire_at,
-        "message":   "Thread scheduled" if is_scheduled else "Thread queued — will post within 5 minutes",
+        "message":   "Thread scheduled" if is_scheduled else "Thread queued for the next publishing cycle",
     }
 
 
@@ -247,6 +269,16 @@ async def cancel_to_draft_route(request: Request, row_id: int):
         str(row.get("overflow_message_2") or ""),
     )
     return {"ok": True, "draft_id": draft_id}
+
+
+@router.post("/queue/{row_id}/retry")
+async def retry_queue_item(request: Request, row_id: int):
+    uid, err = _auth(request)
+    if err: return err
+    ok = await asyncio.to_thread(retry_scheduled_thread, row_id, uid, int(time.time()))
+    if not ok:
+        return JSONResponse({"error": "not found or not failed"}, status_code=404)
+    return {"ok": True}
 
 
 # ── Sent threads ───────────────────────────────────────────────────────────────
@@ -339,6 +371,18 @@ async def post_reply(request: Request):
 
     if not tid:     return JSONResponse({"error": "tid required"}, status_code=400)
     if not message: return JSONResponse({"error": "message required"}, status_code=400)
+    if not tid.isdigit() or int(tid) <= 0:
+        return JSONResponse({"error": "tid must be a positive integer"}, status_code=400)
+    if len(message) > 200_000:
+        return JSONResponse({"error": "message too long"}, status_code=400)
+    if message.lower().count("[img") + message.lower().count("[uimg") > 15:
+        return JSONResponse({"error": "HF allows at most 15 images in a reply"}, status_code=400)
+    owned = await asyncio.to_thread(get_my_threads, uid)
+    target = next((row for row in owned if str(row.get("tid")) == tid), None)
+    if not target:
+        return JSONResponse({"error": "Replies are limited to your tracked threads"}, status_code=403)
+    if target.get("closed"):
+        return JSONResponse({"error": "This thread is closed"}, status_code=409)
 
     token = await asyncio.to_thread(db.get_token, uid)
     if not token:
@@ -398,7 +442,8 @@ async def get_recents_route(request: Request):
 
 @router.post("/imagehost/upload")
 async def imagehost_upload(request: Request):
-    _auth(request)
+    _, err = _auth(request)
+    if err: return err
     import httpx as _httpx
 
     form       = await request.form()
@@ -406,7 +451,19 @@ async def imagehost_upload(request: Request):
     if not file_field:
         return JSONResponse({"error": "no file"}, status_code=400)
 
-    file_bytes = await file_field.read()
+    content_type = str(getattr(file_field, "content_type", "") or "").lower()
+    is_encrypted = str(form.get("e2e") or "").lower() == "true"
+    original_type = str(form.get("original_mime") or "").lower()
+    valid_encrypted_image = (
+        is_encrypted
+        and content_type == "application/octet-stream"
+        and original_type.startswith("image/")
+    )
+    if not content_type.startswith("image/") and not valid_encrypted_image:
+        return JSONResponse({"error": "image file required"}, status_code=415)
+    file_bytes = await file_field.read(10 * 1024 * 1024 + 1)
+    if len(file_bytes) > 10 * 1024 * 1024:
+        return JSONResponse({"error": "image exceeds 10 MB"}, status_code=413)
     fwd_data   = {k: v for k, v in form.items() if k != "file"}
 
     try:

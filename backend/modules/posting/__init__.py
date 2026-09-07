@@ -26,6 +26,7 @@ from .posting_db import (
     mark_thread_sending,
     mark_thread_sent,
     mark_thread_failed,
+    mark_thread_component,
     add_my_thread,
     get_all_tracked_threads,
     update_thread_last_checked,
@@ -122,34 +123,40 @@ async def fire_due_threads() -> None:
                      row_id, uid, tid, fid, subject[:40])
 
             # Overflow replies — post immediately after thread (up to 2 replies)
-            async def _post_overflow(msg, label):
+            async def _post_overflow(msg, label, component):
                 try:
                     r = await client.write({"posts": {"_tid": int(tid), "_message": msg}})
                     if r:
                         rp = r.get("posts") or {}
                         if isinstance(rp, list): rp = rp[0] if rp else {}
+                        await asyncio.to_thread(mark_thread_component, row_id, component, "published")
                         log.info("Posting: %s posted tid=%s pid=%s", label, tid, rp.get("pid","?"))
                     else:
+                        await asyncio.to_thread(mark_thread_component, row_id, component, "failed", "HF returned an empty response")
                         log.warning("Posting: %s empty response tid=%s", label, tid)
                 except Exception as oe:
+                    await asyncio.to_thread(mark_thread_component, row_id, component, "failed", str(oe))
                     log.warning("Posting: %s failed tid=%s: %s", label, tid, oe)
 
             overflow1 = str(row.get("overflow_message") or "").strip()
             overflow2 = str(row.get("overflow_message_2") or "").strip()
             if overflow1:
-                await _post_overflow(overflow1, "reply-1")
+                await _post_overflow(overflow1, "reply-1", "overflow_1")
             if overflow2:
-                await _post_overflow(overflow2, "reply-2")
+                await _post_overflow(overflow2, "reply-2", "overflow_2")
 
             # Auto-bump: add to bumper if requested
             if row.get("auto_bump"):
                 try:
                     from modules.autobump.autobump_db import add_job, _db as bump_db
                     interval_h = int(row.get("bump_interval_h") or 12)
+                    bump_mode = str(row.get("bump_mode") or "timer")
+                    bump_until = row.get("bump_until")
                     import time as _t2
-                    next_bump = int(_t2.time()) + interval_h * 3600
+                    next_bump = int(_t2.time()) if bump_mode == "page1" else int(_t2.time()) + interval_h * 3600
                     def _add_bump_job():
-                        job = add_job(uid, tid, interval_h, next_bump_override=next_bump)
+                        job = add_job(uid, tid, interval_h, mode=bump_mode,
+                                      next_bump_override=next_bump, bump_until=bump_until)
                         with bump_db() as conn:
                             conn.execute(
                                 "UPDATE bump_jobs SET thread_title=?, fid=? WHERE uid=? AND tid=?",
@@ -157,8 +164,10 @@ async def fire_due_threads() -> None:
                             )
                         return job
                     await asyncio.to_thread(_add_bump_job)
+                    await asyncio.to_thread(mark_thread_component, row_id, "bump", "created")
                     log.info("Posting: auto-added tid=%s to bumper (%dh) uid=%s", tid, interval_h, uid)
                 except Exception as be:
+                    await asyncio.to_thread(mark_thread_component, row_id, "bump", "failed", str(be))
                     log.warning("Posting: auto-bump add failed tid=%s: %s", tid, be)
 
         except Exception as e:

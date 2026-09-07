@@ -25,6 +25,12 @@ def init_posting_db() -> None:
                 error           TEXT,
                 auto_bump       TINYINT      NOT NULL DEFAULT 0,
                 bump_interval_h INT          NOT NULL DEFAULT 12,
+                bump_mode       VARCHAR(32)  NOT NULL DEFAULT 'timer',
+                bump_until      BIGINT,
+                overflow_1_status VARCHAR(32),
+                overflow_2_status VARCHAR(32),
+                bump_status       VARCHAR(32),
+                component_error   TEXT,
                 overflow_message MEDIUMTEXT,
                 overflow_message_2 MEDIUMTEXT,
                 created_at      BIGINT       NOT NULL DEFAULT 0,
@@ -57,6 +63,24 @@ def init_posting_db() -> None:
             conn.execute("ALTER TABLE scheduled_threads ADD COLUMN overflow_message_2 MEDIUMTEXT")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE scheduled_threads ADD COLUMN bump_mode VARCHAR(32) NOT NULL DEFAULT 'timer'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE scheduled_threads ADD COLUMN bump_until BIGINT")
+        except Exception:
+            pass
+        for column, definition in (
+            ("overflow_1_status", "VARCHAR(32)"),
+            ("overflow_2_status", "VARCHAR(32)"),
+            ("bump_status", "VARCHAR(32)"),
+            ("component_error", "TEXT"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE scheduled_threads ADD COLUMN {column} {definition}")
+            except Exception:
+                pass
         try:
             conn.execute("ALTER TABLE thread_drafts ADD COLUMN reply1 MEDIUMTEXT")
         except Exception:
@@ -204,14 +228,15 @@ def init_posting_db() -> None:
 def create_scheduled_thread(uid: str, fid: str, forum_name: str,
                              subject: str, message: str, fire_at: int,
                              auto_bump: bool = False, bump_interval_h: int = 12,
+                             bump_mode: str = "timer", bump_until: int | None = None,
                              overflow_message: str = "",
                              overflow_message_2: str = "") -> int:
     with _db() as conn:
         cur = conn.execute(
             """INSERT INTO scheduled_threads
-               (uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h, overflow_message, overflow_message_2)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (uid, fid, forum_name, subject, message, fire_at, int(auto_bump), bump_interval_h,
+               (uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h, bump_mode, bump_until, overflow_message, overflow_message_2)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (uid, fid, forum_name, subject, message, fire_at, int(auto_bump), bump_interval_h, bump_mode, bump_until,
              overflow_message or "", overflow_message_2 or "")
         )
         return cur.lastrowid
@@ -255,6 +280,22 @@ def mark_thread_sent(row_id: int, tid: str) -> None:
         conn.execute(
             "UPDATE scheduled_threads SET status='sent', sent_at=?, tid=? WHERE id=?",
             (int(time.time()), tid, row_id)
+        )
+
+
+def mark_thread_component(row_id: int, component: str, status: str, error: str = "") -> None:
+    columns = {
+        "overflow_1": "overflow_1_status",
+        "overflow_2": "overflow_2_status",
+        "bump": "bump_status",
+    }
+    column = columns.get(component)
+    if not column:
+        raise ValueError("unknown posting component")
+    with _db() as conn:
+        conn.execute(
+            f"UPDATE scheduled_threads SET {column}=?, component_error=? WHERE id=?",
+            (status, error[:500] or None, row_id),
         )
 
 
@@ -538,9 +579,15 @@ def save_draft(uid: str, fid: str, forum_name: str, subject: str, message: str) 
 def delete_draft(draft_id: int, uid: str) -> bool:
     """Owner-only hard delete."""
     with _db() as conn:
+        owned = conn.execute(
+            "SELECT id FROM thread_drafts WHERE id=? AND uid=?", (draft_id, uid)
+        ).fetchone()
+        if not owned:
+            return False
         conn.execute("DELETE FROM draft_collaborators WHERE draft_id=?", (draft_id,))
         conn.execute("DELETE FROM draft_edit_log WHERE draft_id=?", (draft_id,))
         conn.execute("DELETE FROM draft_presence WHERE draft_id=?", (draft_id,))
+        conn.execute("DELETE FROM draft_invite_tokens WHERE draft_id=?", (draft_id,))
         cur = conn.execute("DELETE FROM thread_drafts WHERE id=? AND uid=?", (draft_id, uid))
         return cur.rowcount > 0
 
@@ -548,12 +595,23 @@ def delete_draft(draft_id: int, uid: str) -> bool:
 def cancel_to_draft(row_id: int, uid: str) -> dict | None:
     with _db() as conn:
         row = conn.execute(
-            "SELECT * FROM scheduled_threads WHERE id=? AND uid=? AND status='pending'", (row_id, uid)
+            "SELECT * FROM scheduled_threads WHERE id=? AND uid=? AND status IN ('pending','failed')", (row_id, uid)
         ).fetchone()
         if not row:
             return None
         conn.execute("UPDATE scheduled_threads SET status='cancelled' WHERE id=?", (row_id,))
         return dict(row)
+
+
+def retry_scheduled_thread(row_id: int, uid: str, fire_at: int) -> bool:
+    with _db() as conn:
+        cur = conn.execute(
+            """UPDATE scheduled_threads
+               SET status='pending', fire_at=?, error=NULL
+               WHERE id=? AND uid=? AND status='failed'""",
+            (fire_at, row_id, uid),
+        )
+        return cur.rowcount > 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

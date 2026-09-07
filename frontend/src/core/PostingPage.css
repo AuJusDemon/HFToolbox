@@ -1,0 +1,232 @@
+.posting-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, var(--posting-editor-width, 54%)) 8px minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.posting-editor-pane {
+  min-width: 0;
+  padding-right: 10px;
+}
+
+.posting-workspace > .post-preview {
+  position: sticky;
+  top: 52px;
+  max-height: calc(100dvh - 86px);
+  overflow: auto;
+  margin-left: 10px;
+}
+
+.posting-divider {
+  align-self: stretch;
+  min-width: 8px;
+  min-height: 180px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--b2);
+  border-right: 1px solid transparent;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.posting-divider:hover,
+.posting-divider:focus-visible {
+  border-left-color: var(--acc);
+  background: rgba(0, 212, 180, .06);
+}
+
+.posting-mobile-switch {
+  display: none;
+}
+
+.posting-tabs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.posting-tabs .tab {
+  flex: 0 0 auto;
+  min-height: 42px;
+}
+
+.posting-forum-chip {
+  display: inline-grid;
+  grid-template-columns: auto 28px;
+  border: 1px solid var(--b2);
+  background: var(--s3);
+}
+
+.posting-forum-chip button {
+  min-height: 32px;
+  padding: 3px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--sub);
+  cursor: pointer;
+}
+
+.posting-forum-chip button + button {
+  padding: 0;
+  border-left: 1px solid var(--b2);
+  color: var(--dim);
+}
+
+.posting-inline-review {
+  display: grid;
+  min-width: min(100%, 360px);
+  padding: 8px 10px;
+  border-left: 2px solid var(--yellow);
+  color: var(--sub);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.posting-inline-review strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.posting-bump-options {
+  flex-basis: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(150px, 1fr));
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--b1);
+}
+
+.posting-bump-options label {
+  display: grid;
+  gap: 4px;
+  color: var(--dim);
+  font: 10px var(--mono);
+  text-transform: uppercase;
+}
+
+.posting-bump-options span {
+  grid-column: 1 / -1;
+  color: var(--sub);
+  font-size: 11px;
+}
+
+.posting-color-control {
+  position: relative;
+  display: inline-flex;
+}
+
+.posting-color-menu {
+  position: absolute;
+  z-index: 350;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 28px);
+  gap: 5px;
+  width: max-content;
+  padding: 8px;
+  border: 1px solid var(--b2);
+  background: var(--s2);
+}
+
+.posting-color-menu > button:not(.posting-custom-color) {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--b3);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.posting-color-label {
+  grid-column: 1 / -1;
+  color: var(--dim);
+  font: 9px var(--mono);
+  text-transform: uppercase;
+}
+
+.posting-color-hex {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+
+.posting-color-hex input,
+.posting-color-hex button {
+  min-height: 32px;
+  border: 1px solid var(--b2);
+  background: var(--s3);
+  color: var(--text);
+}
+
+.posting-color-hex input {
+  min-width: 0;
+  padding: 0 7px;
+  font-family: var(--mono);
+}
+
+.posting-color-menu .posting-custom-color {
+  grid-column: 1 / -1;
+  min-height: 32px;
+  border: 1px solid var(--b2);
+  background: var(--s3);
+  color: var(--text);
+  cursor: pointer;
+}
+
+@media (max-width: 720px) {
+  .posting-mobile-switch {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--b2);
+  }
+
+  .posting-mobile-switch button {
+    min-height: 44px;
+    border: 0;
+    background: var(--s3);
+    color: var(--sub);
+  }
+
+  .posting-mobile-switch button.on {
+    background: var(--hover);
+    color: var(--acc);
+  }
+
+  .posting-workspace {
+    display: block;
+  }
+
+  .posting-workspace.posting-mobile-editor > .post-preview,
+  .posting-workspace.posting-mobile-preview > .posting-editor-pane,
+  .posting-divider {
+    display: none;
+  }
+
+  .posting-editor-pane {
+    padding-right: 0;
+  }
+
+  .posting-workspace.posting-mobile-preview > .post-preview {
+    position: static;
+    max-height: none;
+    margin-left: 0;
+    animation: posting-preview-in 140ms ease-out;
+  }
+
+  .posting-bump-options {
+    grid-template-columns: 1fr;
+  }
+
+}
+
+@keyframes posting-preview-in {
+  from { transform: translateX(18px); opacity: .55; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .posting-workspace.posting-mobile-preview > .post-preview {
+    animation: none;
+  }
+}

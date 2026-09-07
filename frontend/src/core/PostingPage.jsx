@@ -3,6 +3,9 @@ import { useLocation } from 'react-router-dom'
 import { api } from './api.js'
 import { parseHfId } from './utils.js'
 import useStore from '../store.js'
+import { BUMP_EXPIRIES, BUMP_INTERVALS, BUMP_MODES, bumpMode } from './autobumpModes.js'
+import { applyTag, findTagAtSelection, imageTag, parseImageOption, removeTag, replaceRange, wrapSelection } from './postingEditor.js'
+import './PostingPage.css'
 
 // Load award.css immediately when this module loads — must be ready before picker opens
 if (typeof document !== 'undefined' && !document.getElementById('hf-award-css')) {
@@ -395,6 +398,27 @@ const GROUP_CSS_STYLES = {
   23: 'color:#999;font-weight:bold;font-family:system-ui;letter-spacing:.5px;text-shadow:0 1px 2px #000;',                                             // [APPROX] Mob
 }
 
+function safePreviewUrl(value) {
+  const decoded = String(value || '').replace(/&amp;/g, '&').trim()
+  try {
+    const url = new URL(decoded, window.location.origin)
+    return ['http:', 'https:'].includes(url.protocol) ? decoded.replace(/"/g, '&quot;') : '#'
+  } catch {
+    return '#'
+  }
+}
+
+function safeCssOption(value, kind) {
+  const option = String(value || '').trim()
+  const patterns = {
+    color: /^(#[0-9a-f]{3,8}|[a-z]{3,20})$/i,
+    size: /^(xx-small|x-small|small|medium|large|x-large|xx-large)$/i,
+    font: /^[a-z0-9 ,'-]{1,50}$/i,
+    align: /^(left|center|right|justify)$/i,
+  }
+  return patterns[kind]?.test(option) ? option.replace(/"/g, '&quot;') : ''
+}
+
 function bbToHtml(raw, userGroups) {
   if (!raw) return ''
   let s = raw
@@ -408,10 +432,10 @@ function bbToHtml(raw, userGroups) {
   s = s.replace(/\[i\]([\s\S]*?)\[\/i\]/gi,        '<em>$1</em>')
   s = s.replace(/\[u\]([\s\S]*?)\[\/u\]/gi,        '<u>$1</u>')
   s = s.replace(/\[s\]([\s\S]*?)\[\/s\]/gi,        '<s>$1</s>')
-  s = s.replace(/\[color=([^\]]+)\]([\s\S]*?)\[\/color\]/gi, '<span style="color:$1">$2</span>')
-  s = s.replace(/\[size=([^\]]+)\]([\s\S]*?)\[\/size\]/gi,   '<span style="font-size:$1">$2</span>')
-  s = s.replace(/\[font=([^\]]+)\]([\s\S]*?)\[\/font\]/gi,   '<span style="font-family:$1">$2</span>')
-  s = s.replace(/\[align=([^\]]+)\]([\s\S]*?)\[\/align\]/gi, '<div style="text-align:$1">$2</div>')
+  s = s.replace(/\[color=([^\]]+)\]([\s\S]*?)\[\/color\]/gi, (_, option, inner) => `<span style="color:${safeCssOption(option, 'color')}">${inner}</span>`)
+  s = s.replace(/\[size=([^\]]+)\]([\s\S]*?)\[\/size\]/gi, (_, option, inner) => `<span style="font-size:${safeCssOption(option, 'size')}">${inner}</span>`)
+  s = s.replace(/\[font=([^\]]+)\]([\s\S]*?)\[\/font\]/gi, (_, option, inner) => `<span style="font-family:${safeCssOption(option, 'font')}">${inner}</span>`)
+  s = s.replace(/\[align=([^\]]+)\]([\s\S]*?)\[\/align\]/gi, (_, option, inner) => `<div style="text-align:${safeCssOption(option, 'align')}">${inner}</div>`)
 
   // [css=N] group tag — renders with group style if user is in that group
   s = s.replace(/\[css=(\d+)\]([\s\S]*?)\[\/css\]/gi, (_, gid, inner) => {
@@ -426,11 +450,11 @@ function bbToHtml(raw, userGroups) {
   })
 
   // Images with dimensions: [img=WxH]url[/img]
-  s = s.replace(/\[img=(\d+)[x×](\d+)\]([\s\S]*?)\[\/img\]/gi,
-    '<img src="$3" alt="" style="width:$1px;height:$2px;max-width:100%;vertical-align:middle;margin:4px 0" />')
+  s = s.replace(/\[img=(\d+)[x×](\d+)\]([\s\S]*?)\[\/img\]/gi, (_, width, height, url) =>
+    `<img src="${safePreviewUrl(url)}" alt="" style="width:${width}px;height:${height}px;max-width:100%;vertical-align:middle;margin:4px 0" />`)
   // Images without dimensions
-  s = s.replace(/\[img\]([\s\S]*?)\[\/img\]/gi,
-    '<img src="$1" alt="" style="max-width:100%;vertical-align:middle;margin:4px 0" />')
+  s = s.replace(/\[img\]([\s\S]*?)\[\/img\]/gi, (_, url) =>
+    `<img src="${safePreviewUrl(url)}" alt="" style="max-width:100%;vertical-align:middle;margin:4px 0" />`)
   // [uimg] / [uimg=WxH] / [uimg=X%] — encrypted images from uploadimages.org
   // Emit a sentinel that BBPreview will swap for a UimgEmbed React component.
   // The key is in the URL fragment and never touches the server.
@@ -440,10 +464,10 @@ function bbToHtml(raw, userGroups) {
   s = s.replace(/\[uimg\]([\s\S]*?)\[\/uimg\]/gi,           (_, url)       => _uimgSentinel(url, ''))
 
   // URLs — HF link color
-  s = s.replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/gi,
-    '<a href="$1" target="_blank" rel="noreferrer" style="color:#6da9d2">$2</a>')
-  s = s.replace(/\[url\]([\s\S]*?)\[\/url\]/gi,
-    '<a href="$1" target="_blank" rel="noreferrer" style="color:#6da9d2">$1</a>')
+  s = s.replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/gi, (_, url, inner) =>
+    `<a href="${safePreviewUrl(url)}" target="_blank" rel="noreferrer" style="color:#6da9d2">${inner}</a>`)
+  s = s.replace(/\[url\]([\s\S]*?)\[\/url\]/gi, (_, url) =>
+    `<a href="${safePreviewUrl(url)}" target="_blank" rel="noreferrer" style="color:#6da9d2">${url}</a>`)
 
   // Code — matches HF .codeblock
   s = s.replace(/\[code\]([\s\S]*?)\[\/code\]/gi,
@@ -547,8 +571,21 @@ function ForumSelector({ value, onChange, recents, userGroups }) {
   const [openSub,   setOpenSub]   = useState(null)
   const [search,    setSearch]    = useState('')
   const [collapsed, setCollapsed] = useState(false)
+  const [pinned, setPinned] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('hft-posting-pinned-forums') || '[]').map(String) } catch { return [] }
+  })
 
   const selected = value ? ALL_FORUMS.find(f => String(f.fid) === String(value.fid)) : null
+  const pinnedForums = ALL_FORUMS.filter(f =>
+    pinned.includes(String(f.fid)) && (!f.requiredGroups || f.requiredGroups.some(g => (userGroups || []).includes(g)))
+  )
+
+  const togglePinned = fid => {
+    const id = String(fid)
+    const next = pinned.includes(id) ? pinned.filter(item => item !== id) : [id, ...pinned].slice(0, 8)
+    setPinned(next)
+    try { localStorage.setItem('hft-posting-pinned-forums', JSON.stringify(next)) } catch {}
+  }
 
   const searchResults = useMemo(() => {
     if (!search.trim()) return []
@@ -582,6 +619,8 @@ function ForumSelector({ value, onChange, recents, userGroups }) {
       <div style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 0' }}>
         <span style={{ fontSize:11, color:'var(--sub)' }}>Posting to:</span>
         <span style={{ fontSize:12, fontWeight:600, color:'var(--acc)' }}>{selected.name}</span>
+        <button type="button" className="btn btn-ghost" style={{ fontSize:10, padding:'2px 8px' }}
+          onClick={() => togglePinned(selected.fid)}>{pinned.includes(String(selected.fid)) ? 'Unpin' : 'Pin'}</button>
         <span style={{ fontSize:10, color:'var(--dim)' }}>({selected.catName} › {selected.subName})</span>
         <button className="btn btn-ghost" style={{ fontSize:10, padding:'2px 8px', marginLeft:'auto' }}
           onClick={() => setCollapsed(false)}>change</button>
@@ -594,6 +633,17 @@ function ForumSelector({ value, onChange, recents, userGroups }) {
 
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+      {pinnedForums.length > 0 && !search && (
+        <div>
+          <div style={{ fontSize:9, color:'var(--dim)', textTransform:'uppercase', letterSpacing:'.08em', fontFamily:'var(--mono)', marginBottom:5 }}>Pinned</div>
+          <div style={{ display:'flex', gap:5, flexWrap:'wrap' }}>
+            {pinnedForums.map(f => <div key={f.fid} className="posting-forum-chip">
+              <button type="button" onClick={() => pick(f, f.catName)}>{f.name}</button>
+              <button type="button" aria-label={`Unpin ${f.name}`} title="Unpin forum" onClick={() => togglePinned(f.fid)}>x</button>
+            </div>)}
+          </div>
+        </div>
+      )}
       {/* Recents */}
       {recents.length > 0 && !search && (
         <div>
@@ -652,7 +702,7 @@ function ForumSelector({ value, onChange, recents, userGroups }) {
                     color: on ? 'var(--acc)' : 'var(--sub)',
                     cursor:'pointer', transition:'all 130ms',
                   }}
-                >{cat.icon} {cat.name}</button>
+                >{cat.name}</button>
               )
             })}
           </div>
@@ -717,8 +767,8 @@ function Modal({ fields, onOk, onCancel }) {
       }} onClick={e => e.stopPropagation()}>
         {fields.map(f => (
           <div key={f.key} style={{ marginBottom:10 }}>
-            <div style={{ fontSize:10, color:'var(--dim)', textTransform:'uppercase', letterSpacing:'.07em', fontFamily:'var(--mono)', marginBottom:4 }}>{f.label}</div>
-            <input className="inp" style={{ width:'100%' }} placeholder={f.placeholder||''}
+            <label htmlFor={`posting-field-${f.key}`} style={{ display:'block', fontSize:10, color:'var(--dim)', textTransform:'uppercase', letterSpacing:'.07em', fontFamily:'var(--mono)', marginBottom:4 }}>{f.label}</label>
+            <input id={`posting-field-${f.key}`} className="inp" style={{ width:'100%' }} placeholder={f.placeholder||''}
               value={vals[f.key]}
               onChange={e => setVals(v => ({...v, [f.key]: e.target.value}))}
               onKeyDown={e => { if(e.key==='Enter') onOk(vals); if(e.key==='Escape') onCancel() }}
@@ -993,7 +1043,7 @@ function UimgEmbed({ url, size }) {
 // ── AutoTextarea — grows to fit content reliably for all change sources ─────
 // useEffect watches value so paste, toolbar inserts, and initial load all work.
 // overflow stays 'auto' so if somehow height calc is off, scroll still works.
-function AutoTextarea({ taRef, value, onChange, onFocus, onBlur, onSaveSelection }) {
+function AutoTextarea({ taRef, value, onChange, onFocus, onBlur, onSaveSelection, onKeyDown }) {
   useEffect(() => {
     const ta = taRef.current
     if (!ta) return
@@ -1022,6 +1072,7 @@ function AutoTextarea({ taRef, value, onChange, onFocus, onBlur, onSaveSelection
       onSelect={saveSel}
       onKeyUp={saveSel}
       onMouseUp={saveSel}
+      onKeyDown={onKeyDown}
       placeholder="Write your post in BBCode…"
       spellCheck={false}
     />
@@ -1136,15 +1187,19 @@ function AwardPicker({ onSelect, onClose }) {
 }
 
 
-export function BBEditor({ value, onChange, userGroups }) {
+export function BBEditor({ value, onChange, userGroups, onReview }) {
   const taRef        = useRef(null)
   const colorRef     = useRef(null)
-  const pendingColor = useRef(null)
   const selRef       = useRef({ start:0, end:0 })
   const [showAwardPicker, setShowAwardPicker] = useState(false)
   const [modal,      setModal]     = useState(null)
   const [uploading,  setUploading] = useState(false)
   const [uploadErr,  setUploadErr] = useState(null)
+  const [showColors, setShowColors] = useState(false)
+  const [customColor, setCustomColor] = useState('#39ff14')
+  const [recentColors, setRecentColors] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('hft-posting-colors') || '[]').slice(0, 5) } catch { return [] }
+  })
 
   const saveSelection = () => {
     const ta = taRef.current
@@ -1165,14 +1220,14 @@ export function BBEditor({ value, onChange, userGroups }) {
     const start     = startOverride ?? selRef.current.start
     const end       = endOverride   ?? selRef.current.end
     const savedScroll = selRef.current.scrollTop ?? ta.scrollTop
-    const sel   = value.slice(start, end)
-    const next  = value.slice(0, start) + open + sel + close + value.slice(end)
-    onChange(next)
+    const result = wrapSelection(value, { start, end }, open, close)
+    onChange(result.value)
     setTimeout(() => {
       ta.focus()
       ta.scrollTop      = savedScroll   // restore position — prevents jump to top
-      ta.selectionStart = start + open.length
-      ta.selectionEnd   = start + open.length + sel.length
+      ta.selectionStart = result.start
+      ta.selectionEnd   = result.end
+      selRef.current = { start: result.start, end: result.end, scrollTop: savedScroll }
     }, 0)
   }
 
@@ -1195,6 +1250,100 @@ export function BBEditor({ value, onChange, userGroups }) {
     setModal({ fields, onOk })
   }
   const closeModal = () => setModal(null)
+
+  const applyResult = result => {
+    const ta = taRef.current
+    if (!ta) return
+    const savedScroll = selRef.current.scrollTop ?? ta.scrollTop
+    onChange(result.value)
+    setTimeout(() => {
+      ta.focus()
+      ta.scrollTop = savedScroll
+      ta.selectionStart = result.start
+      ta.selectionEnd = result.end
+      selRef.current = { start:result.start, end:result.end, scrollTop:savedScroll }
+    }, 0)
+  }
+
+  const setTag = (tag, option = '', contentOverride) => {
+    applyResult(applyTag(value, selRef.current, tag, option, contentOverride))
+  }
+
+  const applyColor = color => {
+    if (!/^#[0-9a-f]{6}$/i.test(color || '')) return
+    setTag('color', color.toLowerCase())
+    const next = [color.toLowerCase(), ...recentColors.filter(item => item.toLowerCase() !== color.toLowerCase())].slice(0, 5)
+    setRecentColors(next)
+    try { localStorage.setItem('hft-posting-colors', JSON.stringify(next)) } catch {}
+    setShowColors(false)
+  }
+
+  const openLink = () => {
+    saveSelection()
+    const current = findTagAtSelection(value, selRef.current, new Set(['url']))
+    const selected = value.slice(selRef.current.start, selRef.current.end)
+    openModal([
+      { key:'url', label:'URL', placeholder:'https://...', default:current?.option || (!current && /^https?:\/\//i.test(selected) ? selected : '') },
+      { key:'text', label:'Link text', default:current?.content || (!/^https?:\/\//i.test(selected) ? selected : '') },
+    ], ({url,text}) => {
+      if (url?.trim()) setTag('url', url.trim(), text || url.trim())
+    })
+  }
+
+  const openImage = () => {
+    saveSelection()
+    const current = findTagAtSelection(value, selRef.current, new Set(['img']))
+    const dimensions = parseImageOption(current?.option)
+    openModal([
+      { key:'url', label:'Image URL', placeholder:'https://...', default:current?.content || '' },
+      { key:'width', label:'Width in pixels (optional)', placeholder:'Any positive width', default:dimensions.width },
+      { key:'height', label:'Height in pixels (optional)', placeholder:'Any positive height', default:dimensions.height },
+    ], ({url,width,height}) => {
+      const markup = imageTag(url, width, height)
+      if (!markup) return
+      const target = current || { start:selRef.current.start, end:selRef.current.end }
+      applyResult(replaceRange(value, target, markup, markup.length, markup.length))
+    })
+  }
+
+  const openQuote = () => {
+    saveSelection()
+    const current = findTagAtSelection(value, selRef.current, new Set(['quote']))
+    const author = String(current?.option || '').replace(/^['"]|['"].*$/g, '')
+    openModal([
+      { key:'author', label:'Author (optional)', placeholder:'Username', default:author },
+    ], ({author:nextAuthor}) => setTag('quote', nextAuthor?.trim() ? `"${nextAuthor.trim()}"` : ''))
+  }
+
+  const openSpoiler = () => {
+    saveSelection()
+    const current = findTagAtSelection(value, selRef.current, new Set(['spoiler']))
+    openModal([
+      { key:'label', label:'Spoiler label', placeholder:'Spoiler', default:current?.option || 'Spoiler' },
+    ], ({label}) => setTag('spoiler', label || 'Spoiler'))
+  }
+
+  const onEditorKeyDown = event => {
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      applyResult(replaceRange(value, selRef.current, '  ', 2, 2))
+      return
+    }
+    if (!(event.ctrlKey || event.metaKey)) return
+    if (event.key === 'Enter' && onReview) {
+      event.preventDefault()
+      onReview()
+      return
+    }
+    const command = { b:['[b]','[/b]'], i:['[i]','[/i]'], u:['[u]','[/u]'] }[event.key.toLowerCase()]
+    if (command) {
+      event.preventDefault()
+      wrap(...command)
+    } else if (event.key.toLowerCase() === 'k') {
+      event.preventDefault()
+      openLink()
+    }
+  }
 
   const uploadFile = async (file) => {
     setUploading(true)
@@ -1266,43 +1415,51 @@ export function BBEditor({ value, onChange, userGroups }) {
 
         <select style={selectStyle} title="Font name" defaultValue=""
           onMouseOver={hov} onMouseOut={unv}
-          onChange={e => { if (e.target.value) { wrap(`[font=${e.target.value}]`,'[/font]'); e.target.value='' } }}>
+          onChange={e => { if (e.target.value) { setTag('font', e.target.value); e.target.value='' } }}>
           <option value="" disabled>Font</option>
           {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
         </select>
 
         <select style={selectStyle} title="Font size" defaultValue=""
           onMouseOver={hov} onMouseOut={unv}
-          onChange={e => { if (e.target.value) { wrap(`[size=${e.target.value}]`,'[/size]'); e.target.value='' } }}>
+          onChange={e => { if (e.target.value) { setTag('size', e.target.value); e.target.value='' } }}>
           <option value="" disabled>Size</option>
           {SIZES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
         {/* Color — hidden input, only applies on blur (when picker closes) */}
         <div style={{ position:'relative', display:'inline-flex' }}>
-          <input ref={colorRef} type="color" defaultValue="#ff3333"
-            style={{ position:'absolute', opacity:0, width:'100%', height:'100%', cursor:'pointer', border:'none', padding:0 }}
-            onChange={e => { pendingColor.current = e.target.value }}
-            onBlur={() => {
-              if (pendingColor.current) {
-                const { start, end } = selRef.current
-                wrap(`[color=${pendingColor.current}]`, '[/color]', start, end)
-                pendingColor.current = null
-              }
-            }}
+          <input ref={colorRef} type="color" value={customColor}
+            style={{ position:'absolute', width:1, height:1, opacity:0, pointerEvents:'none' }}
+            onChange={e => { setCustomColor(e.target.value); applyColor(e.target.value) }}
           />
           <button type="button" title="Font color" style={btnStyle} onMouseOver={hov} onMouseOut={unv}
-            onClick={() => { saveSelection(); colorRef.current?.click() }}>
+            onClick={() => { saveSelection(); setShowColors(open => !open) }}>
             Color
           </button>
+          {showColors && <div className="posting-color-menu">
+            {recentColors.length > 0 && <div className="posting-color-label">Recent</div>}
+            {recentColors.map(color =>
+              <button key={`recent-${color}`} type="button" title={color} aria-label={`Use recent ${color}`} style={{background:color}}
+                onMouseDown={event => event.preventDefault()} onClick={() => applyColor(color)} />)}
+            <div className="posting-color-label">Palette</div>
+            {['#ffffff','#c0c0c0','#ff4d4d','#ff9f43','#ffd32a','#39ff14','#00d4b4','#4dabf7','#b197fc','#ff6bcb'].map(color =>
+              <button key={color} type="button" title={color} aria-label={`Use ${color}`} style={{background:color}}
+                onMouseDown={event => event.preventDefault()} onClick={() => applyColor(color)} />)}
+            <div className="posting-color-hex">
+              <input aria-label="Custom hex color" value={customColor} onChange={event => setCustomColor(event.target.value)} />
+              <button type="button" onMouseDown={event => event.preventDefault()} onClick={() => applyColor(customColor)}>Apply</button>
+            </div>
+            <button type="button" className="posting-custom-color" onMouseDown={event => event.preventDefault()}
+              onClick={() => colorRef.current?.click()}>Custom</button>
+            <button type="button" className="posting-custom-color" onMouseDown={event => event.preventDefault()}
+              onClick={() => { applyResult(removeTag(value, selRef.current, 'color')); setShowColors(false) }}>Remove color</button>
+          </div>}
         </div>
         <Sep/>
 
         <Btn label="HR"  title="Horizontal rule" onClick={() => insert('\n[hr]\n')} />
-        <Btn label="IMG" title="Insert image" onClick={() => openModal(
-          [{ key:'url', label:'Image URL', placeholder:'https://...' }],
-          ({url}) => { if(url) insert(`[img]${url}[/img]`) }
-        )} />
+        <Btn label="IMG" title="Insert or edit image" onClick={openImage} />
 
         {/* uimg Upload button */}
         {(() => {
@@ -1341,7 +1498,7 @@ export function BBEditor({ value, onChange, userGroups }) {
                 style={{ ...btnStyle, display:'flex', alignItems:'center', gap:4, color: uOpen?'var(--text)':'var(--sub)' }}
                 onMouseOver={hov} onMouseOut={unv}
                 onClick={() => { if (!uploading) setUOpen(o => !o) }}>
-                {uploading ? <><div className="spin" style={{width:10,height:10}}/> uploading…</> : '🔒 Upload Image'}
+                {uploading ? <><div className="spin" style={{width:10,height:10}}/> uploading…</> : 'Upload Image'}
               </button>
               {uOpen && (
                 <div style={{
@@ -1419,7 +1576,7 @@ export function BBEditor({ value, onChange, userGroups }) {
                 style={{ ...btnStyle, display:'flex', alignItems:'center', gap:4, color: eOpen?'var(--text)':'var(--sub)' }}
                 onMouseOver={hov} onMouseOut={unv}
                 onClick={() => setEOpen(o => !o)}>
-                🔒 Embed Image
+                Embed Image
               </button>
               {eOpen && (
                 <div style={{
@@ -1470,13 +1627,7 @@ export function BBEditor({ value, onChange, userGroups }) {
             </div>
           )
         })()}
-        <Btn label="URL" title="Insert link" onClick={() => openModal(
-          [
-            { key:'url',  label:'URL',              placeholder:'https://...' },
-            { key:'text', label:'Link text (optional)', placeholder:'' },
-          ],
-          ({url,text}) => { if(url) insert(text ? `[url=${url}]${text}[/url]` : `[url]${url}[/url]`) }
-        )} />
+        <Btn label="URL" title="Insert or edit link (Ctrl+K)" onClick={openLink} />
         <Btn label="YT" title="YouTube video" onClick={() => openModal(
           [{ key:'url', label:'YouTube URL', placeholder:'https://youtube.com/watch?v=...' }],
           ({url}) => { if(url) insert(`[video=youtube]${url}[/video]`) }
@@ -1498,11 +1649,8 @@ export function BBEditor({ value, onChange, userGroups }) {
 
         <Btn label="Code"    title="Code block" onClick={() => wrap('[code]','[/code]')} />
         <Btn label="PHP"     title="PHP block"  onClick={() => wrap('[php]','[/php]')} />
-        <Btn label="Quote"   title="Quote"      onClick={() => wrap('[quote]','[/quote]')} />
-        <Btn label="Spoiler" title="Spoiler"    onClick={() => openModal(
-          [{ key:'label', label:'Spoiler label', placeholder:'Spoiler', default:'Spoiler' }],
-          ({label}) => wrap(`[spoiler=${label||'Spoiler'}]`,'[/spoiler]', selRef.current.start, selRef.current.end)
-        )} />
+        <Btn label="Quote"   title="Insert or edit quote" onClick={openQuote} />
+        <Btn label="Spoiler" title="Insert or edit spoiler" onClick={openSpoiler} />
         <Sep/>
 
         {/* Contract — dropdown for all variants */}
@@ -1735,6 +1883,7 @@ export function BBEditor({ value, onChange, userGroups }) {
         value={value}
         onChange={onChange}
         onSaveSelection={saveSelection}
+        onKeyDown={onEditorKeyDown}
         onFocus={e => e.currentTarget.style.borderColor='var(--acc)'}
         onBlur={e => e.currentTarget.style.borderColor='var(--b2)'}
       />
@@ -1809,7 +1958,7 @@ export function BBPreview({ message, title, userGroups, compact }) {
   )
 
   return (
-    <div style={{
+    <div className="post-preview" style={{
       background: compact ? 'var(--s3)' : '#343434', border: compact ? 'none' : '1px solid #444', borderRadius: compact ? 0 : 4,
       overflow: 'hidden',
     }}>
@@ -1864,7 +2013,6 @@ function splitAtImage(bbcode, n) {
 }
 
 const FOOTER_TEXT = '[align=center][color=#2a5c2a]─────────────────────────────[/color]\n[color=#4a8a4a][size=small]posted via [/size][/color][size=small][b][color=#39ff14][url=https://hackforums.net/showthread.php?tid=6323484]HF.Toolbox[/url][/color][/b][/size][color=#4a8a4a][size=small] // hackforums dashboard[/size][/color]\n[color=#2a5c2a]─────────────────────────────[/color][/align]'
-const BUMP_INTERVALS = [6, 8, 12, 18, 24]
 
 // ── Image count badge ─────────────────────────────────────────────────────────
 function ImgBadge({ count }) {
@@ -1877,16 +2025,68 @@ function ImgBadge({ count }) {
   return (
     <span style={{ fontSize: 10, fontFamily: 'var(--mono)', padding: '2px 7px', borderRadius: 3,
       background: bg, color: col, border: `1px solid ${col}`, whiteSpace: 'nowrap' }}>
-      {over ? `⚠ ${count}/15 images — over limit` : `${count}/15 imgs`}
+      {over ? `${count}/15 images — over limit` : `${count}/15 imgs`}
     </span>
   )
 }
 
 // ── Section editor (Post 1 / Reply 1 / Reply 2) ───────────────────────────────
+function PostingWorkspace({ editor, preview, mobilePane = 'editor' }) {
+  const workspaceRef = useRef(null)
+  const [editorWidth, setEditorWidth] = useState(54)
+
+  const setWidthFromPointer = useCallback(clientX => {
+    const bounds = workspaceRef.current?.getBoundingClientRect()
+    if (!bounds?.width) return
+    const percent = ((clientX - bounds.left) / bounds.width) * 100
+    setEditorWidth(Math.max(32, Math.min(72, percent)))
+  }, [])
+
+  const beginResize = event => {
+    event.preventDefault()
+    setWidthFromPointer(event.clientX)
+    const move = moveEvent => setWidthFromPointer(moveEvent.clientX)
+    const stop = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', stop)
+      document.body.style.userSelect = ''
+    }
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', stop, { once:true })
+  }
+
+  return <div
+    ref={workspaceRef}
+    className={`posting-workspace posting-mobile-${mobilePane}`}
+    style={{ '--posting-editor-width': `${editorWidth}%` }}
+  >
+    <div className="posting-editor-pane">{editor}</div>
+    <button
+      type="button"
+      className="posting-divider"
+      role="separator"
+      aria-label="Resize editor and preview"
+      aria-orientation="vertical"
+      aria-valuemin="32"
+      aria-valuemax="72"
+      aria-valuenow={Math.round(editorWidth)}
+      onPointerDown={beginResize}
+      onKeyDown={event => {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+        event.preventDefault()
+        setEditorWidth(width => Math.max(32, Math.min(72, width + (event.key === 'ArrowRight' ? 2 : -2))))
+      }}
+    />
+    {preview}
+  </div>
+}
+
 function SectionEditor({ label, index, value, onChange, userGroups, preview, sideBySide, addFooter, title }) {
   const imgCount   = countImages(value)
   const previewMsg = index === 0 && addFooter ? value + '\n\n' + FOOTER_TEXT : value
   const prevTitle  = index === 0 ? title : `↩ Reply ${index}`
+  const [mobilePane, setMobilePane] = useState('editor')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1904,11 +2104,14 @@ function SectionEditor({ label, index, value, onChange, userGroups, preview, sid
           </span>
         )}
       </div>
+      {preview && sideBySide && <div className="posting-mobile-switch" role="tablist" aria-label={`${label} view`}>
+        <button type="button" className={mobilePane === 'editor' ? 'on' : ''} onClick={() => setMobilePane('editor')}>Editor</button>
+        <button type="button" className={mobilePane === 'preview' ? 'on' : ''} onClick={() => setMobilePane('preview')}>Preview</button>
+      </div>}
       {preview && sideBySide ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
-          <BBEditor value={value} onChange={onChange} userGroups={userGroups} />
-          <BBPreview message={previewMsg} title={prevTitle} userGroups={userGroups} />
-        </div>
+        <PostingWorkspace mobilePane={mobilePane}
+          editor={<BBEditor value={value} onChange={onChange} userGroups={userGroups} />}
+          preview={<BBPreview message={previewMsg} title={prevTitle} userGroups={userGroups} />} />
       ) : (
         <>
           <BBEditor value={value} onChange={onChange} userGroups={userGroups} />
@@ -1933,8 +2136,9 @@ function Composer({ onPosted }) {
   const [multiPostConfirm,  setMultiPostConfirm]  = useState(false) // pending confirm before turning off
   const [scheduled,    setScheduled]    = useState(false)
   const [fireAt,       setFireAt]       = useState(() => { const d=new Date(Date.now()+3600000); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })
-  const [preview,      setPreview]      = useState(false)
-  const [sideBySide,   setSideBySide]   = useState(false)
+  const [preview,      setPreview]      = useState(true)
+  const [sideBySide,   setSideBySide]   = useState(true)
+  const [mobilePane,   setMobilePane]   = useState('editor')
   const [submitting,   setSubmitting]   = useState(false)
   const [result,       setResult]       = useState(null)
   const [recents,      setRecents]      = useState([])
@@ -1942,6 +2146,9 @@ function Composer({ onPosted }) {
   const [addFooter,    setAddFooter]    = useState(false)
   const [autoBump,     setAutoBump]     = useState(false)
   const [bumpInterval, setBumpInterval] = useState(12)
+  const [bumpModeId,   setBumpModeId]   = useState('timer')
+  const [bumpExpiry,   setBumpExpiry]   = useState(0)
+  const [bumpFees,     setBumpFees]     = useState(null)
   const [savingDraft,  setSavingDraft]  = useState(false)
   const [draftFlash,   setDraftFlash]   = useState(null) // 'ok' | 'err'
 
@@ -1956,6 +2163,7 @@ function Composer({ onPosted }) {
       if (s.postingFooter !== undefined) setAddFooter(Boolean(s.postingFooter))
       if (s.postingBumpInterval) setBumpInterval(s.postingBumpInterval)
     }).catch(() => {})
+    api.get('/api/autobump/settings').then(setBumpFees).catch(() => setBumpFees(null))
   }, [])
 
   const toggleFooter = (val) => {
@@ -2026,6 +2234,10 @@ function Composer({ onPosted }) {
         fire_at,
         auto_bump:         autoBump,
         bump_interval_h:   bumpInterval,
+        bump_mode:         bumpModeId,
+        bump_until:        autoBump && bumpExpiry
+          ? Math.floor((scheduled ? new Date(fireAt).getTime() : Date.now()) / 1000) + bumpExpiry * 86400
+          : null,
       })
 
       setResult({
@@ -2035,7 +2247,7 @@ function Composer({ onPosted }) {
         tid: d.tid,
         scheduled: d.scheduled,
         fire_at: d.fire_at,
-        bumperAdded: autoBump && !d.scheduled,
+        bumperRequested: autoBump,
         replyCount: multiPost ? replyCount : 0,
       })
       if (!d.scheduled) {
@@ -2070,22 +2282,13 @@ function Composer({ onPosted }) {
         <input className="inp" style={{ width: '100%' }} placeholder="Thread title…"
           value={title} onChange={e => setTitle(e.target.value)} />
         <div style={{ fontSize: 9, color: 'var(--dim)', marginTop: 3 }}>
-          ⚠ Prefixes must be set directly on HackForums after posting.
+          Add a thread prefix on Hack Forums after publishing.
         </div>
       </div>
 
-      {/* Preview toggle row */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-        <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px' }}
-          onClick={() => { setPreview(!preview); if (preview) setSideBySide(false) }}>
-          {preview ? 'Hide Preview' : 'Preview'}
-        </button>
-        {preview && (
-          <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 8px' }}
-            onClick={() => setSideBySide(!sideBySide)}>
-            {sideBySide ? 'Stack' : 'Side by Side'}
-          </button>
-        )}
+      <div className="posting-mobile-switch" role="tablist" aria-label="Composer view">
+        <button type="button" className={mobilePane === 'editor' ? 'on' : ''} onClick={() => setMobilePane('editor')}>Editor</button>
+        <button type="button" className={mobilePane === 'preview' ? 'on' : ''} onClick={() => setMobilePane('preview')}>Preview</button>
       </div>
 
       {/* Content sections */}
@@ -2102,10 +2305,9 @@ function Composer({ onPosted }) {
             )}
           </div>
           {sideBySide ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
-              <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
-              <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />
-            </div>
+            <PostingWorkspace mobilePane={mobilePane}
+              editor={<BBEditor value={message} onChange={setMessage} userGroups={userGroups} onReview={() => canSubmit && sectionsOk && setConfirm(true)} />}
+              preview={<BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />} />
           ) : (
             <>
               <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
@@ -2157,7 +2359,7 @@ function Composer({ onPosted }) {
           {!sectionsOk && (
             <div style={{ fontSize: 11, color: 'var(--red)', padding: '7px 10px',
               background: 'rgba(232,82,82,.08)', border: '1px solid rgba(232,82,82,.2)', borderRadius: 4 }}>
-              ⚠ Each section must be 15 images or fewer before posting
+              Each section must contain 15 images or fewer before posting.
             </div>
           )}
         </div>
@@ -2263,15 +2465,13 @@ function Composer({ onPosted }) {
             <button className={`tog${autoBump ? '' : ' off'}`} onClick={() => setAutoBump(!autoBump)} />
             Add to Bump Service
           </label>
-          {autoBump && (
-            <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'var(--sub)' }}>
-              <span>Interval:</span>
-              <select className="inp" value={bumpInterval} onChange={e => setBumpInterval(Number(e.target.value))}
-                style={{ padding:'2px 6px', fontSize:11 }}>
-                {BUMP_INTERVALS.map(h => <option key={h} value={h}>{h}h</option>)}
-              </select>
-            </div>
-          )}
+          {autoBump && <div className="posting-bump-options">
+            <label>Mode<select className="inp" value={bumpModeId} onChange={event => setBumpModeId(event.target.value)}>{BUMP_MODES.map(mode => <option value={mode.id} key={mode.id}>{mode.label}</option>)}</select></label>
+            <label>{bumpMode(bumpModeId).intervalLabel}<select className="inp" value={bumpInterval} onChange={event => setBumpInterval(Number(event.target.value))}>{BUMP_INTERVALS.map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+            <label>End<select className="inp" value={bumpExpiry} onChange={event => setBumpExpiry(Number(event.target.value))}>{BUMP_EXPIRIES.map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+            <span>{bumpMode(bumpModeId).description}</span>
+            {bumpFees?.total_cost != null && <span>A confirmed bump uses {bumpFees.hf_fee} Bytes for the {bumpFees.hf_fee_tier || 'HF group'} fee and {bumpFees.service_fee} Bytes for the Toolbox service.</span>}
+          </div>}
         </div>
       </div>
 
@@ -2281,10 +2481,17 @@ function Composer({ onPosted }) {
           <button className="btn btn-acc" style={{ fontSize: 13 }}
             disabled={!canSubmit || !sectionsOk}
             onClick={() => setConfirm(true)}>
-            {scheduled ? 'Schedule Thread' : 'Post Thread'}
+            Review Thread
           </button>
         ) : (
           <>
+            <div className="posting-inline-review">
+              <strong>{scheduled ? 'Schedule this thread' : 'Queue this thread'}</strong>
+              <span>{forum?.name} / {title.trim()}</span>
+              <span>{scheduled ? new Date(fireAt).toLocaleString() : 'Next publishing cycle'}</span>
+              <span>{multiPost ? `${replyCount} additional replies` : 'No additional replies'}</span>
+              <span>{autoBump ? `${bumpMode(bumpModeId).label}, ${BUMP_INTERVALS.find(([value]) => value === bumpInterval)?.[1]}` : 'Bump Service not enabled'}</span>
+            </div>
             <button className="btn btn-acc" style={{ fontSize: 13 }} onClick={submit} disabled={submitting}>
               {submitting ? '…' : `Confirm ${scheduled ? 'Schedule' : 'Post'}`}
             </button>
@@ -2294,7 +2501,7 @@ function Composer({ onPosted }) {
         <button className="btn btn-ghost" style={{ fontSize: 12 }}
           disabled={savingDraft || (!title.trim() && !message.trim())}
           onClick={saveToDraft}>
-          {savingDraft ? 'Saving…' : '📋 Save as Draft'}
+          {savingDraft ? 'Saving…' : 'Save as Draft'}
         </button>
         {draftFlash === 'ok' && (
           <span style={{ fontSize: 11, color: 'var(--green)' }}>✓ Saved to Drafts</span>
@@ -2318,7 +2525,7 @@ function Composer({ onPosted }) {
             <>
               ✓ {result.message}
               {result.replyCount > 0 && ` — ${result.replyCount} repl${result.replyCount > 1 ? 'ies' : 'y'} will be posted immediately after`}
-              {result.bumperAdded && ' · Added to Bump Service'}
+              {result.bumperRequested && ' · Bump Service enrollment will run after publication'}
               {result.tid && (
                 <a href={`https://hackforums.net/showthread.php?tid=${result.tid}`}
                   target="_blank" rel="noreferrer"
@@ -2336,7 +2543,6 @@ function Composer({ onPosted }) {
   return (
     <div className="card">
       <div className="card-head">
-        <span className="card-icon">✍️</span>
         <span className="card-title">New Thread</span>
       </div>
       <div className="card-body">
@@ -2357,7 +2563,9 @@ function PostToThread() {
   const [selected,   setSelected] = useState(null)
   const [search,     setSearch]   = useState('')
   const [message,    setMessage]  = useState('')
-  const [preview,    setPreview]  = useState(false)
+  const [preview,    setPreview]  = useState(true)
+  const [mobilePane, setMobilePane] = useState('editor')
+  const [confirm,    setConfirm] = useState(false)
   const [addFooter,  setAddFooter]= useState(false)
   const [submitting, setSubmitting]= useState(false)
   const [result,     setResult]   = useState(null)
@@ -2389,6 +2597,7 @@ function PostToThread() {
       if (d?.ok || d?.pid) {
         setResult({ ok: true, pid: d.pid })
         setMessage('')
+        setConfirm(false)
       } else {
         setResult({ ok: false, error: d?.error || 'Post failed' })
       }
@@ -2485,18 +2694,19 @@ function PostToThread() {
               target="_blank" rel="noreferrer" style={{ fontSize: 11, color: 'var(--blue)', flexShrink: 0 }}>
               TID {selected.tid} →</a>
             <label style={{ fontSize: 11, color: 'var(--dim)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-              <input type="checkbox" checked={preview} onChange={e => setPreview(e.target.checked)} /> Preview
-            </label>
-            <label style={{ fontSize: 11, color: 'var(--dim)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
               <input type="checkbox" checked={addFooter} onChange={e => setAddFooter(e.target.checked)} /> Footer
             </label>
           </div>
 
+          <div className="posting-mobile-switch" role="tablist" aria-label="Reply composer view">
+            <button type="button" className={mobilePane === 'editor' ? 'on' : ''} onClick={() => setMobilePane('editor')}>Editor</button>
+            <button type="button" className={mobilePane === 'preview' ? 'on' : ''} onClick={() => setMobilePane('preview')}>Preview</button>
+          </div>
+
           {preview ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
-              <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
-              <BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title="" userGroups={userGroups} />
-            </div>
+            <PostingWorkspace mobilePane={mobilePane}
+              editor={<BBEditor value={message} onChange={setMessage} userGroups={userGroups} onReview={() => message.trim() && setConfirm(true)} />}
+              preview={<BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title="" userGroups={userGroups} />} />
           ) : (
             <BBEditor value={message} onChange={setMessage} userGroups={userGroups} />
           )}
@@ -2535,14 +2745,16 @@ function PostToThread() {
             <div style={{ padding: '8px 12px', borderRadius: 4, fontSize: 12,
               background: 'rgba(232,84,84,.06)', border: '1px solid rgba(232,84,84,.2)',
               color: 'var(--red)' }}>
-              🔒 This thread is closed — replies are disabled.
+              This thread is closed. Replies are disabled.
             </div>
           ) : (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn btn-p" disabled={!message.trim() || submitting}
-                onClick={submit} style={{ fontSize: 12 }}>
-                {submitting ? 'Posting…' : 'Post'}
-              </button>
+            <div style={{ display: 'flex', gap: 8, alignItems:'center', flexWrap:'wrap' }}>
+              {!confirm ? <button className="btn btn-p" disabled={!message.trim() || submitting}
+                onClick={() => setConfirm(true)} style={{ fontSize: 12 }}>Review Reply</button> : <>
+                <div className="posting-inline-review"><strong>Post this reply?</strong><span>{selected.title || selected.subject}</span><span>TID {selected.tid}</span></div>
+                <button className="btn btn-p" disabled={submitting} onClick={submit} style={{ fontSize: 12 }}>{submitting ? 'Posting...' : 'Confirm and post'}</button>
+                <button className="btn btn-ghost" onClick={() => setConfirm(false)}>Back to editor</button>
+              </>}
               {message && <button className="btn btn-ghost" style={{ fontSize: 12 }}
                 onClick={() => { setMessage(''); setResult(null) }}>Clear</button>}
             </div>
@@ -2626,12 +2838,12 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   const [editReplyCount,setEditReplyCount]= useState(1)
   const [editStashedReplies, setEditStashedReplies] = useState(null)
   const [editMultiPostConfirm, setEditMultiPostConfirm] = useState(false)
-  const [editSideBySide,setEditSideBySide]= useState(false)
+  const [editSideBySide,setEditSideBySide]= useState(true)
   const [editFid,      setEditFid]      = useState('')
   const [editForumName,setEditForumName]= useState('')
   const [editVersion,  setEditVersion]  = useState(1)
   const [editIsOwner,  setEditIsOwner]  = useState(false)
-  const [editPreview,  setEditPreview]  = useState(false)
+  const [editPreview,  setEditPreview]  = useState(true)
   const [editSaving,   setEditSaving]   = useState(false)
   const [editSaveFlash,setEditSaveFlash]= useState(null) // null | 'ok' | 'err'
   const [editSaveErr,  setEditSaveErr]  = useState(null)
@@ -3386,10 +3598,9 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
 
                   {!editMultiPost ? (
                     editPreview && editSideBySide ? (
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'start' }}>
-                        <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
-                        <BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />
-                      </div>
+                      <PostingWorkspace
+                        editor={<BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />}
+                        preview={<BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />} />
                     ) : (
                       <>
                         <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
@@ -3451,6 +3662,7 @@ function ReplyQueue({ onCountChange }) {
   const [preview,    setPreview]    = useState({})
   const [sending,    setSending]    = useState({})
   const [sendResult, setSendResult] = useState({})
+  const [confirming, setConfirming] = useState({})
 
   const load = useCallback(() => {
     api.get('/api/posting/replies')
@@ -3543,6 +3755,7 @@ function ReplyQueue({ onCountChange }) {
     try {
       await api.post('/api/posting/reply', { tid: String(tid), message: msg })
       setSendResult(s => ({...s,[tid]:{ok:true}}))
+      setConfirming(state => ({...state, [tid]:false}))
       const ids = multiSel[tid]
       const toDismiss = ids && ids.size > 0 ? threadReplies.filter(r => ids.has(r.id)) : threadReplies
       setTimeout(async () => {
@@ -3721,12 +3934,15 @@ function ReplyQueue({ onCountChange }) {
                       {sendResult[tid].ok ? '// reply posted' : `// error: ${sendResult[tid].error}`}
                     </div>
                   )}
-                  <div style={{display:'flex',gap:6,marginTop:8}}>
-                    <button className="btn btn-acc" style={{fontSize:11,padding:'4px 14px'}}
+                  <div style={{display:'flex',gap:6,marginTop:8,alignItems:'center',flexWrap:'wrap'}}>
+                    {!confirming[tid] ? <button className="btn btn-acc" style={{fontSize:11,padding:'4px 14px'}}
                       disabled={!(threadMsg[tid]||'').trim()||sending[tid]}
-                      onClick={() => sendReply(tid, tReplies)}>
-                      {sending[tid] ? '…' : 'Post Reply'}
-                    </button>
+                      onClick={() => setConfirming(state => ({...state,[tid]:true}))}>Review Reply</button> : <>
+                      <span style={{fontSize:11,color:'var(--sub)'}}>Post this reply to TID {tid}?</span>
+                      <button className="btn btn-acc" style={{fontSize:11,padding:'4px 14px'}} disabled={sending[tid]}
+                        onClick={() => sendReply(tid, tReplies)}>{sending[tid] ? 'Working...' : 'Confirm and post'}</button>
+                      <button className="btn btn-ghost" style={{fontSize:11}} onClick={() => setConfirming(state => ({...state,[tid]:false}))}>Back</button>
+                    </>}
                     <button className="btn btn-ghost" style={{fontSize:11}}
                       onClick={() => { setExpandedTid(null); setThreadMsg(m=>({...m,[tid]:''})) }}>
                       Cancel
@@ -3767,6 +3983,15 @@ function ScheduledQueue({ refresh }) {
     try {
       await api.delete(`/api/posting/queue/${id}/to-draft`)
       setQueue(q => q.filter(x => x.id !== id))
+    } catch {}
+  }
+
+  const retryFailed = async (id) => {
+    try {
+      await api.post(`/api/posting/queue/${id}/retry`, {})
+      setQueue(items => items.map(item => item.id === id
+        ? { ...item, status:'pending', error:null, fire_at:Math.floor(Date.now() / 1000) }
+        : item))
     } catch {}
   }
 
@@ -3818,6 +4043,10 @@ function ScheduledQueue({ refresh }) {
               {t.forum_name} · {t.status === 'sent' ? `Sent ${fmtTime(t.sent_at)}` : `Fires ${fmtTime(t.fire_at)}`}
               {t.tid && <> · <a href={`https://hackforums.net/showthread.php?tid=${t.tid}`} target="_blank" rel="noreferrer" style={{ color: 'var(--acc)' }}>View ↗</a></>}
               {t.error && <span style={{ color: 'var(--red)' }}> · {t.error}</span>}
+              {t.overflow_1_status && <span> · Reply 1: {t.overflow_1_status}</span>}
+              {t.overflow_2_status && <span> · Reply 2: {t.overflow_2_status}</span>}
+              {t.bump_status && <span> · Bump job: {t.bump_status}</span>}
+              {t.component_error && <span style={{ color:'var(--red)' }}> · {t.component_error}</span>}
             </div>
           </div>
           <span style={{
@@ -3844,6 +4073,11 @@ function ScheduledQueue({ refresh }) {
                 onClick={() => startEditTime(t)}>Edit time</button>
               <button className="btn btn-danger" style={{ fontSize:10, padding:'2px 7px' }}
                 onClick={() => cancelToDraft(t.id)}>Cancel → Draft</button>
+            </div>
+          ) : t.status === 'failed' ? (
+            <div style={{ display:'flex', gap:4 }}>
+              <button className="btn btn-acc" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => retryFailed(t.id)}>Retry now</button>
+              <button className="btn btn-ghost" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => cancelToDraft(t.id)}>Restore draft</button>
             </div>
           ) : null}
         </div>
@@ -3897,17 +4131,16 @@ export default function PostingPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div className="card">
         <div className="card-head">
-          <span className="card-icon">💬</span>
-          <span className="card-title">Thread & Post Management</span>
+          <span className="card-title">Posting</span>
         </div>
 
-        <div style={{ display: 'flex', padding: '0 13px', borderBottom: '1px solid var(--b1)' }}>
+        <div className="posting-tabs" style={{ display: 'flex', padding: '0 13px', borderBottom: '1px solid var(--b1)' }}>
           {[
             ['compose',    'New Thread',      null],
-            ['postthread', 'New Post',         null],
+            ['postthread', 'Reply to Thread',  null],
             ['drafts',     'Drafts',          null],
-            ['scheduled',  upgraded ? 'Scheduled' : '🔒 Scheduled', null],
-            ['replies',    'Replies',         replyCount],
+            ['scheduled',  'Scheduled', null],
+            ['replies',    'Incoming Replies', replyCount],
           ].map(([key, label, badge]) => (
             <button key={key} className={`tab${tab === key ? ' on' : ''}`} onClick={() => setTab(key)}
               onPointerEnter={() => prepareTab(key)} onPointerDown={() => prepareTab(key)} onTouchStart={() => prepareTab(key)} onFocus={() => prepareTab(key)}

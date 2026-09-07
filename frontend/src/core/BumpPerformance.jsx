@@ -1,5 +1,6 @@
 import React from 'react'
 import './BumpPerformance.css'
+import { BUMP_INTERVALS, BUMP_MODES, bumpMode } from './autobumpModes.js'
 
 const n = value => value == null ? 'Unknown' : Number(value).toLocaleString()
 const stamp = value => value ? new Date(value * 1000).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : 'Unknown'
@@ -79,8 +80,8 @@ export function JobScheduleEditor({ job, onSave, onCancel, saving, error }) {
   return <section className="bpr-editor" aria-label="Edit schedule">
     <div className="bpr-identity"><span>Thread identity</span><strong>{job.thread_title || `Thread ${job.tid}`}</strong><small>TID {job.tid}{job.fid ? ` / FID ${job.fid}` : ''} / cannot be changed here</small></div>
     <div className="bpr-editor-fields">
-      <label>Mode<select value={draft.mode} onChange={e=>setDraft({...draft,mode:e.target.value})}><option value="timer">Timer</option><option value="page1">Page 1 Watch</option></select></label>
-      <label>Interval<select value={draft.interval_h} onChange={e=>setDraft({...draft,interval_h:Number(e.target.value)})}>{[6,8,12,16,24,48,72,120,168].map(v=><option key={v} value={v}>{v} hours</option>)}</select></label>
+      <label>Mode<select value={draft.mode} onChange={e=>setDraft({...draft,mode:e.target.value})}>{BUMP_MODES.map(mode=><option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label>
+      <label>{bumpMode(draft.mode).intervalLabel}<select value={draft.interval_h} onChange={e=>setDraft({...draft,interval_h:Number(e.target.value)})}>{BUMP_INTERVALS.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
       <label>End date<input type="date" min={new Date().toISOString().slice(0,10)} value={draft.bump_until} onChange={e=>setDraft({...draft,bump_until:e.target.value})} /></label>
       <div className="bpr-state">
         <span>Scheduler state</span>
