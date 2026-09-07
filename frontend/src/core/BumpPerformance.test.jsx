@@ -27,4 +27,14 @@ describe('shared bump performance components', () => {
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({mode:'page1',interval_h:12,enabled:true}))
     expect(onSave.mock.calls[0][0]).not.toHaveProperty('tid')
   })
+
+  it('uses a compact accessible switch instead of a native checkbox', () => {
+    render(<JobScheduleEditor job={{tid:'6319077',fid:'107',thread_title:'Sales thread',mode:'timer',interval_h:12,enabled:true,bump_until:null}} onSave={()=>{}} onCancel={()=>{}} />)
+    const toggle = screen.getByRole('switch', { name:'Scheduler enabled' })
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    expect(toggle).toHaveTextContent('Paused')
+  })
 })

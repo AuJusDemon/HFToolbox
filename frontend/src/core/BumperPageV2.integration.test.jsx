@@ -61,6 +61,64 @@ describe('Bump Service page interactions', () => {
     expect(screen.getByText('pause failed')).toBeInTheDocument()
   })
 
+  it('does not reload performance when operational job state changes', async () => {
+    renderPage()
+    await screen.findByText('Estimated spend')
+    const performanceCalls = () => apiMock.get.mock.calls.filter(([path]) => path.includes('/performance?')).length
+    expect(performanceCalls()).toBe(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Pause job' }))
+    await waitFor(() => expect(apiMock.patch).toHaveBeenCalled())
+    expect(performanceCalls()).toBe(1)
+    expect(screen.getByText('Estimated spend')).toBeInTheDocument()
+  })
+
+  it('keeps the current report mounted while a new range loads', async () => {
+    let resolveRange
+    let performanceCalls = 0
+    apiMock.get.mockImplementation(path => {
+      if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
+      if (path === '/api/autobump/log') return Promise.resolve({ log })
+      if (path === '/api/autobump/settings') return Promise.resolve(fees)
+      if (path.includes('/performance?')) {
+        performanceCalls += 1
+        if (performanceCalls === 1) return Promise.resolve(stats)
+        return new Promise(resolve => { resolveRange = resolve })
+      }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderPage()
+    await screen.findByText('Estimated spend')
+    fireEvent.click(screen.getByRole('button', { name: '7 days' }))
+    expect(screen.getByText('Estimated spend')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Updating report')
+    resolveRange({ ...stats, range:{key:'7d'} })
+    await waitFor(() => expect(screen.getByRole('status')).not.toHaveTextContent('Updating report'))
+  })
+
+  it('keeps the current report mounted while pagination loads', async () => {
+    let resolvePage
+    let performanceCalls = 0
+    const firstPage = { ...stats, activity:[{kind:'quiet_group',count:2,start_ts:1,end_ts:2,summary:'No measured movement'}], pagination:{page:1,total_pages:2,has_previous:false,has_next:true} }
+    apiMock.get.mockImplementation(path => {
+      if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
+      if (path === '/api/autobump/log') return Promise.resolve({ log })
+      if (path === '/api/autobump/settings') return Promise.resolve(fees)
+      if (path.includes('/performance?')) {
+        performanceCalls += 1
+        if (performanceCalls === 1) return Promise.resolve(firstPage)
+        return new Promise(resolve => { resolvePage = resolve })
+      }
+      throw new Error(`Unexpected GET ${path}`)
+    })
+    renderPage()
+    await screen.findByText('2 successful bumps')
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByText('2 successful bumps')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Updating report')
+    resolvePage({ ...stats, pagination:{page:2,total_pages:2,has_previous:true,has_next:false} })
+    await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeInTheDocument())
+  })
+
   it('requires inline removal confirmation before deleting', async () => {
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Remove job' }))

@@ -10,6 +10,7 @@ const fees = { weekly_budget:1000, bytes_this_week:220, remaining_budget:780, bu
 const stats = { tid:'6319077',title:'Spotify Premium Family Plan',range:{key:'30d'},freshness:{thread_observed_at:now-60},current_period:{started_at:now-43200,replies_since_latest_bump:{value:2,source:'observed',available:true},contracts_opened:{value:1,source:'observed',available:true}},metrics:{successful_bumps:{value:18,source:'observed',available:true},skips:{value:5,source:'observed',available:true},failures:{value:0,source:'observed',available:true},tracked_replies:{value:12,source:'observed',available:true},contracts_opened:{value:23,source:'observed',available:true},contracts_completed:{value:8,source:'observed',available:true},contracts_per_bump:{value:1.28,source:'derived',available:true},average_reply_gain:{value:1.4,source:'derived',available:true},reply_period_rate:{value:40,source:'derived',available:true},estimated_bytes_spent:{value:1980,source:'estimated',available:true}},fees:{hf_fee:100,service_fee:10,total_cost:110,source:'estimated'},activity:[{kind:'quiet_group',count:17,start_ts:now-864000,end_ts:now-86400,summary:'No replies or contract activity'}],attempts:[attempt],pagination:{page:1,page_size:5,total_items:1,total_pages:1,has_previous:false,has_next:false} }
 
 async function mockBumper(page, state = 'populated') {
+  let performanceRequests = 0
   await page.route('**/*', async route => {
     const url = new URL(route.request().url())
     if (url.hostname.includes('google')) return route.abort()
@@ -30,7 +31,11 @@ async function mockBumper(page, state = 'populated') {
     }
     if (url.pathname === '/api/autobump/log') return route.fulfill({ json:{ log:[attempt] } })
     if (url.pathname === '/api/autobump/settings') return route.fulfill({ json:state === 'budget' ? { ...fees, weekly_budget:250, bytes_this_week:220, remaining_budget:30 } : fees })
-    if (/\/api\/autobump\/jobs\/\d+\/performance/.test(url.pathname)) return route.fulfill({ json:{...stats,tid:url.pathname.split('/')[4]} })
+    if (/\/api\/autobump\/jobs\/\d+\/performance/.test(url.pathname)) {
+      performanceRequests += 1
+      if (state === 'slow-performance' && performanceRequests > 1) await new Promise(resolve => setTimeout(resolve, 800))
+      return route.fulfill({ json:{...stats,tid:url.pathname.split('/')[4]} })
+    }
     if (/\/api\/autobump\/jobs\/\d+\/schedule/.test(url.pathname)) return route.fulfill({ json:{ok:true,next_bump:now+1800,changes:['mode changed']} })
     if (url.pathname.startsWith('/api/')) return route.fulfill({ json:{} })
     return route.continue()
@@ -85,7 +90,25 @@ test('deep-linked job can open the immutable schedule editor', async ({ page }) 
   await expect(page.getByRole('heading',{name:'Spotify Premium Family Plan'})).toBeVisible()
   await page.getByRole('button',{name:'Edit schedule'}).click()
   await expect(page.getByText(/cannot be changed here/)).toBeVisible()
+  const schedulerSwitch = page.getByRole('switch', { name:'Scheduler enabled' })
+  await expect(schedulerSwitch).toHaveAttribute('aria-checked', 'true')
+  expect((await schedulerSwitch.boundingBox()).height).toBeLessThanOrEqual(48)
+  await page.screenshot({ path:'test-results/bumper-schedule-editor.png', fullPage:true })
   await page.locator('.bpr-editor-fields').getByLabel('Mode').selectOption('page1')
   await expect(page.getByText('Next check')).toBeVisible()
   await page.getByRole('button',{name:'Save schedule'}).click()
+})
+
+test('range changes keep the report mounted and do not navigate', async ({ page }) => {
+  await mockBumper(page, 'slow-performance')
+  await page.goto('/dashboard/bumper?tid=6319077')
+  const report = page.getByLabel('Bump performance')
+  await expect(report).toBeVisible()
+  await report.evaluate(node => { node.dataset.mountMarker = 'preserved' })
+  const originalUrl = page.url()
+  await page.getByRole('button', { name:'7 days' }).click()
+  await expect(page.getByText('Updating report...')).toBeVisible()
+  await expect(page.locator('[data-mount-marker="preserved"]')).toBeVisible()
+  expect(page.url()).toBe(originalUrl)
+  await expect(page.getByText('Updating report...')).not.toBeVisible()
 })

@@ -7,7 +7,7 @@ const stamp = value => value ? new Date(value * 1000).toLocaleString(undefined, 
 export function BumpRangeControl({ value, onChange }) {
   return <div className="bpr-ranges" aria-label="Performance range">
     {[['7d','7 days'],['30d','30 days'],['all','All time']].map(([key,label]) =>
-      <button key={key} className={value === key ? 'is-active' : ''} onClick={() => onChange(key)}>{label}</button>
+      <button type="button" key={key} className={value === key ? 'is-active' : ''} onClick={() => onChange(key)}>{label}</button>
     )}
   </div>
 }
@@ -45,7 +45,7 @@ export function BumpActivityTimeline({ data, onPage }) {
       ? <div className="bpr-quiet" key={`quiet-${row.start_ts}-${index}`}><strong>{row.count} successful bump{row.count === 1 ? '' : 's'}</strong><span>{row.summary}</span><small>{stamp(row.start_ts)} to {stamp(row.end_ts)}</small></div>
       : <div className="bpr-event" key={`period-${row.bump_ts}-${index}`}><div><strong>{row.is_open ? 'Current period' : stamp(row.bump_ts)}</strong><small>{row.is_open ? 'In progress' : 'Completed period'}</small></div><span>{row.reply_gain == null ? 'Reply gain unknown' : `${row.reply_gain >= 0 ? '+' : ''}${row.reply_gain} replies`}</span><span>{row.contracts_opened || 0} opened / {row.contracts_completed || 0} completed</span><span>{row.period_skips?.length || 0} scheduler events</span></div>
     )}
-    {(paging.has_previous || paging.has_next) && <div className="bpr-pages"><button disabled={!paging.has_previous} onClick={() => onPage(paging.page - 1)}>Previous</button><button disabled={!paging.has_next} onClick={() => onPage(paging.page + 1)}>Next</button></div>}
+    {(paging.has_previous || paging.has_next) && <div className="bpr-pages"><button type="button" disabled={!paging.has_previous} onClick={() => onPage(paging.page - 1)}>Previous</button><button type="button" disabled={!paging.has_next} onClick={() => onPage(paging.page + 1)}>Next</button></div>}
   </section>
 }
 
@@ -74,10 +74,16 @@ export function JobScheduleEditor({ job, onSave, onCancel, saving, error }) {
       <label>Mode<select value={draft.mode} onChange={e=>setDraft({...draft,mode:e.target.value})}><option value="timer">Timer</option><option value="page1">Page 1 Watch</option></select></label>
       <label>Interval<select value={draft.interval_h} onChange={e=>setDraft({...draft,interval_h:Number(e.target.value)})}>{[6,8,12,16,24,48,72,120,168].map(v=><option key={v} value={v}>{v} hours</option>)}</select></label>
       <label>End date<input type="date" min={new Date().toISOString().slice(0,10)} value={draft.bump_until} onChange={e=>setDraft({...draft,bump_until:e.target.value})} /></label>
-      <label className="bpr-state"><input type="checkbox" checked={draft.enabled} onChange={e=>setDraft({...draft,enabled:e.target.checked})} /> Scheduler enabled</label>
+      <div className="bpr-state">
+        <span>Scheduler state</span>
+        <button type="button" role="switch" aria-label="Scheduler enabled" aria-checked={draft.enabled} className="bpr-toggle" onClick={()=>setDraft({...draft,enabled:!draft.enabled})}>
+          <i aria-hidden="true" />
+          <strong>{draft.enabled ? 'Enabled' : 'Paused'}</strong>
+        </button>
+      </div>
     </div>
     <div className="bpr-change-list"><span>CHANGE SUMMARY</span>{changes.length ? <>{changes.map(([label,from,to])=><div key={label}><b>{label}</b><span>{from}</span><i>to</i><strong>{to}</strong></div>)}<div><b>Next check</b><span>{stamp(nextTs)}</span><i /><strong>{draft.enabled ? 'scheduled after save' : 'held while paused'}</strong></div></> : <p>No schedule changes.</p>}</div>
     {error && <p className="bpr-error" role="alert">{error}</p>}
-    <div className="bpr-editor-actions"><button onClick={onCancel}>Cancel</button><button className="is-primary" disabled={saving||!changes.length} onClick={()=>onSave({...draft,bump_until:endTs})}>{saving ? 'Saving...' : 'Save schedule'}</button></div>
+    <div className="bpr-editor-actions"><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="is-primary" disabled={saving||!changes.length} onClick={()=>onSave({...draft,bump_until:endTs})}>{saving ? 'Saving...' : 'Save schedule'}</button></div>
   </section>
 }
