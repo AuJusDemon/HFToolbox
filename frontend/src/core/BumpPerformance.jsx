@@ -1,6 +1,6 @@
 import React from 'react'
 import './BumpPerformance.css'
-import { BUMP_INTERVALS, BUMP_MODES, bumpMode } from './autobumpModes.js'
+import AutoBumpScheduleForm, { scheduleFromJob, schedulePayload } from './AutoBumpScheduleForm.jsx'
 
 const n = value => value == null ? 'Unknown' : Number(value).toLocaleString()
 const stamp = value => value ? new Date(value * 1000).toLocaleString(undefined, { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : 'Unknown'
@@ -60,39 +60,24 @@ export function BumpActivityTimeline({ data, onPage }) {
 
 export function BumpAttempts({ attempts = [], fees }) {
   return <section className="bpr-attempts"><div className="bpr-section-head"><div><span>RECENT ATTEMPTS</span><strong>Latest five for this thread</strong></div></div>
-    {!attempts.length ? <p className="bpr-empty">No attempts in this range.</p> : attempts.map(row => <div className="bpr-attempt" key={row.id}><span>{stamp(row.ts)}</span><strong className={`is-${row.action}`}>{row.action}</strong><span>{row.reason || 'No additional detail'}</span><small>{row.action === 'bumped' ? `${n(fees?.hf_fee)} HF ${fees?.hf_fee_tier || 'group'} + ${n(fees?.service_fee)} service Bytes estimated` : 'No successful-bump charge'}</small></div>)}
+    {!attempts.length ? <p className="bpr-empty">No attempts in this range.</p> : attempts.map(row => <div className="bpr-attempt" key={row.id}><span>{stamp(row.ts)}</span><strong className={`is-${row.action}`}>{row.action}</strong><span>{row.reason || 'No additional detail'}</span><small>{row.action === 'bumped' ? `${n(row.hf_fee ?? fees?.hf_fee)} HF + ${n(row.service_fee ?? fees?.service_fee)} service Bytes${row.total_cost != null ? ` / ${n(row.total_cost)} total recorded` : ' / legacy estimate'}` : 'No successful-bump charge'}</small></div>)}
   </section>
 }
 
 export function JobScheduleEditor({ job, onSave, onCancel, saving, error }) {
-  const toInput = ts => ts ? new Date(ts * 1000).toISOString().slice(0,10) : ''
-  const [draft,setDraft] = React.useState({mode:job.mode,interval_h:Number(job.interval_h),bump_until:toInput(job.bump_until),enabled:Boolean(job.enabled)})
-  const originalDate = toInput(job.bump_until)
-  const endTs = draft.bump_until === originalDate ? (job.bump_until || null) : draft.bump_until ? Math.floor(new Date(`${draft.bump_until}T23:59:59`).getTime()/1000) : null
-  const now = Math.floor(Date.now()/1000)
-  const nextTs = draft.mode === 'page1' ? now + 1800 : job.lastpost_ts ? Math.max(now,Number(job.lastpost_ts)+Number(draft.interval_h)*3600) : now+Number(draft.interval_h)*3600
-  const changes = [
-    draft.mode !== job.mode && ['Mode',job.mode === 'page1' ? 'Page 1 Watch' : 'Timer',draft.mode === 'page1' ? 'Page 1 Watch' : 'Timer'],
-    Number(draft.interval_h) !== Number(job.interval_h) && ['Interval',`${job.interval_h} hours`,`${draft.interval_h} hours`],
-    endTs !== (job.bump_until || null) && ['End date',job.bump_until ? stamp(job.bump_until) : 'No end date',endTs ? stamp(endTs) : 'No end date'],
-    draft.enabled !== Boolean(job.enabled) && ['State',job.enabled ? 'Enabled' : 'Paused',draft.enabled ? 'Enabled' : 'Paused'],
-  ].filter(Boolean)
+  const original = React.useMemo(() => scheduleFromJob(job), [job])
+  const [draft,setDraft] = React.useState(original)
+  const changed = job.mode === 'page1' || JSON.stringify(draft) !== JSON.stringify(original)
   return <section className="bpr-editor" aria-label="Edit schedule">
     <div className="bpr-identity"><span>Thread identity</span><strong>{job.thread_title || `Thread ${job.tid}`}</strong><small>TID {job.tid}{job.fid ? ` / FID ${job.fid}` : ''} / cannot be changed here</small></div>
-    <div className="bpr-editor-fields">
-      <label>Mode<select value={draft.mode} onChange={e=>setDraft({...draft,mode:e.target.value})}>{BUMP_MODES.map(mode=><option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label>
-      <label>{bumpMode(draft.mode).intervalLabel}<select value={draft.interval_h} onChange={e=>setDraft({...draft,interval_h:Number(e.target.value)})}>{BUMP_INTERVALS.map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
-      <label>End date<input type="date" min={new Date().toISOString().slice(0,10)} value={draft.bump_until} onChange={e=>setDraft({...draft,bump_until:e.target.value})} /></label>
-      <div className="bpr-state">
-        <span>Scheduler state</span>
-        <button type="button" role="switch" aria-label="Scheduler enabled" aria-checked={draft.enabled} className="bpr-toggle" onClick={()=>setDraft({...draft,enabled:!draft.enabled})}>
-          <i aria-hidden="true" />
-          <strong>{draft.enabled ? 'Enabled' : 'Paused'}</strong>
-        </button>
-      </div>
+    {job.mode === 'page1' && <p className="bpr-error" role="alert">Page 1 Watch has been retired. Choose and save a replacement schedule to resume this job.</p>}
+    <AutoBumpScheduleForm value={draft} onChange={setDraft} idPrefix={`job-${job.tid}`} />
+    <div className="bpr-state">
+      <span>Scheduler state</span>
+      <button type="button" role="switch" aria-label="Scheduler enabled" aria-checked={draft.enabled} className="bpr-toggle" onClick={()=>setDraft({...draft,enabled:!draft.enabled})}><i aria-hidden="true" /><strong>{draft.enabled ? 'Enabled' : 'Paused'}</strong></button>
     </div>
-    <div className="bpr-change-list"><span>CHANGE SUMMARY</span>{changes.length ? <>{changes.map(([label,from,to])=><div key={label}><b>{label}</b><span>{from}</span><i>to</i><strong>{to}</strong></div>)}<div><b>Next check</b><span>{stamp(nextTs)}</span><i /><strong>{draft.enabled ? 'scheduled after save' : 'held while paused'}</strong></div></> : <p>No schedule changes.</p>}</div>
+    <div className="bpr-change-list"><span>CHANGE SUMMARY</span><p>{changed ? 'The backend will validate the schedule and return the next calculated opportunity after save.' : 'No schedule changes.'}</p></div>
     {error && <p className="bpr-error" role="alert">{error}</p>}
-    <div className="bpr-editor-actions"><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="is-primary" disabled={saving||!changes.length} onClick={()=>onSave({...draft,bump_until:endTs})}>{saving ? 'Saving...' : 'Save schedule'}</button></div>
+    <div className="bpr-editor-actions"><button type="button" onClick={onCancel}>Cancel</button><button type="button" className="is-primary" disabled={saving||!changed} onClick={()=>onSave({...schedulePayload(draft),enabled:draft.enabled})}>{saving ? 'Saving...' : 'Save schedule'}</button></div>
   </section>
 }

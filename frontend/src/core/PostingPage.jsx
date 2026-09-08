@@ -3,7 +3,8 @@ import { useLocation } from 'react-router-dom'
 import { api } from './api.js'
 import { parseHfId } from './utils.js'
 import useStore from '../store.js'
-import { BUMP_EXPIRIES, BUMP_INTERVALS, BUMP_MODES, bumpMode } from './autobumpModes.js'
+import AutoBumpScheduleForm, { defaultBumpSchedule, schedulePayload } from './AutoBumpScheduleForm.jsx'
+import { BUMP_INTERVALS, bumpMode } from './autobumpModes.js'
 import { applyTag, findTagAtSelection, imageTag, parseImageOption, removeTag, replaceRange, wrapSelection } from './postingEditor.js'
 import './PostingPage.css'
 
@@ -2139,9 +2140,7 @@ function Composer({ onPosted }) {
   const [confirm,      setConfirm]      = useState(false)
   const [addFooter,    setAddFooter]    = useState(false)
   const [autoBump,     setAutoBump]     = useState(false)
-  const [bumpInterval, setBumpInterval] = useState(12)
-  const [bumpModeId,   setBumpModeId]   = useState('timer')
-  const [bumpExpiry,   setBumpExpiry]   = useState(0)
+  const [bumpSchedule, setBumpSchedule] = useState(() => ({ ...defaultBumpSchedule(), interval_h: 12 }))
   const [bumpFees,     setBumpFees]     = useState(null)
   const [savingDraft,  setSavingDraft]  = useState(false)
   const [draftFlash,   setDraftFlash]   = useState(null) // 'ok' | 'err'
@@ -2155,7 +2154,7 @@ function Composer({ onPosted }) {
     api.get('/api/settings').then(d => {
       const s = d.settings || {}
       if (s.postingFooter !== undefined) setAddFooter(Boolean(s.postingFooter))
-      if (s.postingBumpInterval) setBumpInterval(s.postingBumpInterval)
+      if (s.postingBumpInterval) setBumpSchedule(current => ({ ...current, interval_h: Number(s.postingBumpInterval) }))
     }).catch(() => {})
     api.get('/api/autobump/settings').then(setBumpFees).catch(() => setBumpFees(null))
   }, [])
@@ -2230,11 +2229,7 @@ function Composer({ onPosted }) {
         overflow_message_2: multiPost && replyCount >= 2 ? reply2.trim() : '',
         fire_at,
         auto_bump:         autoBump,
-        bump_interval_h:   bumpInterval,
-        bump_mode:         bumpModeId,
-        bump_until:        autoBump && bumpExpiry
-          ? Math.floor((scheduled ? new Date(fireAt).getTime() : Date.now()) / 1000) + bumpExpiry * 86400
-          : null,
+        bump_schedule:     schedulePayload(bumpSchedule),
       })
 
       setResult({
@@ -2458,10 +2453,7 @@ function Composer({ onPosted }) {
             Add to Bump Service
           </label>
           {autoBump && <div className="posting-bump-options">
-            <label>Mode<select className="inp" value={bumpModeId} onChange={event => setBumpModeId(event.target.value)}>{BUMP_MODES.map(mode => <option value={mode.id} key={mode.id}>{mode.label}</option>)}</select></label>
-            <label>{bumpMode(bumpModeId).intervalLabel}<select className="inp" value={bumpInterval} onChange={event => setBumpInterval(Number(event.target.value))}>{BUMP_INTERVALS.map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-            <label>End<select className="inp" value={bumpExpiry} onChange={event => setBumpExpiry(Number(event.target.value))}>{BUMP_EXPIRIES.map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-            <span>{bumpMode(bumpModeId).description}</span>
+            <AutoBumpScheduleForm value={bumpSchedule} onChange={setBumpSchedule} idPrefix="posting-bump" />
             {bumpFees?.total_cost != null && <span>A confirmed bump uses {bumpFees.hf_fee} Bytes for the {bumpFees.hf_fee_tier || 'HF group'} fee and {bumpFees.service_fee} Bytes for the Toolbox service.</span>}
           </div>}
         </div>
@@ -2482,7 +2474,7 @@ function Composer({ onPosted }) {
               <span>{forum?.name} / {title.trim()}</span>
               <span>{scheduled ? new Date(fireAt).toLocaleString() : 'Next publishing cycle'}</span>
               <span>{multiPost ? `${replyCount} additional replies` : 'No additional replies'}</span>
-              <span>{autoBump ? `${bumpMode(bumpModeId).label}, ${BUMP_INTERVALS.find(([value]) => value === bumpInterval)?.[1]}` : 'Bump Service not enabled'}</span>
+              <span>{autoBump ? `${bumpMode(bumpSchedule.mode).label}, ${BUMP_INTERVALS.find(([value]) => value === bumpSchedule.interval_h)?.[1]} minimum inactivity` : 'Bump Service not enabled'}</span>
             </div>
             <button className="btn btn-acc" style={{ fontSize: 13 }} onClick={submit} disabled={submitting}>
               {submitting ? '…' : `Confirm ${scheduled ? 'Schedule' : 'Post'}`}

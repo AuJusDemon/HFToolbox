@@ -14,6 +14,7 @@ Reply queue auto-dismiss logic:
 """
 
 import asyncio
+import json
 import math
 import re
 import logging
@@ -149,14 +150,28 @@ async def fire_due_threads() -> None:
             if row.get("auto_bump"):
                 try:
                     from modules.autobump.autobump_db import add_job, _db as bump_db
+                    from modules.autobump.schedule import calculate_updated_next
                     interval_h = int(row.get("bump_interval_h") or 12)
                     bump_mode = str(row.get("bump_mode") or "timer")
                     bump_until = row.get("bump_until")
+                    bump_timezone = str(row.get("bump_timezone") or "UTC")
+                    allowed_windows = json.loads(row.get("bump_allowed_windows") or "[]")
+                    calendar_slots = json.loads(row.get("bump_calendar_slots") or "[]")
+                    end_mode = str(row.get("bump_end_mode") or "unlimited")
+                    end_limit = row.get("bump_end_limit")
                     import time as _t2
-                    next_bump = int(_t2.time()) if bump_mode == "page1" else int(_t2.time()) + interval_h * 3600
+                    now = int(_t2.time())
+                    next_bump = calculate_updated_next(
+                        {"lastpost_ts": now}, bump_mode, interval_h, now,
+                        bump_timezone, allowed_windows, calendar_slots,
+                    )
                     def _add_bump_job():
                         job = add_job(uid, tid, interval_h, mode=bump_mode,
-                                      next_bump_override=next_bump, bump_until=bump_until)
+                                      next_bump_override=next_bump, bump_until=bump_until,
+                                      timezone=bump_timezone,
+                                      allowed_windows=allowed_windows,
+                                      calendar_slots=calendar_slots,
+                                      end_mode=end_mode, end_limit=end_limit)
                         with bump_db() as conn:
                             conn.execute(
                                 "UPDATE bump_jobs SET thread_title=?, fid=? WHERE uid=? AND tid=?",

@@ -19,6 +19,10 @@ describe('Bump Service operational state', () => {
     expect(classifyJob(job(1), [], true)).toMatchObject({ key: 'blocked', rank: 1 })
   })
 
+  it('prioritizes retired Page 1 jobs as action required', () => {
+    expect(classifyJob(job(1, { mode:'page1', enabled:false, requires_schedule_update:true }))).toMatchObject({ key:'action', label:'Action required', rank:0 })
+  })
+
   it('calculates unlimited and constrained budget states', () => {
     expect(budgetState({ weekly_budget: 0, bytes_this_week: 50, total_cost: 60 })).toMatchObject({ unlimited: true, remaining: null })
     expect(budgetState({ weekly_budget: 200, bytes_this_week: 150, total_cost: 60 })).toMatchObject({ exceeded: true, remaining: 50, remainingBumps: 0, percent: 75 })

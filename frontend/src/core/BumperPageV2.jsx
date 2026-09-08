@@ -5,7 +5,7 @@ import { parseHfId } from './utils.js'
 import useStore from '../store.js'
 import './BumperPageV2.css'
 import { BumpActivityTimeline, BumpAttempts, BumpPerformanceSummary, BumpRangeControl, JobScheduleEditor } from './BumpPerformance.jsx'
-import { BUMP_EXPIRIES as EXPIRIES, BUMP_INTERVALS as INTERVALS, BUMP_MODES } from './autobumpModes.js'
+import AutoBumpScheduleForm, { defaultBumpSchedule, schedulePayload } from './AutoBumpScheduleForm.jsx'
 
 const ACCESS_GROUPS = new Set(['9', '28', '67'])
 
@@ -13,7 +13,7 @@ export const isUpgraded = groups => (groups || []).some(group => ACCESS_GROUPS.h
 const number = value => Number(value || 0).toLocaleString()
 const bytes = value => value == null || value === '' ? '--' : `${number(value)} Bytes`
 const date = value => value ? new Date(value * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : 'No end date'
-const time = value => value ? new Date(value * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '--'
+const time = (value, timezone) => value ? new Date(value * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(timezone ? { timeZone:timezone } : {}) }) : '--'
 const ago = value => {
   if (!value) return '--'
   const seconds = Math.max(0, Math.floor(Date.now() / 1000) - Number(value))
@@ -30,33 +30,33 @@ const countdown = seconds => {
   const minutes = Math.floor((seconds % 3600) / 60)
   return days ? `${days}d ${hours}h` : hours ? `${hours}h ${minutes}m` : `${minutes}m`
 }
+const dayNames = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+const allowedHours = job => !job.allowed_windows?.length ? 'Unrestricted' : job.allowed_windows.map(window => `${window.days.map(day => dayNames[day]).join(', ')} ${window.start}-${window.end}`).join(' / ')
+const calendarSchedule = job => !job.calendar_slots?.length ? 'No slots' : job.calendar_slots.map(slot => `${dayNames[slot.day]} ${slot.time}`).join(' / ')
 
 const latestForJob = (job, log) => (log || []).find(entry => String(entry.tid) === String(job.tid)) || (job.latest_action ? { action:job.latest_action, reason:job.latest_reason, ts:job.latest_result_at, tid:job.tid } : null)
 
 function stateDetail(state, job, latest, budget) {
   if (!state || !job) return null
+  if (state.key === 'action') return { tone:'error', title:'Schedule update required', body:job.retired_reason || 'Choose Activity Interval or Calendar Scheduling before this job can resume.' }
   if (state.key === 'failed') return { tone:'error', title:'The latest scheduler attempt failed', body:latest?.reason || 'No failure detail was recorded. Inspect the HF thread before resuming normal operation.' }
   if (state.key === 'blocked') return { tone:'warning', title:'Waiting for weekly budget', body:`The next success is expected to cost ${bytes(budget?.cost)}. Increase the limit or wait for the weekly counter to reset.` }
   if (state.key === 'skipped') return { tone:'warning', title:'The last check was rescheduled', body:latest?.reason || 'The thread was not eligible to bump during the last check.' }
-  if (state.key === 'due') return { tone:'warning', title:'Timer is due', body:'The scheduler will process this job on its next polling cycle.' }
-  if (state.key === 'checking') return { tone:'warning', title:'Page 1 check is due', body:'The scheduler will check the forum page on its next polling cycle. It will bump only when the thread is eligible.' }
+  if (state.key === 'due') return { tone:'warning', title:'Schedule is due', body:'The scheduler will process this job on its next polling cycle.' }
   if (state.key === 'paused') return { tone:'muted', title:'This job is paused', body:'No scheduler attempts will run until the job is resumed.' }
   if (state.key === 'expired') return { tone:'muted', title:'This schedule has ended', body:'Edit the end date and enable the job to schedule another attempt.' }
   return null
 }
 
 export function classifyJob(job, log = [], budgetExceeded = false) {
+  if (job.requires_schedule_update) return { key: 'action', label: 'Action required', rank: 0 }
   if (job.expired) return { key: 'expired', label: 'Expired', rank: 5 }
   if (!job.enabled) return { key: 'paused', label: 'Paused', rank: 4 }
   const latest = latestForJob(job, log)
   const latestIsCurrent = latest && Number(latest.ts || 0) >= Number(job.last_bumped || 0)
   if (budgetExceeded) return { key: 'blocked', label: 'Budget blocked', rank: 1 }
   if (latestIsCurrent && latest.action === 'error') return { key: 'failed', label: 'Needs attention', rank: 0 }
-  if (Number(job.seconds_until_bump) <= 0) {
-    return job.mode === 'page1'
-      ? { key: 'checking', label: 'Checking', rank: 2 }
-      : { key: 'due', label: 'Due now', rank: 2 }
-  }
+  if (Number(job.seconds_until_bump) <= 0) return { key: 'due', label: 'Due now', rank: 2 }
   if (latestIsCurrent && latest.action === 'skipped') return { key: 'skipped', label: 'Rescheduled', rank: 3 }
   return { key: 'scheduled', label: 'Scheduled', rank: 3 }
 }
@@ -137,9 +137,7 @@ function BudgetPane({ data, error, onReload }) {
 
 function AddJob({ fee, onAdded }) {
   const [tid, setTid] = useState('')
-  const [mode, setMode] = useState('timer')
-  const [interval, setIntervalValue] = useState(24)
-  const [expiry, setExpiry] = useState(0)
+  const [schedule, setSchedule] = useState(defaultBumpSchedule)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -148,21 +146,16 @@ function AddJob({ fee, onAdded }) {
     if (fee?.service_fee !== 10 || fee?.total_cost == null) { setError('Fee data is unavailable. Retry the page before creating this job.'); return }
     setBusy(true); setError('')
     try {
-      const bumpUntil = expiry ? Math.floor(Date.now() / 1000) + expiry * 86400 : null
-      await api.post('/api/autobump/jobs', { tid, mode, interval_h: Number(interval), bump_until: bumpUntil })
-      setTid(''); setConfirming(false); await onAdded()
+      await api.post('/api/autobump/jobs', { tid, ...schedulePayload(schedule) })
+      setTid(''); setSchedule(defaultBumpSchedule()); setConfirming(false); await onAdded()
     } catch (err) { setError(err.message || 'Could not add job.') }
     finally { setBusy(false) }
   }
   return <section className="bp-pane bp-add" aria-labelledby="add-job-title">
     <div className="bp-pane-head"><div><span className="bp-kicker">SCHEDULER INPUT</span><h2 id="add-job-title">Add Job</h2></div></div>
-    <div className="bp-add-grid">
-      <label>Thread ID or URL<input value={tid} onChange={event => { setTid(parseHfId(event.target.value, 'tid')); setConfirming(false) }} placeholder="6319077" /></label>
-      <label>Mode<select value={mode} onChange={event => setMode(event.target.value)}>{BUMP_MODES.map(option => <option value={option.id} key={option.id}>{option.label}</option>)}</select></label>
-      <label>{mode === 'page1' ? 'Maximum interval' : 'Interval'}<select value={interval} onChange={event => setIntervalValue(event.target.value)}>{INTERVALS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      <label>End<select value={expiry} onChange={event => setExpiry(Number(event.target.value))}>{EXPIRIES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-      <button type="button" className="bp-primary" disabled={!tid || busy || (confirming && fee?.service_fee !== 10)} onClick={submit}>{busy ? 'Adding...' : confirming ? 'Confirm and add' : 'Add job'}</button>
-    </div>
+    <label className="bp-thread-input">Thread ID or URL<input value={tid} onChange={event => { setTid(parseHfId(event.target.value, 'tid')); setConfirming(false) }} placeholder="6319077" /></label>
+    <AutoBumpScheduleForm value={schedule} onChange={value => { setSchedule(value); setConfirming(false) }} idPrefix="new-job" />
+    <button type="button" className="bp-primary" disabled={!tid || busy || (confirming && fee?.service_fee !== 10)} onClick={submit}>{busy ? 'Adding...' : confirming ? 'Confirm and add' : 'Add job'}</button>
     {confirming && <div className="bp-confirm" role="status">{fee?.service_fee === 10 && fee?.total_cost != null ? <>A successful bump is expected to cost {bytes(fee.hf_fee)} HF {fee.hf_fee_tier || 'group'} fee + {bytes(fee.service_fee)} service fee = {bytes(fee.total_cost)}.</> : <>Fee data is unavailable. Retry before creating this job.</>} <button type="button" onClick={() => setConfirming(false)}>Cancel</button></div>}
     <ErrorLine>{error}</ErrorLine>
   </section>
@@ -206,14 +199,14 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
   }
   return <section className="bp-pane bp-workspace" aria-labelledby="active-job-title">
     <div className="bp-job-head">
-      <div><span className="bp-kicker">ACTIVE WORKSPACE</span><h2 id="active-job-title">{job.thread_title || `Thread ${job.tid}`}</h2><p>TID {job.tid} {job.fid ? `/ FID ${job.fid}` : ''} / {job.mode === 'page1' ? 'Page 1 watch' : 'Timer mode'}</p></div>
+      <div><span className="bp-kicker">ACTIVE WORKSPACE</span><h2 id="active-job-title">{job.thread_title || `Thread ${job.tid}`}</h2><p>TID {job.tid} {job.fid ? `/ FID ${job.fid}` : ''} / {job.mode === 'calendar' ? 'Calendar Scheduling' : job.mode === 'page1' ? 'Retired schedule' : 'Activity Interval'}</p></div>
       <Status state={state} />
     </div>
     {notice && <div className={`bp-state-note is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}><strong>{notice.title}</strong><span>{notice.body}</span></div>}
     <div className="bp-work-grid">
       <div className="bp-schedule">
-        <span className="bp-kicker">NEXT ATTEMPT</span><strong className="bp-countdown">{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</strong><span>{job.next_bump ? time(job.next_bump) : 'No attempt scheduled'}</span>
-        <dl><div><dt>Last successful bump</dt><dd>{ago(job.last_bumped)}</dd></div><div><dt>Last post</dt><dd>{ago(job.lastpost_ts)}{job.lastposter ? ` by ${job.lastposter}` : ''}</dd></div><div><dt>Interval</dt><dd>{job.interval_h} hours</dd></div><div><dt>End date</dt><dd>{date(job.bump_until)}</dd></div></dl>
+        <span className="bp-kicker">{job.mode === 'calendar' ? 'NEXT CALENDAR OPPORTUNITY' : 'NEXT ELIGIBLE OPPORTUNITY'}</span><strong className="bp-countdown">{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</strong><span>{job.next_bump ? `${time(job.next_bump, job.timezone || 'UTC')} / ${job.timezone || 'UTC'}` : 'No attempt scheduled'}</span>
+        <dl><div><dt>Last successful bump</dt><dd>{ago(job.last_bumped)}</dd></div><div><dt>Last post</dt><dd>{ago(job.lastpost_ts)}{job.lastposter ? ` by ${job.lastposter}` : ''}</dd></div><div><dt>Minimum inactivity</dt><dd>{job.interval_h} hours after latest activity</dd></div><div><dt>Timezone</dt><dd>{job.timezone || 'UTC'}</dd></div><div><dt>Allowed hours</dt><dd>{allowedHours(job)}</dd></div><div><dt>Calendar slots</dt><dd>{job.mode === 'calendar' ? calendarSchedule(job) : 'Not used'}</dd></div><div><dt>End condition</dt><dd>{job.end_mode === 'unlimited' ? 'Unlimited' : job.end_mode === 'date' || job.end_mode === 'duration' ? date(job.bump_until) : `${number(job.end_limit)} ${job.end_mode === 'bytes' ? 'Bytes spent' : 'successful bumps'}`}</dd></div><div><dt>Next calculation</dt><dd>{job.mode === 'calendar' ? 'Future slot after inactivity and allowed-hours checks' : 'Latest activity plus inactivity, then allowed-hours check'}</dd></div></dl>
       </div>
       <div className="bp-cost">
         <span className="bp-kicker">SUCCESSFUL BUMP COST</span>
@@ -227,7 +220,7 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
     {editing && <JobScheduleEditor job={job} onSave={saveSchedule} onCancel={() => setEditing(false)} saving={saving} error={editError} />}
     <div className="bp-actions">
       <button type="button" onClick={() => setEditing(value => !value)}>{editing ? 'Close editor' : 'Edit schedule'}</button>
-      <button type="button" onClick={() => onToggle(job)} disabled={busyTid === job.tid}>{job.enabled ? 'Pause job' : 'Resume job'}</button>
+      <button type="button" onClick={() => job.requires_schedule_update ? setEditing(true) : onToggle(job)} disabled={busyTid === job.tid}>{job.requires_schedule_update ? 'Choose replacement schedule' : job.enabled ? 'Pause job' : 'Resume job'}</button>
       <a href={`https://hackforums.net/showthread.php?tid=${job.tid}`} target="_blank" rel="noreferrer">Inspect HF thread</a>
       <Link to={`/dashboard/merchant?tab=bumps&tid=${job.tid}`}>View business analysis</Link>
       {!confirmRemove ? <button type="button" className="bp-danger" onClick={() => setConfirmRemove(true)}>Remove job</button> : <div className="bp-remove-confirm"><span>Remove this job?</span><button type="button" className="bp-danger" onClick={() => onRemove(job)}>Confirm remove</button><button type="button" onClick={() => setConfirmRemove(false)}>Cancel</button></div>}
@@ -251,7 +244,7 @@ function JobNavigator({ jobs, log, outcomes, budgetExceeded, selectedTid, onSele
         const outcome = outcomes?.[String(job.tid)]?.since_last_bump
         return <button type="button" className={String(job.tid) === String(selectedTid) ? 'is-selected' : ''} key={job.id} onClick={() => onSelect(String(job.tid))}>
           <span className="bp-job-row-head"><strong>{job.thread_title || `Thread ${job.tid}`}</strong><Status state={state} /></span>
-          <span className="bp-job-row-meta"><small>TID {job.tid} / {job.mode === 'page1' ? 'Page 1' : `${job.interval_h}h timer`}</small><b>{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</b></span>
+          <span className="bp-job-row-meta"><small>TID {job.tid} / {job.mode === 'calendar' ? `${job.calendar_slots?.length || 0} weekly slots` : job.mode === 'page1' ? 'schedule update required' : `${job.interval_h}h inactivity`}</small><b>{job.enabled && !job.expired ? countdown(job.seconds_until_bump) : state.label}</b></span>
           <span className="bp-job-row-result">{latest ? `Last: ${latest.action}${latest.reason ? ` / ${latest.reason}` : ''}` : 'No attempts recorded'}</span>
           <span className="bp-job-row-outcomes"><small>{outcome ? number(outcome.tracked_replies) : '--'} replies</small><small>{outcome ? number(outcome.contracts_opened) : '--'} contracts</small><small>{outcome ? number(outcome.contracts_completed) : '--'} complete</small></span>
         </button>
@@ -262,7 +255,7 @@ function JobNavigator({ jobs, log, outcomes, budgetExceeded, selectedTid, onSele
 
 function Attempts({ log, error, fee }) {
   return <section className="bp-pane" aria-labelledby="attempts-title"><div className="bp-pane-head"><div><span className="bp-kicker">AUDIT TRAIL</span><h2 id="attempts-title">Recent Attempts</h2></div></div>
-    {error ? <ErrorLine>Attempt history is unavailable.</ErrorLine> : !log.length ? <p className="bp-empty-line">No scheduler attempts recorded yet.</p> : <div className="bp-attempts"><div className="bp-attempt-head"><span>Time</span><span>Thread</span><span>Result</span><span>Reason</span><span>Estimated HF fee</span><span>Service fee</span></div>{log.map(entry => <div className="bp-attempt" key={entry.id}><span data-label="Time">{time(entry.ts)}</span><span data-label="Thread">{entry.thread_title || `TID ${entry.tid}`}</span><span data-label="Result"><Status state={{ key: entry.action === 'bumped' ? 'scheduled' : entry.action === 'error' ? 'failed' : 'skipped', label: entry.action }} /></span><span data-label="Reason">{entry.reason || '--'}</span><span data-label="Estimated HF fee">{entry.action === 'bumped' ? `${bytes(fee?.hf_fee)} estimated` : '--'}</span><span data-label="Service fee">{entry.action === 'bumped' ? `${bytes(fee?.service_fee)} expected` : '--'}</span></div>)}</div>}
+    {error ? <ErrorLine>Attempt history is unavailable.</ErrorLine> : !log.length ? <p className="bp-empty-line">No scheduler attempts recorded yet.</p> : <div className="bp-attempts"><div className="bp-attempt-head"><span>Time</span><span>Thread</span><span>Result</span><span>Reason</span><span>HF fee</span><span>Service fee</span></div>{log.map(entry => <div className="bp-attempt" key={entry.id}><span data-label="Time">{time(entry.ts)}</span><span data-label="Thread">{entry.thread_title || `TID ${entry.tid}`}</span><span data-label="Result"><Status state={{ key: entry.action === 'bumped' ? 'scheduled' : entry.action === 'error' ? 'failed' : 'skipped', label: entry.action }} /></span><span data-label="Reason">{entry.reason || '--'}</span><span data-label="HF fee">{entry.action === 'bumped' ? entry.hf_fee != null ? `${bytes(entry.hf_fee)} recorded` : `${bytes(fee?.hf_fee)} legacy estimate` : '--'}</span><span data-label="Service fee">{entry.action === 'bumped' ? entry.service_fee != null ? `${bytes(entry.service_fee)} recorded` : `${bytes(fee?.service_fee)} legacy estimate` : '--'}</span></div>)}</div>}
   </section>
 }
 
@@ -369,7 +362,7 @@ export default function BumperPageV2() {
           <ActiveJob job={selected} state={selectedState} performance={selectedStats} statsLoading={statsLoading} statsRefreshing={statsRefreshing} statsError={statsError} fee={fee} budget={budget} log={logs} busyTid={busyTid} onToggle={toggle} onRemove={remove} range={range} onRange={value => { setRange(value); setPage(1) }} onPage={setPage} onSaved={load} />
         </div>
       </section> : <ActiveJob job={null} />}
-      <details className="bp-pane bp-details"><summary>Scheduling and fee details</summary><div><h3>Timer mode</h3><p>Attempts on the selected interval. Recent thread activity can move the next attempt forward.</p><h3>Page 1 watch</h3><p>Checks the forum page periodically and bumps after the thread leaves page 1, subject to HF timing limits.</p><h3>Fees</h3><p>A confirmed success uses the HF group fee shown above and the Toolbox service fee. Skips and failed attempts do not show as successful-bump spending.</p></div></details>
+      <details className="bp-pane bp-details"><summary>Scheduling and fee details</summary><div><h3>Activity Interval</h3><p>Becomes due after the thread has remained inactive for the selected interval.</p><h3>Calendar Scheduling</h3><p>Checks at selected weekly slots. Recent activity defers the job to the next future slot.</p><h3>Fees</h3><p>A confirmed success uses the HF group fee shown above and the Toolbox service fee. Skips and failed attempts do not show as successful-bump spending.</p></div></details>
     </>}
   </main>
 }

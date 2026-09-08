@@ -2,6 +2,7 @@
 autobump_db.py — DB layer for the autobump module.
 """
 
+import json
 import time
 from _db_compat import _db
 
@@ -26,6 +27,13 @@ def init():
                 lastposter   VARCHAR(255),
                 created_at   BIGINT       DEFAULT 0,
                 bump_until   BIGINT       DEFAULT NULL,
+                timezone     VARCHAR(64)  NOT NULL DEFAULT 'UTC',
+                allowed_windows TEXT,
+                calendar_slots TEXT,
+                end_mode     VARCHAR(16)  NOT NULL DEFAULT 'unlimited',
+                end_limit    BIGINT       DEFAULT NULL,
+                spent_bytes  BIGINT       NOT NULL DEFAULT 0,
+                retired_reason VARCHAR(255),
                 PRIMARY KEY (id),
                 UNIQUE KEY uq_uid_tid (uid, tid),
                 INDEX idx_bj_uid (uid)
@@ -40,6 +48,9 @@ def init():
                 action     VARCHAR(64)  NOT NULL,
                 reason     TEXT,
                 numreplies INT          DEFAULT NULL,
+                hf_fee     INT          DEFAULT NULL,
+                service_fee INT         DEFAULT NULL,
+                total_cost INT          DEFAULT NULL,
                 ts         BIGINT       DEFAULT 0,
                 PRIMARY KEY (id),
                 INDEX idx_bl_uid (uid),
@@ -63,20 +74,46 @@ def _migrate():
             ("lastposter",  "VARCHAR(255)"),
             ("bump_until",  "BIGINT DEFAULT NULL"),
             ("mode",        "VARCHAR(16) NOT NULL DEFAULT 'timer'"),
+            ("timezone",    "VARCHAR(64) NOT NULL DEFAULT 'UTC'"),
+            ("allowed_windows", "TEXT"),
+            ("calendar_slots", "TEXT"),
+            ("end_mode",    "VARCHAR(16) NOT NULL DEFAULT 'unlimited'"),
+            ("end_limit",   "BIGINT DEFAULT NULL"),
+            ("spent_bytes", "BIGINT NOT NULL DEFAULT 0"),
+            ("retired_reason", "VARCHAR(255)"),
             ("numreplies",  "INT DEFAULT NULL"),  # bump_log column
+            ("hf_fee",      "INT DEFAULT NULL"),
+            ("service_fee", "INT DEFAULT NULL"),
+            ("total_cost",  "INT DEFAULT NULL"),
         ]:
             # bump_jobs migrations
-            if col not in ("numreplies",):
+            if col not in ("numreplies", "hf_fee", "service_fee", "total_cost"):
                 try:
                     conn.execute(f"ALTER TABLE bump_jobs ADD COLUMN {col} {defn}")
                 except Exception:
                     pass
-            # bump_log numreplies
-            if col == "numreplies":
+            if col in ("numreplies", "hf_fee", "service_fee", "total_cost"):
                 try:
                     conn.execute(f"ALTER TABLE bump_log ADD COLUMN {col} {defn}")
                 except Exception:
                     pass
+        retired = conn.execute(
+            "SELECT id,uid,tid FROM bump_jobs WHERE mode='page1' AND retired_reason IS NULL"
+        ).fetchall()
+        if retired:
+            reason = "Page 1 Watch retired because HF API forum pages are not activity ordered"
+            conn.execute(
+                "UPDATE bump_jobs SET enabled=0,retired_reason=%s WHERE mode='page1' AND retired_reason IS NULL",
+                (reason,),
+            )
+            now = int(time.time())
+            for row in retired:
+                conn.execute(
+                    """INSERT INTO bump_log
+                       (job_id,uid,tid,action,reason,numreplies,ts)
+                       VALUES (%s,%s,%s,'updated',%s,NULL,%s)""",
+                    (row["id"], row["uid"], row["tid"], reason, now),
+                )
 
 
 # ── Settings ───────────────────────────────────────────────────────────────────
@@ -111,26 +148,61 @@ def get_weekly_bump_count(uid: str) -> int:
         return int(row["cnt"]) if row else 0
 
 
+def get_weekly_spend(uid: str, fallback_cost: int) -> int:
+    """Use fee snapshots when present and a current-fee fallback for legacy rows."""
+    since = int(time.time()) - (7 * 86400)
+    with _db() as conn:
+        row = conn.execute(
+            """SELECT COALESCE(SUM(COALESCE(total_cost,%s)),0) AS total
+               FROM bump_log WHERE uid=%s AND action='bumped' AND ts >= %s""",
+            (int(fallback_cost), uid, since),
+        ).fetchone()
+        return int(row["total"] or 0) if row else 0
+
+
 # ── Jobs ───────────────────────────────────────────────────────────────────────
 
-def add_job(uid: str, tid: str, interval_h: int,
-            mode: str = "timer",
-            next_bump_override: int | None = None,
-            bump_until: int | None = None) -> dict:
+def add_job(uid: str, tid: str, interval_h: int, mode: str = "timer",
+            next_bump_override: int | None = None, bump_until: int | None = None,
+            timezone: str = "UTC", allowed_windows: list[dict] | None = None,
+            calendar_slots: list[dict] | None = None, end_mode: str = "unlimited",
+            end_limit: int | None = None) -> dict:
+    if mode not in {"timer", "calendar"}:
+        raise ValueError("New Auto-Bump jobs require Activity Interval or Calendar Scheduling")
     now = int(time.time())
     next_bump = next_bump_override if next_bump_override is not None else now + (interval_h * 3600)
     with _db() as conn:
         conn.execute("""
-            INSERT INTO bump_jobs (uid, tid, mode, interval_h, next_bump, bump_until, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO bump_jobs
+                (uid,tid,mode,interval_h,next_bump,bump_until,created_at,timezone,
+                 allowed_windows,calendar_slots,end_mode,end_limit,spent_bytes,retired_reason)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,0,NULL)
             ON DUPLICATE KEY UPDATE
                 mode=VALUES(mode),
                 interval_h=VALUES(interval_h),
                 enabled=1,
                 next_bump=VALUES(next_bump),
-                bump_until=VALUES(bump_until)
-        """, (uid, str(tid), mode, interval_h, next_bump, bump_until, now))
+                bump_until=VALUES(bump_until),
+                timezone=VALUES(timezone),
+                allowed_windows=VALUES(allowed_windows),
+                calendar_slots=VALUES(calendar_slots),
+                end_mode=VALUES(end_mode),
+                end_limit=VALUES(end_limit),
+                retired_reason=NULL
+        """, (uid, str(tid), mode, interval_h, next_bump, bump_until, now, timezone,
+              json.dumps(allowed_windows or [], separators=(",", ":")),
+              json.dumps(calendar_slots or [], separators=(",", ":")), end_mode, end_limit))
     return get_job(uid, str(tid))
+
+
+def _decode_job(row) -> dict:
+    result = dict(row)
+    for key in ("allowed_windows", "calendar_slots"):
+        try:
+            result[key] = json.loads(result.get(key) or "[]")
+        except (TypeError, json.JSONDecodeError):
+            result[key] = []
+    return result
 
 
 def remove_job(uid: str, tid: str) -> bool:
@@ -144,7 +216,7 @@ def get_job(uid: str, tid: str) -> dict | None:
         row = conn.execute(
             "SELECT * FROM bump_jobs WHERE uid=%s AND tid=%s", (uid, str(tid))
         ).fetchone()
-        return dict(row) if row else None
+        return _decode_job(row) if row else None
 
 
 def get_jobs_for_user(uid: str) -> list[dict]:
@@ -160,7 +232,7 @@ def get_jobs_for_user(uid: str) -> list[dict]:
                )
                WHERE bj.uid=%s ORDER BY bj.created_at DESC""", (uid,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_decode_job(r) for r in rows]
 
 
 def get_due_jobs_for_uid(uid: str) -> list[dict]:
@@ -169,11 +241,13 @@ def get_due_jobs_for_uid(uid: str) -> list[dict]:
     with _db() as conn:
         rows = conn.execute(
             """SELECT * FROM bump_jobs
-               WHERE uid=%s AND enabled=1 AND next_bump <= %s
-               AND (bump_until IS NULL OR bump_until > %s)""",
+               WHERE uid=%s AND enabled=1 AND mode!='page1' AND next_bump <= %s
+               AND (end_mode NOT IN ('date','duration') OR bump_until > %s)
+               AND (end_mode!='successes' OR bump_count < end_limit)
+               AND (end_mode!='bytes' OR spent_bytes < end_limit)""",
             (uid, now, now)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_decode_job(r) for r in rows]
 
 
 def get_all_due_jobs() -> list[dict]:
@@ -182,11 +256,13 @@ def get_all_due_jobs() -> list[dict]:
     with _db() as conn:
         rows = conn.execute(
             """SELECT * FROM bump_jobs
-               WHERE enabled=1 AND next_bump <= %s
-               AND (bump_until IS NULL OR bump_until > %s)""",
+               WHERE enabled=1 AND mode!='page1' AND next_bump <= %s
+               AND (end_mode NOT IN ('date','duration') OR bump_until > %s)
+               AND (end_mode!='successes' OR bump_count < end_limit)
+               AND (end_mode!='bytes' OR spent_bytes < end_limit)""",
             (now, now)
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [_decode_job(r) for r in rows]
 
 
 def expire_jobs() -> list[str]:
@@ -194,12 +270,18 @@ def expire_jobs() -> list[str]:
     now = int(time.time())
     with _db() as conn:
         rows = conn.execute(
-            "SELECT tid, uid FROM bump_jobs WHERE enabled=1 AND bump_until IS NOT NULL AND bump_until <= %s",
+            """SELECT tid,uid FROM bump_jobs WHERE enabled=1 AND (
+                   (end_mode IN ('date','duration') AND bump_until IS NOT NULL AND bump_until<=%s)
+                   OR (end_mode='successes' AND bump_count>=end_limit)
+                   OR (end_mode='bytes' AND spent_bytes>=end_limit))""",
             (now,)
         ).fetchall()
         if rows:
             conn.execute(
-                "UPDATE bump_jobs SET enabled=0 WHERE enabled=1 AND bump_until IS NOT NULL AND bump_until <= %s",
+                """UPDATE bump_jobs SET enabled=0 WHERE enabled=1 AND (
+                   (end_mode IN ('date','duration') AND bump_until IS NOT NULL AND bump_until<=%s)
+                   OR (end_mode='successes' AND bump_count>=end_limit)
+                   OR (end_mode='bytes' AND spent_bytes>=end_limit))""",
                 (now,)
             )
         return [r["tid"] for r in rows]
@@ -214,8 +296,15 @@ def set_job_enabled(uid: str, tid: str, enabled: bool) -> bool:
         return cursor.rowcount > 0
 
 
+def complete_job(job_id: int) -> None:
+    with _db() as conn:
+        conn.execute("UPDATE bump_jobs SET enabled=0 WHERE id=%s", (job_id,))
+
+
 def update_job_schedule(uid: str, tid: str, *, mode: str, interval_h: int,
-                        bump_until: int | None, enabled: bool,
+                        bump_until: int | None, enabled: bool, timezone: str,
+                        allowed_windows: list[dict], calendar_slots: list[dict],
+                        end_mode: str, end_limit: int | None,
                         next_bump: int, audit_reason: str) -> dict | None:
     """Update mutable schedule fields and write its audit row in one transaction."""
     now = int(time.time())
@@ -228,8 +317,13 @@ def update_job_schedule(uid: str, tid: str, *, mode: str, interval_h: int,
             return None
         conn.execute(
             """UPDATE bump_jobs SET mode=%s,interval_h=%s,bump_until=%s,
-                      enabled=%s,next_bump=%s WHERE uid=%s AND tid=%s""",
-            (mode, interval_h, bump_until, int(enabled), next_bump, uid, str(tid)),
+                      enabled=%s,next_bump=%s,timezone=%s,allowed_windows=%s,
+                      calendar_slots=%s,end_mode=%s,end_limit=%s,retired_reason=NULL
+               WHERE uid=%s AND tid=%s""",
+            (mode, interval_h, bump_until, int(enabled), next_bump, timezone,
+             json.dumps(allowed_windows, separators=(",", ":")),
+             json.dumps(calendar_slots, separators=(",", ":")), end_mode, end_limit,
+             uid, str(tid)),
         )
         conn.execute(
             """INSERT INTO bump_log
@@ -242,7 +336,7 @@ def update_job_schedule(uid: str, tid: str, *, mode: str, interval_h: int,
 
 def update_after_bump(job_id: int, thread_title: str | None,
                       fid: str | None, lastpost_ts: int | None = None,
-                      lastposter: str | None = None) -> None:
+                      lastposter: str | None = None, total_cost: int = 0) -> None:
     """Update metadata and bump_count after a successful bump.
     NOTE: next_bump is set by update_after_skip BEFORE the bump attempt — not here.
     """
@@ -252,12 +346,13 @@ def update_after_bump(job_id: int, thread_title: str | None,
             UPDATE bump_jobs SET
                 last_bumped=%s,
                 bump_count=bump_count+1,
+                spent_bytes=spent_bytes+%s,
                 thread_title=COALESCE(%s, thread_title),
                 fid=COALESCE(%s, fid),
                 lastpost_ts=COALESCE(%s, lastpost_ts),
                 lastposter=COALESCE(%s, lastposter)
             WHERE id=%s
-        """, (now, thread_title, fid, lastpost_ts, lastposter, job_id))
+        """, (now, int(total_cost), thread_title, fid, lastpost_ts, lastposter, job_id))
 
 
 def update_after_skip(job_id: int, next_bump: int) -> None:
@@ -270,12 +365,17 @@ def update_after_skip(job_id: int, next_bump: int) -> None:
 
 
 def log_action(job_id: int, uid: str, tid: str, action: str,
-               reason: str | None = None, numreplies: int | None = None) -> None:
+               reason: str | None = None, numreplies: int | None = None,
+               hf_fee: int | None = None, service_fee: int | None = None,
+               total_cost: int | None = None) -> None:
     now = int(time.time())
     with _db() as conn:
         conn.execute(
-            "INSERT INTO bump_log (job_id, uid, tid, action, reason, numreplies, ts) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (job_id, uid, str(tid), action, reason, numreplies, now)
+            """INSERT INTO bump_log
+               (job_id,uid,tid,action,reason,numreplies,hf_fee,service_fee,total_cost,ts)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (job_id, uid, str(tid), action, reason, numreplies,
+             hf_fee, service_fee, total_cost, now)
         )
 
 

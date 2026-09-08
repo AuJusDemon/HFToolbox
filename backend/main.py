@@ -616,9 +616,9 @@ async def lifespan(app: FastAPI):
     from modules.wire.router import router as wire_router
     app.include_router(wire_router)
 
-    # ── Unified 5-minute scheduler ──────────────────────────────────────────
-    # Handles: scheduled thread posting (every tick), autobump (every 30 min),
-    # and reply queue polling (every 15 min). All in one loop, batched per user.
+    # ── Unified scheduler ───────────────────────────────────────────────────
+    # Scheduled publishing and due-job discovery run every minute. HF reads are
+    # made only for users who actually have due Auto-Bump jobs.
     from modules.autobump import poll_autobump
     from modules.posting import fire_due_threads, poll_reply_queues
     from modules.sigmarket import poll_sigmarket_rotations
@@ -628,32 +628,20 @@ async def lifespan(app: FastAPI):
         import time as _t
         import hf_service  # noqa — used for pick_best_token in global jobs
         _last_autobump      = 0.0
+        _last_sig_rotation  = 0.0
         _last_reply_poll    = 0.0
         _last_browse_warm    = _t.time()
         _last_sigmarket_warm = _t.time()
         _last_wire_sync      = _t.time()
         _last_rating_sync    = _t.time()
-        AUTOBUMP_INTERVAL      = 1800
+        AUTOBUMP_INTERVAL      =   60
+        SIG_ROTATION_INTERVAL  = 1800
         REPLY_POLL_INTERVAL    =  300
         BROWSE_WARM_INTERVAL   = 1500
         SIGMARKET_WARM_INTERVAL =  900
         WIRE_SYNC_INTERVAL     = 21600
         RATING_SYNC_INTERVAL   = 21600
         TICK                   =   60
-
-        # Smart startup for autobump — check when it last ran
-        try:
-            from modules.autobump.autobump_db import get_last_log_ts
-            last_ab = get_last_log_ts() or 0
-            elapsed = _t.time() - last_ab
-            if elapsed < AUTOBUMP_INTERVAL - 60:
-                _last_autobump = _t.time() - elapsed  # will wait the remainder
-                log.info("Unified scheduler: autobump last ran %.0fs ago, will fire in %.0fs",
-                         elapsed, AUTOBUMP_INTERVAL - elapsed)
-            else:
-                log.info("Unified scheduler: autobump stale (%.0fs ago), will run on first tick", elapsed)
-        except Exception:
-            pass
 
         await asyncio.sleep(10)  # brief stagger on startup
         while True:
@@ -670,11 +658,14 @@ async def lifespan(app: FastAPI):
                 except asyncio.TimeoutError:
                     log.warning("Unified scheduler: fire_due_threads timed out")
 
-                # ── 2. Autobump (every 30 min — always runs) ────────────────
+                # ── 2. Auto-Bump due-job scan (local DB every minute) ───────
                 if now - _last_autobump >= AUTOBUMP_INTERVAL:
                     try:
                         from token_manager import try_refresh_token
-                        uids = await asyncio.to_thread(db.get_all_uids)
+                        from modules.autobump.autobump_db import expire_jobs, get_all_due_jobs
+                        await asyncio.to_thread(expire_jobs)
+                        due_jobs = await asyncio.to_thread(get_all_due_jobs)
+                        uids = sorted({str(job["uid"]) for job in due_jobs})
                         for uid in uids:
                             token = await asyncio.to_thread(db.get_token, uid)
                             # If token is dead, try to refresh it first
@@ -703,9 +694,8 @@ async def lifespan(app: FastAPI):
                                 pass
                             try:
                                 await asyncio.wait_for(poll_autobump(uid, token), timeout=120)
-                                await asyncio.wait_for(poll_sigmarket_rotations(uid, token), timeout=30)
                             except asyncio.TimeoutError:
-                                log.warning("Scheduler: autobump/sigrotation timed out uid=%s", uid)
+                                log.warning("Scheduler: autobump timed out uid=%s", uid)
                             except _AuthExpired:
                                 log.warning("Scheduler: AuthExpired uid=%s — attempting refresh", uid)
                                 new_tok = await try_refresh_token(uid)
@@ -750,6 +740,21 @@ async def lifespan(app: FastAPI):
                             log.warning("Unified scheduler: daily digest error: %s", _e)
                     except Exception as e:
                         log.exception("Unified scheduler: autobump error: %s", e)
+
+                # Keep Sig Market rotations on their established cadence. They are
+                # intentionally separate from the one-minute Auto-Bump due scan.
+                if now - _last_sig_rotation >= SIG_ROTATION_INTERVAL:
+                    try:
+                        for uid in await asyncio.to_thread(db.get_all_uids):
+                            token = await asyncio.to_thread(db.get_token, uid)
+                            if token and not await asyncio.to_thread(db.is_token_dead, uid):
+                                try:
+                                    await asyncio.wait_for(poll_sigmarket_rotations(uid, token), timeout=30)
+                                except asyncio.TimeoutError:
+                                    log.warning("Scheduler: Sig Market rotation timed out uid=%s", uid)
+                        _last_sig_rotation = _t.time()
+                    except Exception as e:
+                        log.exception("Scheduler: Sig Market rotation error: %s", e)
 
                 # ── 3. Reply queue poll (5 min normal, 10 min at low/critical) ──
                 _reply_interval = REPLY_POLL_INTERVAL * (2 if _tl in ("low", "critical") else 1)

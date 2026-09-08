@@ -1,26 +1,7 @@
+"""Auto-Bump worker for inactivity and weekly-calendar schedules."""
+
 import os
 import asyncio
-"""
-modules/autobump/__init__.py — Auto-Bump module.
-
-Poll cycle: every 30 minutes.
-
-Timer mode:
-  1. Fetch thread data (lastpost, numreplies) for all due jobs — 4 TIDs per API call
-  2. Smart skip if someone posted within the interval window
-  3. Bump — logs numreplies at time of bump for stats tracking
-
-Page1 mode:
-  1. Group due jobs by FID — one API call per forum fetches page 1
-  2. Skip if thread is still on page 1 (recheck in 30 min)
-  3. Bump when thread falls off page 1
-
-Budget check:
-  - If user has a weekly byte budget set, count bumps in the last 7 days
-  - Use the member's HF fee plus the Toolbox service fee
-  - Skip when the next successful bump would exceed the budget
-"""
-
 import time
 import logging
 
@@ -29,12 +10,12 @@ from scheduler import on_poll
 import db
 from hf_thread_stats import thread_reply_count
 from .fees import fee_breakdown
+from .schedule import calculate_updated_next
 
 log = logging.getLogger("autobump")
 
 MY_UID           = os.getenv("PLATFORM_OWNER_UID", "")  # set in .env — exempt from fee
-TIDS_PER_CALL    = 4         # HF API max TIDs per _tid list
-PAGE1_RECHECK    = 1800      # seconds between page1 checks when thread is still on page 1
+TIDS_PER_CALL    = 30        # verified live against threads._tid on 2026-09-07
 STANLEY_UID      = "1337"    # Stanley bot UID — HF's autobump bot
 MIN_BUMP_GAP_SECS = 300      # 5 min absolute hard minimum between bumps per job (safety gate)
 
@@ -47,7 +28,7 @@ _poll_lock = asyncio.Lock()
 async def poll_autobump(polling_uid: str, polling_token: str) -> None:
     from .autobump_db import (
         get_due_jobs_for_uid, update_after_bump, update_after_skip,
-        log_action, init, get_settings, get_weekly_bump_count
+        log_action, init, get_settings, get_weekly_spend, complete_job
     )
     from HFClient import HFClient
 
@@ -70,18 +51,32 @@ async def poll_autobump(polling_uid: str, polling_token: str) -> None:
         # ── Weekly budget check ────────────────────────────────────────────────
         settings = await asyncio.to_thread(get_settings, uid)
         weekly_budget = int(settings.get("weekly_budget") or 0)
+        user_data = await asyncio.to_thread(db.get_user, uid) or {}
+        user_groups = user_data.get("groups") or []
+        fees = fee_breakdown(uid, user_groups, MY_UID)
+
+        runnable_jobs = []
+        for job in jobs:
+            if job.get("end_mode") == "bytes":
+                limit = int(job.get("end_limit") or 0)
+                spent = int(job.get("spent_bytes") or 0)
+                if limit and spent + int(fees["total_cost"]) > limit:
+                    await asyncio.to_thread(complete_job, job["id"])
+                    await asyncio.to_thread(
+                        log_action, job["id"], uid, str(job["tid"]), "skipped",
+                        f"Next successful bump would exceed the {limit} Byte job limit",
+                    )
+                    continue
+            runnable_jobs.append(job)
+        jobs = runnable_jobs
+        if not jobs:
+            return
+
         if weekly_budget > 0:
-            bump_count_this_week = await asyncio.to_thread(get_weekly_bump_count, uid)
-            # Pick Stanley fee based on user's group for accurate budget tracking
-            user_groups = []
-            try:
-                user_data = db.get_user(uid)
-                if user_data:
-                    user_groups = user_data.get("groups") or []
-            except Exception:
-                pass
-            cost_per_bump = fee_breakdown(uid, user_groups, MY_UID)["total_cost"]
-            bytes_spent_this_week = bump_count_this_week * cost_per_bump
+            cost_per_bump = int(fees["total_cost"])
+            bytes_spent_this_week = await asyncio.to_thread(
+                get_weekly_spend, uid, cost_per_bump
+            )
             if bytes_spent_this_week + cost_per_bump > weekly_budget:
                 log.info(
                     "Budget exceeded for uid=%s (%d/%d bytes this week) — skipping all bumps",
@@ -138,24 +133,17 @@ async def poll_autobump(polling_uid: str, polling_token: str) -> None:
         )
 
         # No separate token probe — the thread batch calls below act as the implicit
-        # liveness check. If all chunks return no data, _process_timer_jobs marks the
+        # liveness check. If all chunks return no data, _process_jobs marks the
         # token dead and logs the error for each job. The scheduler-level refresh path
         # in main.py handles token recovery for the next cycle.
 
-        timer_jobs = [j for j in jobs if (j.get("mode") or "timer") == "timer"]
-        page1_jobs = [j for j in jobs if (j.get("mode") or "timer") == "page1"]
-
-        if timer_jobs:
-            await _process_timer_jobs(uid, timer_jobs, client,
-                                      update_after_bump, update_after_skip, log_action)
-        if page1_jobs:
-            await _process_page1_jobs(uid, page1_jobs, client,
-                                      update_after_bump, update_after_skip, log_action)
+        await _process_jobs(uid, jobs, client, fees,
+                            update_after_bump, update_after_skip, log_action)
 
 
 async def _do_bump(uid: str, tid_str: str, job: dict, client,
                    thread_title: str, fid: str, numreplies: int | None,
-                   update_after_bump, log_action) -> bool:
+                   fees: dict, update_after_bump, log_action) -> bool:
     """Execute the actual bump write. Returns True on success.
     NOTE: next_bump is already set by the caller before this is invoked.
     This function only updates bump_count and metadata on success.
@@ -180,7 +168,8 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
         # Bump accepted — collect the fee
         # Small delay between back-to-back write calls.
         await asyncio.sleep(2)
-        service_fee = fee_breakdown(uid, [], MY_UID)["service_fee"]
+        service_fee = int(fees["service_fee"])
+        charged_service_fee = 0
         if service_fee and uid != MY_UID:
             try:
                 fee_result = await asyncio.wait_for(client.write({
@@ -206,16 +195,21 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
                 await asyncio.to_thread(log_action, job["id"], uid, tid_str, "error",
                                         f"Fee send failed: {err}")
             else:
+                charged_service_fee = service_fee
                 log.info("Fee collected: %d bytes from uid=%s tid=%s", service_fee, uid, tid_str)
+
+        charged_hf_fee = int(fees["hf_fee"])
+        charged_total = charged_hf_fee + charged_service_fee
 
         # next_bump already set — just update bump_count and metadata
         await asyncio.to_thread(
             update_after_bump,
             job["id"], thread_title, fid,
-            int(time.time()), "Stanley"
+            int(time.time()), "Stanley", charged_total
         )
         await asyncio.to_thread(
-            log_action, job["id"], uid, tid_str, "bumped", "", numreplies
+            log_action, job["id"], uid, tid_str, "bumped", "", numreplies,
+            charged_hf_fee, charged_service_fee, charged_total
         )
         log.info("Bumped tid=%s uid=%s mode=%s replies=%s",
                  tid_str, uid, job.get("mode", "timer"), numreplies)
@@ -226,8 +220,8 @@ async def _do_bump(uid: str, tid_str: str, job: dict, client,
         return False
 
 
-async def _process_timer_jobs(uid, user_jobs, client,
-                               update_after_bump, update_after_skip, log_action):
+async def _process_jobs(uid, user_jobs, client, fees,
+                        update_after_bump, update_after_skip, log_action):
     now     = int(time.time())
     job_map = {str(j["tid"]): j for j in user_jobs}
     tid_list = list(job_map.keys())
@@ -300,7 +294,10 @@ async def _process_timer_jobs(uid, user_jobs, client,
         time_since_last = now - last_post_ts if last_post_ts else interval_secs + 1
 
         if last_post_ts and time_since_last < interval_secs:
-            next_bump = last_post_ts + interval_secs
+            next_bump = calculate_updated_next(
+                {**job, "lastpost_ts": last_post_ts}, job.get("mode") or "timer",
+                job["interval_h"], now,
+            )
             await asyncio.to_thread(update_after_skip, job["id"], next_bump)
             hours_ago = round(time_since_last / 3600, 1)
             await asyncio.to_thread(log_action, job["id"], uid, tid_str, "skipped",
@@ -319,7 +316,11 @@ async def _process_timer_jobs(uid, user_jobs, client,
                 "Safety gate 1 (last_bumped): tid=%s uid=%s — bumped only %ds ago, refusing",
                 tid_str, uid, secs_ago
             )
-            await asyncio.to_thread(update_after_skip, job["id"], last_bumped + interval_secs)
+            safety_next = calculate_updated_next(
+                {**job, "lastpost_ts": last_bumped}, job.get("mode") or "timer",
+                job["interval_h"], now,
+            )
+            await asyncio.to_thread(update_after_skip, job["id"], safety_next)
             await asyncio.to_thread(log_action, job["id"], uid, tid_str, "error",
                 f"Safety gate: last_bumped {secs_ago}s ago (min {MIN_BUMP_GAP_SECS}s) — aborted")
             continue
@@ -333,7 +334,11 @@ async def _process_timer_jobs(uid, user_jobs, client,
                 "Safety gate 2 (Stanley recency): tid=%s uid=%s — Stanley posted %ds ago, skipping",
                 tid_str, uid, int(time_since_last)
             )
-            await asyncio.to_thread(update_after_skip, job["id"], last_post_ts + interval_secs)
+            safety_next = calculate_updated_next(
+                {**job, "lastpost_ts": last_post_ts}, job.get("mode") or "timer",
+                job["interval_h"], now,
+            )
+            await asyncio.to_thread(update_after_skip, job["id"], safety_next)
             await asyncio.to_thread(log_action, job["id"], uid, tid_str, "error",
                 f"Safety gate: Stanley posted {int(time_since_last)}s ago — likely already bumped")
             continue
@@ -341,120 +346,11 @@ async def _process_timer_jobs(uid, user_jobs, client,
         # Set next_bump BEFORE attempting the bump.
         # If the backend crashes between here and _do_bump completing,
         # the job won't re-fire immediately on restart — preventing double fees.
-        next_bump = now + interval_secs
+        next_bump = calculate_updated_next(
+            {**job, "lastpost_ts": now}, job.get("mode") or "timer",
+            job["interval_h"], now + 1, strictly_after=True,
+        )
         await asyncio.to_thread(update_after_skip, job["id"], next_bump)
 
         await _do_bump(uid, tid_str, job, client, thread_title, fid, numreplies,
-                       update_after_bump, log_action)
-
-
-async def _process_page1_jobs(uid, user_jobs, client,
-                               update_after_bump, update_after_skip, log_action):
-    now = int(time.time())
-
-    no_fid_jobs  = [j for j in user_jobs if not j.get("fid")]
-    has_fid_jobs = [j for j in user_jobs if j.get("fid")]
-
-    if no_fid_jobs:
-        tid_list = [str(j["tid"]) for j in no_fid_jobs]
-        job_map  = {str(j["tid"]): j for j in no_fid_jobs}
-        for i in range(0, len(tid_list), TIDS_PER_CALL):
-            chunk = tid_list[i:i + TIDS_PER_CALL]
-            try:
-                data = await client.read({
-                    "threads": {"_tid": chunk, "tid": True, "fid": True, "subject": True}
-                })
-                if not data:
-                    continue
-                rows = data.get("threads", [])
-                if isinstance(rows, dict):
-                    rows = [rows]
-                for t in rows:
-                    tid_str = str(t.get("tid") or "")
-                    if tid_str and tid_str in job_map:
-                        job_map[tid_str]["fid"]             = str(t.get("fid")     or "")
-                        job_map[tid_str]["_title_resolved"] = str(t.get("subject") or "")
-            except Exception as e:
-                log.warning("FID resolve failed uid=%s chunk=%s: %s", uid, chunk, e)
-
-        for j in no_fid_jobs:
-            if j.get("fid"):
-                has_fid_jobs.append(j)
-            else:
-                await asyncio.to_thread(log_action, j["id"], uid, str(j["tid"]),
-                                        "error", "Could not resolve FID for page1 job")
-
-    if not has_fid_jobs:
-        return
-
-    by_fid: dict[str, list[dict]] = {}
-    for job in has_fid_jobs:
-        by_fid.setdefault(str(job["fid"]), []).append(job)
-
-    for fid, fid_jobs in by_fid.items():
-        page1_tids:    set[str]         = set()
-        page1_replies: dict[str, int]   = {}
-
-        try:
-            data = await client.read({
-                "threads": {
-                    "_fid":       [fid],
-                    "_page":      1,
-                    "_perpage":   30,
-                    "tid":        True,
-                    "subject":    True,
-                    "numreplies": True,
-                    "replies":    True,
-                    "lastpost":   True,
-                }
-            })
-            if data:
-                rows = data.get("threads", [])
-                if isinstance(rows, dict):
-                    rows = [rows]
-                for t in rows:
-                    tid_str = str(t.get("tid") or "")
-                    if tid_str:
-                        page1_tids.add(tid_str)
-                        nr = t.get("numreplies")
-                        if nr is not None or t.get("replies") is not None:
-                            page1_replies[tid_str] = thread_reply_count(t)
-                log.info("Page1 check fid=%s uid=%s — %d threads on page 1", fid, uid, len(page1_tids))
-        except Exception as e:
-            log.warning("Page1 FID fetch failed uid=%s fid=%s: %s", uid, fid, e)
-            for job in fid_jobs:
-                tid_str = str(job["tid"])
-                await asyncio.to_thread(update_after_skip, job["id"], now + PAGE1_RECHECK)
-                await asyncio.to_thread(log_action, job["id"], uid, tid_str,
-                                        "error", f"FID page fetch failed: {e}")
-            continue
-
-        for job in fid_jobs:
-            tid_str      = str(job["tid"])
-            thread_title = job.get("thread_title") or job.get("_title_resolved") or ""
-            numreplies   = page1_replies.get(tid_str)
-
-            if tid_str in page1_tids:
-                await asyncio.to_thread(update_after_skip, job["id"], now + PAGE1_RECHECK)
-                await asyncio.to_thread(log_action, job["id"], uid, tid_str,
-                                        "skipped", "Thread still on page 1")
-                log.info("Page1 skip tid=%s uid=%s (on page 1)", tid_str, uid)
-            else:
-                # ── Safety gate 1: hard last_bumped cooldown ──────────────────
-                last_bumped = int(job.get("last_bumped") or 0)
-                if last_bumped and (now - last_bumped) < MIN_BUMP_GAP_SECS:
-                    secs_ago = now - last_bumped
-                    log.warning(
-                        "Safety gate 1 (last_bumped): tid=%s uid=%s — bumped only %ds ago, refusing",
-                        tid_str, uid, secs_ago
-                    )
-                    await asyncio.to_thread(update_after_skip, job["id"],
-                                            last_bumped + job["interval_h"] * 3600)
-                    await asyncio.to_thread(log_action, job["id"], uid, tid_str, "error",
-                        f"Safety gate: last_bumped {secs_ago}s ago (min {MIN_BUMP_GAP_SECS}s) — aborted")
-                    continue
-                log.info("Page1 bump tid=%s uid=%s (not on page 1 of fid=%s)", tid_str, uid, fid)
-                # Reschedule before bump — crash-safe
-                await asyncio.to_thread(update_after_skip, job["id"], now + job["interval_h"] * 3600)
-                await _do_bump(uid, tid_str, job, client, thread_title, fid, numreplies,
-                               update_after_bump, log_action)
+                       fees, update_after_bump, log_action)

@@ -19,7 +19,7 @@ def _metric(value, source: str, available: bool = True) -> dict:
 def _logs(uid: str, tid: str) -> list[dict]:
     with _db() as conn:
         rows = conn.execute(
-            "SELECT id,job_id,uid,tid,action,reason,numreplies,ts "
+            "SELECT id,job_id,uid,tid,action,reason,numreplies,hf_fee,service_fee,total_cost,ts "
             "FROM bump_log WHERE uid=? AND tid=? ORDER BY ts DESC, id DESC",
             (uid, str(tid)),
         ).fetchall()
@@ -46,7 +46,8 @@ def build_performance(uid: str, tid: str, range_key: str = "30d", page: int = 1,
     offset = (page - 1) * page_size
     page_items = grouped[offset:offset + page_size]
 
-    successful = sum(1 for row in ranged_logs if row.get("action") == "bumped")
+    successful_logs = [row for row in ranged_logs if row.get("action") == "bumped"]
+    successful = len(successful_logs)
     skips = sum(1 for row in ranged_logs if row.get("action") == "skipped")
     failures = sum(1 for row in ranged_logs if row.get("action") == "error")
     replies = sum(int(row.get("period_replies") or 0) for row in periods)
@@ -69,6 +70,11 @@ def build_performance(uid: str, tid: str, range_key: str = "30d", page: int = 1,
             current_gain = int(snapshot["replies"]) - int(latest_bump["numreplies"])
 
     fees = fees or {"hf_fee": 0, "service_fee": 10, "total_cost": 10}
+    observed_spend = sum(
+        int(row["total_cost"]) if row.get("total_cost") is not None
+        else int(fees.get("total_cost") or 0)
+        for row in successful_logs
+    )
     attempts = ranged_logs[:5]
     return {
         "tid": str(tid),
@@ -96,7 +102,7 @@ def build_performance(uid: str, tid: str, range_key: str = "30d", page: int = 1,
             "average_reply_gain": _metric(round(sum(gains) / len(gains), 1) if gains else None, "derived", bool(gains)),
             "bumps_with_replies": _metric(reply_periods, "derived"),
             "reply_period_rate": _metric(round(reply_periods * 100 / len(gains), 1) if gains else None, "derived", bool(gains)),
-            "estimated_bytes_spent": _metric(successful * int(fees.get("total_cost") or 0), "estimated"),
+            "estimated_bytes_spent": _metric(observed_spend, "recorded"),
         },
         "fees": {**fees, "source": "estimated"},
         "activity": page_items,

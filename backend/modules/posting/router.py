@@ -40,6 +40,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from hf_thread_stats import thread_reply_count
 import db
+from modules.autobump.schedule import normalize_schedule_payload
 try:
     from hf_gateway_client import AuthExpired as _AuthExpired
 except ImportError:
@@ -175,25 +176,26 @@ async def queue_thread(request: Request):
         fire_at = int(time.time())
 
     auto_bump = bool(body.get("auto_bump", False))
+    schedule_input = body.get("bump_schedule")
+    if schedule_input is None:
+        schedule_input = {
+            "mode": body.get("bump_mode") or "timer",
+            "interval_h": body.get("bump_interval_h", 12),
+            "timezone": body.get("bump_timezone") or "UTC",
+            "allowed_windows": body.get("bump_allowed_windows") or [],
+            "calendar_slots": body.get("bump_calendar_slots") or [],
+            "end_mode": body.get("bump_end_mode") or "unlimited",
+            "end_date": body.get("bump_end_date"),
+            "end_at": body.get("bump_until"),
+            "end_days": body.get("bump_end_days"),
+            "end_limit": body.get("bump_end_limit"),
+        }
     try:
-        bump_interval_h = int(body.get("bump_interval_h", 12))
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "invalid bump interval"}, status_code=400)
-    bump_mode = str(body.get("bump_mode") or "timer").strip().lower()
-    bump_until_raw = body.get("bump_until")
-    try:
-        bump_until = int(bump_until_raw) if bump_until_raw else None
-    except (TypeError, ValueError):
-        return JSONResponse({"error": "invalid bump end date"}, status_code=400)
+        bump_schedule = normalize_schedule_payload(schedule_input)
+    except (TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     overflow_message   = str(body.get("overflow_message") or "").strip()
     overflow_message_2 = str(body.get("overflow_message_2") or "").strip()
-    if bump_mode not in {"timer", "page1"}:
-        return JSONResponse({"error": "invalid bump mode"}, status_code=400)
-    if bump_interval_h not in {6, 8, 12, 16, 24, 48, 72, 120, 168}:
-        return JSONResponse({"error": "invalid bump interval"}, status_code=400)
-    if bump_until is not None and bump_until <= int(time.time()):
-        return JSONResponse({"error": "bump end date must be in the future"}, status_code=400)
-
     if fire_at > int(time.time()) + 60 or auto_bump:
         user = await asyncio.to_thread(db.get_user, uid) or {}
         groups = {str(group) for group in (user.get("groups") or [])}
@@ -205,8 +207,18 @@ async def queue_thread(request: Request):
 
     row_id = await asyncio.to_thread(
         create_scheduled_thread,
-        uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h,
-        bump_mode, bump_until, overflow_message, overflow_message_2
+        uid, fid, forum_name, subject, message, fire_at,
+        auto_bump=auto_bump,
+        bump_interval_h=bump_schedule["interval_h"],
+        bump_mode=bump_schedule["mode"],
+        bump_until=bump_schedule["end_at"],
+        bump_timezone=bump_schedule["timezone"],
+        bump_allowed_windows=bump_schedule["allowed_windows"],
+        bump_calendar_slots=bump_schedule["calendar_slots"],
+        bump_end_mode=bump_schedule["end_mode"],
+        bump_end_limit=bump_schedule["end_limit"],
+        overflow_message=overflow_message,
+        overflow_message_2=overflow_message_2,
     )
     try:
         await asyncio.to_thread(touch_recent, uid, fid, forum_name, category_name)

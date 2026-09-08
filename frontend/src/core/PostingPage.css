@@ -92,7 +92,7 @@
   border-top: 1px solid var(--b1);
 }
 
-.posting-bump-options label {
+.posting-bump-options > label {
   display: grid;
   gap: 4px;
   color: var(--dim);
@@ -105,6 +105,8 @@
   color: var(--sub);
   font-size: 11px;
 }
+
+.posting-bump-options > .abs-form { grid-column: 1 / -1; }
 
 .posting-color-control {
   position: relative;

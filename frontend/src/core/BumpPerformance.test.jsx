@@ -22,9 +22,10 @@ describe('shared bump performance components', () => {
     const onSave = vi.fn()
     render(<JobScheduleEditor job={{tid:'6319077',fid:'107',thread_title:'Sales thread',mode:'timer',interval_h:12,enabled:true,bump_until:null}} onSave={onSave} onCancel={()=>{}} />)
     expect(screen.queryByRole('textbox',{name:/Thread/})).not.toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Mode'),{target:{value:'page1'}})
+    fireEvent.change(screen.getByLabelText('Schedule type'),{target:{value:'calendar'}})
+    fireEvent.click(screen.getByRole('button',{name:'Add calendar slot'}))
     fireEvent.click(screen.getByRole('button',{name:'Save schedule'}))
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({mode:'page1',interval_h:12,enabled:true}))
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({mode:'calendar',interval_h:12,enabled:true,calendar_slots:[{day:0,time:'10:00'}]}))
     expect(onSave.mock.calls[0][0]).not.toHaveProperty('tid')
   })
 

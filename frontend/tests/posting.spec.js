@@ -111,7 +111,8 @@ test('failed scheduled posts require confirmation before retry', async ({ page }
 
 test('thread editor keeps preview to the right and reviews before queueing', async ({ page }) => {
   await page.setViewportSize({ width:1440, height:900 })
-  await mockPosting(page)
+  const threadRequests = []
+  await mockPosting(page, threadRequests)
   await page.goto('/dashboard/posting')
   await page.getByRole('button', { name:'Site News' }).click()
   await page.getByPlaceholder('Thread title…').fill('Release notes')
@@ -137,13 +138,23 @@ test('thread editor keeps preview to the right and reviews before queueing', asy
   await expect(editor).toHaveValue('[url=https://example.com/release]selected[/url] words')
 
   await page.getByText('Add to Bump Service', { exact:true }).click()
-  await expect(page.getByLabel('Mode')).toBeVisible()
-  await page.getByLabel('Mode').selectOption('page1')
+  await expect(page.getByLabel('Schedule type')).toBeVisible()
+  await page.getByLabel('Schedule type').selectOption('calendar')
+  await page.getByRole('button', { name:'Add calendar slot' }).click()
   await expect(page.getByText('A confirmed bump uses 100 Bytes')).toBeVisible()
   await page.getByRole('button', { name:'Review Thread' }).click()
   await expect(page.getByText('Queue this thread')).toBeVisible()
-  await expect(page.getByText('Page 1 watch, 12 hours', { exact:true })).toBeVisible()
+  await expect(page.getByText('Calendar Scheduling, 12 hours minimum inactivity', { exact:true })).toBeVisible()
   await page.screenshot({ path:'test-results/posting-desktop.png', fullPage:true })
+  await page.getByRole('button', { name:'Confirm Post', exact:true }).click()
+  await expect.poll(() => threadRequests.length).toBe(1)
+  expect(threadRequests[0].bump_schedule).toMatchObject({
+    mode:'calendar',
+    interval_h:12,
+    end_mode:'unlimited',
+    calendar_slots:[{ day:0, time:'10:00' }],
+  })
+  expect(threadRequests[0].bump_schedule.timezone).toBeTruthy()
 })
 
 for (const viewport of [

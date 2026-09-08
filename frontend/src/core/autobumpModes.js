@@ -21,15 +21,15 @@ export const BUMP_EXPIRIES = [
 export const BUMP_MODES = [
   {
     id: 'timer',
-    label: 'Timer',
-    intervalLabel: 'Interval',
-    description: 'Attempts after the selected interval when the thread is eligible.',
+    label: 'Activity Interval',
+    intervalLabel: 'Minimum inactivity',
+    description: 'Becomes due after the thread has remained inactive for the selected interval.',
   },
   {
-    id: 'page1',
-    label: 'Page 1 watch',
-    intervalLabel: 'Maximum interval',
-    description: 'Checks the forum page and attempts a bump after the thread leaves page 1.',
+    id: 'calendar',
+    label: 'Calendar Scheduling',
+    intervalLabel: 'Minimum inactivity',
+    description: 'Checks at selected weekly times and bumps only after the inactivity requirement is met.',
   },
 ]
 

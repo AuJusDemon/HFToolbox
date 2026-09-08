@@ -3,6 +3,7 @@ modules/posting/posting_db.py — Persistence for thread posting, reply queue, r
 and collaborative drafts. Uses MySQL via db_connection._db().
 """
 
+import json
 import secrets
 import time
 from _db_compat import _db
@@ -27,6 +28,11 @@ def init_posting_db() -> None:
                 bump_interval_h INT          NOT NULL DEFAULT 12,
                 bump_mode       VARCHAR(32)  NOT NULL DEFAULT 'timer',
                 bump_until      BIGINT,
+                bump_timezone   VARCHAR(64)  NOT NULL DEFAULT 'UTC',
+                bump_allowed_windows TEXT,
+                bump_calendar_slots TEXT,
+                bump_end_mode   VARCHAR(16)  NOT NULL DEFAULT 'unlimited',
+                bump_end_limit  BIGINT,
                 overflow_1_status VARCHAR(32),
                 overflow_2_status VARCHAR(32),
                 bump_status       VARCHAR(32),
@@ -76,6 +82,11 @@ def init_posting_db() -> None:
             ("overflow_2_status", "VARCHAR(32)"),
             ("bump_status", "VARCHAR(32)"),
             ("component_error", "TEXT"),
+            ("bump_timezone", "VARCHAR(64) NOT NULL DEFAULT 'UTC'"),
+            ("bump_allowed_windows", "TEXT"),
+            ("bump_calendar_slots", "TEXT"),
+            ("bump_end_mode", "VARCHAR(16) NOT NULL DEFAULT 'unlimited'"),
+            ("bump_end_limit", "BIGINT"),
         ):
             try:
                 conn.execute(f"ALTER TABLE scheduled_threads ADD COLUMN {column} {definition}")
@@ -229,15 +240,27 @@ def create_scheduled_thread(uid: str, fid: str, forum_name: str,
                              subject: str, message: str, fire_at: int,
                              auto_bump: bool = False, bump_interval_h: int = 12,
                              bump_mode: str = "timer", bump_until: int | None = None,
+                             bump_timezone: str = "UTC",
+                             bump_allowed_windows: list[dict] | None = None,
+                             bump_calendar_slots: list[dict] | None = None,
+                             bump_end_mode: str = "unlimited",
+                             bump_end_limit: int | None = None,
                              overflow_message: str = "",
                              overflow_message_2: str = "") -> int:
     with _db() as conn:
         cur = conn.execute(
             """INSERT INTO scheduled_threads
-               (uid, fid, forum_name, subject, message, fire_at, auto_bump, bump_interval_h, bump_mode, bump_until, overflow_message, overflow_message_2)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (uid, fid, forum_name, subject, message, fire_at, int(auto_bump), bump_interval_h, bump_mode, bump_until,
-             overflow_message or "", overflow_message_2 or "")
+               (uid,fid,forum_name,subject,message,fire_at,auto_bump,bump_interval_h,
+                bump_mode,bump_until,bump_timezone,bump_allowed_windows,
+                bump_calendar_slots,bump_end_mode,bump_end_limit,overflow_message,
+                overflow_message_2)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (uid, fid, forum_name, subject, message, fire_at, int(auto_bump),
+             bump_interval_h, bump_mode, bump_until, bump_timezone,
+             json.dumps(bump_allowed_windows or [], separators=(",", ":")),
+             json.dumps(bump_calendar_slots or [], separators=(",", ":")),
+             bump_end_mode, bump_end_limit, overflow_message or "",
+             overflow_message_2 or "")
         )
         return cur.lastrowid
 

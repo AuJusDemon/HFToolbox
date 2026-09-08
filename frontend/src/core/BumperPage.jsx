@@ -90,17 +90,13 @@ function HowItWorks() {
       </button>
       {open && (
         <div style={{marginTop:8,padding:'10px 12px',background:'var(--bg)',border:'1px solid var(--b1)',borderRadius:'var(--r)',fontSize:11.5,color:'var(--sub)',lineHeight:1.7}}>
-          <p style={{marginBottom:6,fontWeight:600,color:'var(--text)'}}>⏱ Timer</p>
+          <p style={{marginBottom:6,fontWeight:600,color:'var(--text)'}}>Activity Interval</p>
           <p style={{marginBottom:10}}>
             Bumps on a fixed schedule. If someone else posted within your window the bump is{' '}
             <strong style={{color:'var(--yellow)'}}>skipped</strong> and rescheduled to{' '}
             <code style={{fontFamily:'var(--mono)',fontSize:10,background:'var(--s3)',padding:'1px 4px',borderRadius:2}}>last post + interval</code>.
           </p>
-          <p style={{marginBottom:6,fontWeight:600,color:'var(--text)'}}>📄 Page 1 Watch</p>
-          <p style={{marginBottom:0}}>
-            Checks every 30 min — bumps the moment your thread leaves page 1.
-            HF limits bumps to once every 6h, so 6h is the fastest this can fire.
-          </p>
+          <p style={{marginBottom:0}}>The active Bump Service page also supports weekly Calendar Scheduling, allowed hours, timezones, and bounded end conditions.</p>
         </div>
       )}
     </div>
@@ -336,7 +332,7 @@ function StatsModal({ job, onClose }) {
               {job.thread_title || `Thread #${job.tid}`}
             </div>
             <div style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',marginTop:2}}>
-              TID {job.tid} · FID {job.fid || '—'} · {(job.mode||'timer').toUpperCase()}
+              TID {job.tid} · FID {job.fid || '—'} · {job.mode === 'calendar' ? 'CALENDAR SCHEDULING' : 'ACTIVITY INTERVAL'}
             </div>
           </div>
           <button onClick={onClose}
@@ -409,20 +405,18 @@ function StatsModal({ job, onClose }) {
 
 // ── Mode Badge ────────────────────────────────────────────────────────────────
 function ModeBadge({ mode }) {
-  if (mode === 'page1')
-    return <span style={{fontSize:9,fontFamily:'var(--mono)',fontWeight:700,padding:'1px 5px',borderRadius:3,letterSpacing:'.06em',textTransform:'uppercase',background:'rgba(75,140,245,.12)',border:'1px solid rgba(75,140,245,.3)',color:'var(--blue)'}}>PG1</span>
-  return <span style={{fontSize:9,fontFamily:'var(--mono)',fontWeight:700,padding:'1px 5px',borderRadius:3,letterSpacing:'.06em',textTransform:'uppercase',background:'rgba(0,212,180,.08)',border:'1px solid rgba(0,212,180,.2)',color:'var(--acc)'}}>TIMER</span>
+  return <span style={{fontSize:9,fontFamily:'var(--mono)',fontWeight:700,padding:'1px 5px',borderRadius:3,letterSpacing:'.06em',textTransform:'uppercase',background:'rgba(0,212,180,.08)',border:'1px solid rgba(0,212,180,.2)',color:'var(--acc)'}}>{mode === 'calendar' ? 'CAL' : 'ACTIVITY'}</span>
 }
 
 // ── Job Card ──────────────────────────────────────────────────────────────────
 function JobCard({ job, onToggle, onRemove, onStats }) {
   const mode    = job.mode || 'timer'
-  const isPage1 = mode === 'page1'
+  const isCalendar = mode === 'calendar'
   const isDue   = (job.seconds_until_bump ?? 1) <= 0
   const wasSkipped = job.last_skip && (!job.last_bumped || job.last_skip > job.last_bumped)
 
   return (
-    <div style={{background:'var(--bg)',border:`1px solid ${isDue?(isPage1?'rgba(75,140,245,.3)':'rgba(0,212,180,.25)'):'var(--b1)'}`,borderRadius:'var(--r)',padding:'12px 14px',opacity:job.enabled?1:0.5,transition:'opacity .2s,border-color .2s'}}>
+    <div style={{background:'var(--bg)',border:`1px solid ${isDue?'rgba(0,212,180,.25)':'var(--b1)'}`,borderRadius:'var(--r)',padding:'12px 14px',opacity:job.enabled?1:0.5,transition:'opacity .2s,border-color .2s'}}>
       <div style={{display:'flex',alignItems:'flex-start',gap:12}}>
         <div style={{flex:1,minWidth:0}}>
           <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:5}}>
@@ -434,10 +428,7 @@ function JobCard({ job, onToggle, onRemove, onStats }) {
           </div>
           <div style={{display:'flex',gap:10,flexWrap:'wrap',fontSize:10.5,color:'var(--sub)',fontFamily:'var(--mono)'}}>
             <span style={{color:'var(--muted)'}}>TID {job.tid}</span>
-            {isPage1
-              ? <span>bumps when off page 1 · max every {fmtInterval(job.interval_h)}</span>
-              : <span>every {fmtInterval(job.interval_h)}</span>
-            }
+            <span>{isCalendar ? 'weekly calendar' : 'activity interval'} · minimum {fmtInterval(job.interval_h)} inactive</span>
             {job.bump_until && !job.expired && <span style={{color:'var(--yellow)'}}>until {new Date(job.bump_until*1000).toLocaleDateString()}</span>}
             {job.expired && <span style={{color:'var(--red)'}}>expired</span>}
             <span style={{color:'var(--acc)'}}>{job.bump_count} bump{job.bump_count!==1?'s':''}</span>
@@ -451,19 +442,17 @@ function JobCard({ job, onToggle, onRemove, onStats }) {
             )}
             {job.last_bumped && <span>Last bumped <strong style={{color:'var(--text)',fontFamily:'var(--mono)'}}>{ago(job.last_bumped)}</strong></span>}
             {wasSkipped && (
-              <span style={{color:isPage1?'var(--acc)':'var(--yellow)'}}>
-                {isPage1?`✓ on page 1 as of ${ago(job.last_skip)}`:`⚠ skipped ${ago(job.last_skip)} — thread was active`}
-              </span>
+              <span style={{color:'var(--yellow)'}}>skipped {ago(job.last_skip)} — thread was active or outside its schedule</span>
             )}
           </div>
         </div>
         <div style={{flexShrink:0,display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}>
           <div style={{textAlign:'right'}}>
-            <div style={{fontFamily:'var(--mono)',fontSize:16,fontWeight:700,lineHeight:1.1,color:isDue?(isPage1?'var(--blue)':'var(--acc)'):'var(--text)'}}>
+            <div style={{fontFamily:'var(--mono)',fontSize:16,fontWeight:700,lineHeight:1.1,color:isDue?'var(--acc)':'var(--text)'}}>
               {fmtCd(job.seconds_until_bump)}
             </div>
             <div style={{fontSize:9,color:'var(--dim)',textTransform:'uppercase',letterSpacing:'.06em',fontFamily:'var(--mono)',marginTop:2}}>
-              {isPage1?(isDue?'checking soon':'next check'):(isDue?'bumping soon':'next bump')}
+              {isDue?'bumping soon':'next opportunity'}
             </div>
           </div>
           <div style={{display:'flex',gap:6,alignItems:'center'}}>
@@ -555,13 +544,12 @@ export default function BumperPage() {
                   onChange={e=>setTid(parseHfId(e.target.value,'tid'))} onKeyDown={e=>e.key==='Enter'&&add()} style={{width:150}}/>
 
                 <select className="inp" value={mode} onChange={e=>setMode(e.target.value)} style={{width:140}}>
-                  <option value="timer">⏱ Timer</option>
-                  <option value="page1">📄 Page 1 Watch</option>
+                  <option value="timer">Activity Interval</option>
                 </select>
 
                 <div style={{display:'flex',alignItems:'center',gap:4}}>
                   <span style={{fontSize:10,color:'var(--dim)',fontFamily:'var(--mono)',whiteSpace:'nowrap'}}>
-                    {mode==='page1' ? 'max every' : 'every'}
+                    minimum inactive
                   </span>
                   <select className="inp" value={iv} onChange={e=>setIv(Number(e.target.value))} style={{width:100}}>
                     {INTERVAL_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -595,12 +583,6 @@ export default function BumperPage() {
                 </div>
               )}
 
-              {mode==='page1' && (
-                <div style={{marginTop:8,padding:'7px 10px',background:'rgba(75,140,245,.06)',border:'1px solid rgba(75,140,245,.18)',borderRadius:'var(--r)',fontSize:11,color:'var(--sub)'}}>
-                  Checks every 30 min — bumps the moment your thread leaves page 1.
-                  HF limits bumps to once every 6h, so <strong style={{color:'var(--text)'}}>6 hours</strong> is the fastest this can fire.
-                </div>
-              )}
             </>
           ) : <AccessDenied feature="auto_bumper"/>}
         </div>

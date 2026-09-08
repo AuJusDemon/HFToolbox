@@ -2,8 +2,8 @@ import { expect, test } from '@playwright/test'
 
 const now = Math.floor(Date.now() / 1000)
 const baseJobs = [
-  { id:1, tid:'6319077', fid:'107', thread_title:'Spotify Premium Family Plan', mode:'timer', interval_h:12, enabled:true, expired:false, next_bump:now + 3600, seconds_until_bump:3600, last_bumped:now - 43200, lastpost_ts:now - 20000, lastposter:'Stanley', bump_count:18 },
-  { id:2, tid:'6410000', fid:'107', thread_title:'Secondary sales thread', mode:'page1', interval_h:6, enabled:true, expired:false, next_bump:now + 900, seconds_until_bump:900, last_bumped:now - 86400, lastpost_ts:now - 5000, lastposter:'Buyer', bump_count:4 },
+  { id:1, tid:'6319077', fid:'107', thread_title:'Spotify Premium Family Plan', mode:'timer', interval_h:12, timezone:'America/New_York', allowed_windows:[], calendar_slots:[], end_mode:'unlimited', enabled:true, expired:false, next_bump:now + 3600, seconds_until_bump:3600, last_bumped:now - 43200, lastpost_ts:now - 20000, lastposter:'Stanley', bump_count:18 },
+  { id:2, tid:'6410000', fid:'107', thread_title:'Secondary sales thread', mode:'calendar', interval_h:6, timezone:'America/New_York', allowed_windows:[{days:[0,1,2,3,4],start:'09:00',end:'22:00'}], calendar_slots:[{day:0,time:'10:00'},{day:3,time:'18:00'}], end_mode:'successes', end_limit:20, enabled:true, expired:false, next_bump:now + 900, seconds_until_bump:900, last_bumped:now - 86400, lastpost_ts:now - 5000, lastposter:'Buyer', bump_count:4 },
 ]
 const attempt = { id:1, tid:'6319077', thread_title:'Spotify Premium Family Plan', action:'bumped', reason:'', ts:now - 43200 }
 const fees = { weekly_budget:1000, bytes_this_week:220, remaining_budget:780, bumps_this_week:2, hf_fee:100, service_fee:10, total_cost:110 }
@@ -28,6 +28,7 @@ async function mockBumper(page, state = 'populated') {
       const jobs = structuredClone(baseJobs)
       if (state === 'paused') jobs[1].enabled = false
       if (state === 'due') { jobs[1].seconds_until_bump = 0; jobs[1].next_bump = now - 1 }
+      if (state === 'retired') Object.assign(jobs[1], { mode:'page1', enabled:false, requires_schedule_update:true, retired_reason:'Page 1 Watch retired because HF API forum pages are not activity ordered' })
       return route.fulfill({ json:{ jobs } })
     }
     if (url.pathname === '/api/autobump/log') return route.fulfill({ json:{ log:[attempt] } })
@@ -63,7 +64,7 @@ for (const viewport of [
   })
 }
 
-for (const state of ['empty', 'failure', 'paused', 'due', 'budget']) {
+for (const state of ['empty', 'failure', 'paused', 'due', 'budget', 'retired']) {
   test(`${state} scheduler state`, async ({ page }) => {
     await page.setViewportSize({ width:1440, height:900 })
     await mockBumper(page, state)
@@ -72,8 +73,9 @@ for (const state of ['empty', 'failure', 'paused', 'due', 'budget']) {
     if (state === 'empty') await expect(page.getByRole('heading', { name:'No bump jobs yet' })).toBeVisible()
     if (state === 'failure') await expect(page.getByText('Scheduler unavailable')).toBeVisible()
     if (state === 'paused') await expect(page.locator('.bp-status', { hasText:'Paused' }).first()).toBeVisible()
-    if (state === 'due') await expect(page.locator('.bp-status', { hasText:'Checking' }).first()).toBeVisible()
+    if (state === 'due') await expect(page.locator('.bp-status', { hasText:'Due now' }).first()).toBeVisible()
     if (state === 'budget') await expect(page.getByText(/next successful bump would exceed/i)).toBeVisible()
+    if (state === 'retired') await expect(page.getByRole('button', { name:'Choose replacement schedule' })).toBeVisible()
     await page.screenshot({ path:`test-results/bumper-${state}.png`, fullPage:true })
   })
 }
@@ -96,9 +98,11 @@ test('deep-linked job can open the immutable schedule editor', async ({ page }) 
   await expect(schedulerSwitch).toHaveAttribute('aria-checked', 'true')
   expect((await schedulerSwitch.boundingBox()).height).toBeLessThanOrEqual(48)
   await page.screenshot({ path:'test-results/bumper-schedule-editor.png', fullPage:true })
-  await page.locator('.bpr-editor-fields').getByLabel('Mode').selectOption('page1')
-  await expect(page.getByText('Next check')).toBeVisible()
-  await page.getByRole('button',{name:'Save schedule'}).click()
+  const editor = page.getByRole('region', { name:'Edit schedule' })
+  await editor.getByLabel('Schedule type').selectOption('calendar')
+  await editor.getByRole('button', { name:'Add calendar slot' }).click()
+  await expect(editor.getByLabel('Calendar slot 1 time')).toHaveValue('10:00')
+  await editor.getByRole('button',{name:'Save schedule'}).click()
 })
 
 test('range changes keep the report mounted and do not navigate', async ({ page }) => {
