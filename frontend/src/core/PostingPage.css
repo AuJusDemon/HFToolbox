@@ -36,10 +36,6 @@
   background: rgba(0, 212, 180, .06);
 }
 
-.posting-mobile-switch {
-  display: none;
-}
-
 .posting-tabs {
   overflow-x: auto;
   scrollbar-width: thin;
@@ -174,31 +170,49 @@
   cursor: pointer;
 }
 
+.posting-draft-review {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-top: 1px solid var(--b2);
+  border-bottom: 1px solid var(--b2);
+  background: var(--s2);
+}
+
+.posting-draft-review .posting-inline-review {
+  flex: 1;
+  min-width: 0;
+}
+
+.posting-draft-review-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.posting-action-error {
+  padding: 8px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, transparent);
+  font-size: 11px;
+}
+
 @media (max-width: 720px) {
-  .posting-mobile-switch {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    border: 1px solid var(--b2);
+  .posting-draft-review {
+    align-items: stretch;
+    flex-direction: column;
   }
 
-  .posting-mobile-switch button {
+  .posting-draft-review-actions .btn {
     min-height: 44px;
-    border: 0;
-    background: var(--s3);
-    color: var(--sub);
-  }
-
-  .posting-mobile-switch button.on {
-    background: var(--hover);
-    color: var(--acc);
   }
 
   .posting-workspace {
     display: block;
   }
 
-  .posting-workspace.posting-mobile-editor > .post-preview,
-  .posting-workspace.posting-mobile-preview > .posting-editor-pane,
   .posting-divider {
     display: none;
   }
@@ -207,26 +221,15 @@
     padding-right: 0;
   }
 
-  .posting-workspace.posting-mobile-preview > .post-preview {
+  .posting-workspace > .post-preview {
     position: static;
     max-height: none;
     margin-left: 0;
-    animation: posting-preview-in 140ms ease-out;
+    margin-top: 10px;
   }
 
   .posting-bump-options {
     grid-template-columns: 1fr;
   }
 
-}
-
-@keyframes posting-preview-in {
-  from { transform: translateX(18px); opacity: .55; }
-  to { transform: translateX(0); opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .posting-workspace.posting-mobile-preview > .post-preview {
-    animation: none;
-  }
 }

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 const now = Math.floor(Date.now() / 1000)
 
-async function mockPosting(page) {
+async function mockPosting(page, threadRequests = []) {
   await page.route('**/*', async route => {
     const url = new URL(route.request().url())
     if (url.hostname !== '127.0.0.1') return route.abort()
@@ -16,9 +16,21 @@ async function mockPosting(page) {
       '/api/posting/recents': { recents:[{ fid:'2', forum_name:'Site News', category_name:'Hack' }] },
       '/api/posting/replies/count': { count:0 },
       '/api/posting/threads': { threads:[{ tid:'123', title:'Owned thread', closed:0 }] },
+      '/api/posting/drafts': { drafts:[{
+        id:7, fid:'2', forum_name:'Site News', subject:'Saved release', message:'Saved body',
+        reply1:'', reply2:'', version:1, updated_at:now, is_owner:true, collab_count:0,
+      }] },
+      '/api/posting/drafts/shared': { drafts:[] },
+      '/api/posting/drafts/7/collaborators': { collaborators:[] },
+      '/api/posting/queue': { queue:[{
+        id:12, fid:'2', forum_name:'Site News', subject:'Failed release', message:'Retry body',
+        status:'failed', error:'Temporary failure', fire_at:now - 60,
+      }] },
+      '/api/posting/sent': { sent:[] },
       '/api/autobump/settings': { hf_fee:100, hf_fee_tier:'L33t', service_fee:10, total_cost:110 },
     }
     if (route.request().method() === 'POST' && url.pathname === '/api/posting/thread') {
+      threadRequests.push(route.request().postDataJSON())
       return route.fulfill({ json:{ ok:true, id:9, scheduled:false, fire_at:now, message:'Thread queued' } })
     }
     if (fixtures[url.pathname]) return route.fulfill({ json:fixtures[url.pathname] })
@@ -26,6 +38,76 @@ async function mockPosting(page) {
     return route.continue()
   })
 }
+
+test('draft editor keeps preview beside current content and confirms before publishing', async ({ page }) => {
+  await page.setViewportSize({ width:1440, height:900 })
+  const threadRequests = []
+  await mockPosting(page, threadRequests)
+  await page.goto('/dashboard/posting')
+  await page.getByRole('button', { name:'Drafts', exact:true }).click()
+  await page.getByRole('button', { name:'Edit', exact:true }).click()
+
+  const workspace = page.locator('.posting-workspace').last()
+  const editor = workspace.locator('.bb-ta')
+  const editorBox = await editor.boundingBox()
+  const previewBox = await workspace.locator('.post-preview').boundingBox()
+  expect(editorBox.x).toBeLessThan(previewBox.x)
+  await editor.fill('Current unsaved body')
+
+  await page.getByRole('button', { name:'Post now', exact:true }).click()
+  await expect(page.getByRole('region', { name:'Review draft publication' })).toBeVisible()
+  expect(threadRequests).toHaveLength(0)
+  await page.getByRole('button', { name:'Confirm and post', exact:true }).click()
+  await expect.poll(() => threadRequests.length).toBe(1)
+  expect(threadRequests[0].message).toBe('Current unsaved body')
+  expect(threadRequests[0].subject).toBe('Saved release')
+})
+
+test('draft editor stacks its preview on mobile without controls or horizontal overflow', async ({ page }) => {
+  await page.setViewportSize({ width:390, height:844 })
+  await mockPosting(page)
+  await page.goto('/dashboard/posting')
+  await page.getByRole('button', { name:'Drafts', exact:true }).click()
+  await page.getByRole('button', { name:'Edit', exact:true }).click()
+  const workspace = page.locator('.posting-workspace').last()
+  const editorBox = await workspace.locator('.bb-ta').boundingBox()
+  const previewBox = await workspace.locator('.post-preview').boundingBox()
+  expect(editorBox).not.toBeNull()
+  expect(previewBox.y).toBeGreaterThan(editorBox.y + editorBox.height)
+  await expect(page.getByText('Editor + preview', { exact:true })).toBeVisible()
+  await expect(page.getByRole('tablist', { name:'Draft editor view' })).toHaveCount(0)
+  await page.screenshot({ path:'test-results/posting-draft-mobile-stacked.png', fullPage:true })
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
+})
+
+test('draft scheduling requires review before creating the scheduled post', async ({ page }) => {
+  const threadRequests = []
+  await mockPosting(page, threadRequests)
+  await page.goto('/dashboard/posting')
+  await page.getByRole('button', { name:'Drafts', exact:true }).click()
+  await page.getByRole('button', { name:'Schedule', exact:true }).click()
+  await page.getByRole('button', { name:/Review schedule/ }).click()
+  await expect(page.getByRole('region', { name:'Review draft publication' })).toBeVisible()
+  expect(threadRequests).toHaveLength(0)
+  await page.getByRole('button', { name:'Confirm schedule', exact:true }).click()
+  await expect.poll(() => threadRequests.length).toBe(1)
+  expect(threadRequests[0].fire_at).toBeGreaterThan(now)
+})
+
+test('failed scheduled posts require confirmation before retry', async ({ page }) => {
+  const retryRequests = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && request.url().includes('/api/posting/queue/12/retry')) retryRequests.push(request)
+  })
+  await mockPosting(page)
+  await page.goto('/dashboard/posting')
+  await page.getByRole('button', { name:'Scheduled', exact:true }).click()
+  await page.getByRole('button', { name:'Retry now', exact:true }).click()
+  await expect(page.getByText('Send this failed thread again?')).toBeVisible()
+  expect(retryRequests).toHaveLength(0)
+  await page.getByRole('button', { name:'Confirm retry', exact:true }).click()
+  await expect.poll(() => retryRequests.length).toBe(1)
+})
 
 test('thread editor keeps preview to the right and reviews before queueing', async ({ page }) => {
   await page.setViewportSize({ width:1440, height:900 })
@@ -75,10 +157,10 @@ for (const viewport of [
     await mockPosting(page)
     await page.goto('/dashboard/posting')
     if (viewport.width <= 720) {
-      await expect(page.getByRole('button', { name:'Preview', exact:true }).first()).toBeVisible()
-      await page.getByRole('button', { name:'Preview', exact:true }).first().click()
-      await expect(page.locator('.posting-workspace').first().locator('.post-preview')).toBeVisible()
-      await expect(page.locator('.posting-workspace').first().locator('.bb-ta')).not.toBeVisible()
+      const workspace = page.locator('.posting-workspace').first()
+      const editorBox = await workspace.locator('.bb-ta').boundingBox()
+      const previewBox = await workspace.locator('.post-preview').boundingBox()
+      expect(previewBox.y).toBeGreaterThan(editorBox.y + editorBox.height)
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true)
     await page.screenshot({ path:`test-results/posting-${viewport.name}.png`, fullPage:true })

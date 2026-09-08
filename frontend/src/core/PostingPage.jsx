@@ -2031,7 +2031,7 @@ function ImgBadge({ count }) {
 }
 
 // ── Section editor (Post 1 / Reply 1 / Reply 2) ───────────────────────────────
-function PostingWorkspace({ editor, preview, mobilePane = 'editor' }) {
+function PostingWorkspace({ editor, preview }) {
   const workspaceRef = useRef(null)
   const [editorWidth, setEditorWidth] = useState(54)
 
@@ -2058,7 +2058,7 @@ function PostingWorkspace({ editor, preview, mobilePane = 'editor' }) {
 
   return <div
     ref={workspaceRef}
-    className={`posting-workspace posting-mobile-${mobilePane}`}
+    className="posting-workspace"
     style={{ '--posting-editor-width': `${editorWidth}%` }}
   >
     <div className="posting-editor-pane">{editor}</div>
@@ -2086,7 +2086,6 @@ function SectionEditor({ label, index, value, onChange, userGroups, preview, sid
   const imgCount   = countImages(value)
   const previewMsg = index === 0 && addFooter ? value + '\n\n' + FOOTER_TEXT : value
   const prevTitle  = index === 0 ? title : `↩ Reply ${index}`
-  const [mobilePane, setMobilePane] = useState('editor')
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2104,12 +2103,8 @@ function SectionEditor({ label, index, value, onChange, userGroups, preview, sid
           </span>
         )}
       </div>
-      {preview && sideBySide && <div className="posting-mobile-switch" role="tablist" aria-label={`${label} view`}>
-        <button type="button" className={mobilePane === 'editor' ? 'on' : ''} onClick={() => setMobilePane('editor')}>Editor</button>
-        <button type="button" className={mobilePane === 'preview' ? 'on' : ''} onClick={() => setMobilePane('preview')}>Preview</button>
-      </div>}
       {preview && sideBySide ? (
-        <PostingWorkspace mobilePane={mobilePane}
+        <PostingWorkspace
           editor={<BBEditor value={value} onChange={onChange} userGroups={userGroups} />}
           preview={<BBPreview message={previewMsg} title={prevTitle} userGroups={userGroups} />} />
       ) : (
@@ -2138,7 +2133,6 @@ function Composer({ onPosted }) {
   const [fireAt,       setFireAt]       = useState(() => { const d=new Date(Date.now()+3600000); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0') })
   const [preview,      setPreview]      = useState(true)
   const [sideBySide,   setSideBySide]   = useState(true)
-  const [mobilePane,   setMobilePane]   = useState('editor')
   const [submitting,   setSubmitting]   = useState(false)
   const [result,       setResult]       = useState(null)
   const [recents,      setRecents]      = useState([])
@@ -2182,7 +2176,10 @@ function Composer({ onPosted }) {
   )
 
   const saveToDraft = async () => {
-    if (!title.trim() || !message.trim()) return
+    if (!title.trim() || !message.trim()) {
+      setDraftFlash('validation')
+      return
+    }
     setSavingDraft(true)
     setDraftFlash(null)
     try {
@@ -2280,15 +2277,10 @@ function Composer({ onPosted }) {
       <div>
         <div style={{ fontSize: 9, color: 'var(--dim)', textTransform: 'uppercase', letterSpacing: '.08em', fontFamily: 'var(--mono)', marginBottom: 5 }}>Thread Title</div>
         <input className="inp" style={{ width: '100%' }} placeholder="Thread title…"
-          value={title} onChange={e => setTitle(e.target.value)} />
+          value={title} onChange={e => { setTitle(e.target.value); setDraftFlash(null) }} />
         <div style={{ fontSize: 9, color: 'var(--dim)', marginTop: 3 }}>
           Add a thread prefix on Hack Forums after publishing.
         </div>
-      </div>
-
-      <div className="posting-mobile-switch" role="tablist" aria-label="Composer view">
-        <button type="button" className={mobilePane === 'editor' ? 'on' : ''} onClick={() => setMobilePane('editor')}>Editor</button>
-        <button type="button" className={mobilePane === 'preview' ? 'on' : ''} onClick={() => setMobilePane('preview')}>Preview</button>
       </div>
 
       {/* Content sections */}
@@ -2305,8 +2297,8 @@ function Composer({ onPosted }) {
             )}
           </div>
           {sideBySide ? (
-            <PostingWorkspace mobilePane={mobilePane}
-              editor={<BBEditor value={message} onChange={setMessage} userGroups={userGroups} onReview={() => canSubmit && sectionsOk && setConfirm(true)} />}
+            <PostingWorkspace
+              editor={<BBEditor value={message} onChange={value => { setMessage(value); setDraftFlash(null) }} userGroups={userGroups} onReview={() => canSubmit && sectionsOk && setConfirm(true)} />}
               preview={<BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title={title} userGroups={userGroups} />} />
           ) : (
             <>
@@ -2509,6 +2501,9 @@ function Composer({ onPosted }) {
         {draftFlash === 'err' && (
           <span style={{ fontSize: 11, color: 'var(--red)' }}>Failed to save</span>
         )}
+        {draftFlash === 'validation' && (
+          <span style={{ fontSize: 11, color: 'var(--red)' }}>Add a title and content before saving.</span>
+        )}
         {multiPost && (
           <span style={{ fontSize: 11, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
             {replyCount + 1} posts total
@@ -2564,7 +2559,6 @@ function PostToThread() {
   const [search,     setSearch]   = useState('')
   const [message,    setMessage]  = useState('')
   const [preview,    setPreview]  = useState(true)
-  const [mobilePane, setMobilePane] = useState('editor')
   const [confirm,    setConfirm] = useState(false)
   const [addFooter,  setAddFooter]= useState(false)
   const [submitting, setSubmitting]= useState(false)
@@ -2698,13 +2692,8 @@ function PostToThread() {
             </label>
           </div>
 
-          <div className="posting-mobile-switch" role="tablist" aria-label="Reply composer view">
-            <button type="button" className={mobilePane === 'editor' ? 'on' : ''} onClick={() => setMobilePane('editor')}>Editor</button>
-            <button type="button" className={mobilePane === 'preview' ? 'on' : ''} onClick={() => setMobilePane('preview')}>Preview</button>
-          </div>
-
           {preview ? (
-            <PostingWorkspace mobilePane={mobilePane}
+            <PostingWorkspace
               editor={<BBEditor value={message} onChange={setMessage} userGroups={userGroups} onReview={() => message.trim() && setConfirm(true)} />}
               preview={<BBPreview message={addFooter ? message + '\n\n' + FOOTER_TEXT : message} title="" userGroups={userGroups} />} />
           ) : (
@@ -2838,12 +2827,10 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   const [editReplyCount,setEditReplyCount]= useState(1)
   const [editStashedReplies, setEditStashedReplies] = useState(null)
   const [editMultiPostConfirm, setEditMultiPostConfirm] = useState(false)
-  const [editSideBySide,setEditSideBySide]= useState(true)
   const [editFid,      setEditFid]      = useState('')
   const [editForumName,setEditForumName]= useState('')
   const [editVersion,  setEditVersion]  = useState(1)
   const [editIsOwner,  setEditIsOwner]  = useState(false)
-  const [editPreview,  setEditPreview]  = useState(true)
   const [editSaving,   setEditSaving]   = useState(false)
   const [editSaveFlash,setEditSaveFlash]= useState(null) // null | 'ok' | 'err'
   const [editSaveErr,  setEditSaveErr]  = useState(null)
@@ -2878,6 +2865,8 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
 
   // ── Scheduling (existing) ─────────────────────────────────────────────────
   const [scheduling, setScheduling] = useState(null)
+  const [publishReview, setPublishReview] = useState(null)
+  const [publishError, setPublishError] = useState(null)
   const [fireAt,     setFireAt]     = useState(() => {
     const d = new Date(Date.now() + 3600000)
     return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' +
@@ -2929,7 +2918,8 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
     setEditVersion(draft.version || 1)
     editVersionRef.current = draft.version || 1
     setEditIsOwner(draft.is_owner !== false)
-    setEditPreview(false)
+    setPublishReview(null)
+    setPublishError(null)
     setConflict(null)
     setVersionBanner(null)
     setShowCollabPanel(false)
@@ -3072,42 +3062,59 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
   }
 
   // ── Post / schedule existing actions ─────────────────────────────────────
-  const scheduleNow = async (draft) => {
-    const res = await api.post('/api/posting/thread', {
-      fid: draft.fid, forum_name: draft.forum_name,
-      subject: draft.subject, message: draft.message, fire_at: 0,
-      overflow_message:   draft.reply1 || '',
-      overflow_message_2: draft.reply2 || '',
-    })
-    if (res?.ok || res?.id) {
-      await api.delete(`/api/posting/drafts/${draft.id}`)
-      setMyDrafts(ds => ds.filter(x => x.id !== draft.id))
-      setSharedDrafts(ds => ds.filter(x => x.id !== draft.id))
-      if (editingDraft?.id === draft.id) closeEdit()
-      onSchedule?.()
+  const draftPayload = (draft) => {
+    if (editingDraft?.id !== draft.id) {
+      return {
+        fid: draft.fid, forum_name: draft.forum_name,
+        subject: draft.subject, message: draft.message,
+        overflow_message: draft.reply1 || '',
+        overflow_message_2: draft.reply2 || '',
+      }
+    }
+    return {
+      fid: editFid, forum_name: editForumName,
+      subject: editSubject, message: editMessage,
+      overflow_message: editMultiPost ? editReply1 : '',
+      overflow_message_2: editMultiPost && editReplyCount >= 2 ? editReply2 : '',
     }
   }
 
-  const scheduleLater = async (draft) => {
-    if (!fireAt) return
-    const fire_at = Math.floor(new Date(fireAt).getTime() / 1000)
-    if (isNaN(fire_at) || fire_at <= 0) return
+  const reviewDraftPublish = (draft, action) => {
+    const payload = draftPayload(draft)
+    const scheduledAt = action === 'schedule' ? Math.floor(new Date(fireAt).getTime() / 1000) : 0
+    setPublishError(null)
+    if (editingDraft?.id === draft.id && conflict) {
+      return setPublishError({ draftId: draft.id, message: 'Resolve the newer saved version before posting this draft.' })
+    }
+    if (!String(payload.fid || '').trim()) return setPublishError({ draftId: draft.id, message: 'Select a forum before posting this draft.' })
+    if (!String(payload.subject || '').trim()) return setPublishError({ draftId: draft.id, message: 'Add a title before posting this draft.' })
+    if (!String(payload.message || '').trim()) return setPublishError({ draftId: draft.id, message: 'Add post content before posting this draft.' })
+    if (action === 'schedule' && (!fireAt || Number.isNaN(scheduledAt) || scheduledAt <= Math.floor(Date.now() / 1000))) {
+      return setPublishError({ draftId: draft.id, message: 'Choose a future date and time before scheduling this draft.' })
+    }
+    setPublishReview({ draft, action, payload, fire_at: scheduledAt })
+  }
+
+  const confirmDraftPublish = async () => {
+    if (!publishReview || saving) return
+    const { draft, action, payload, fire_at } = publishReview
     setSaving(true)
-    const res = await api.post('/api/posting/thread', {
-      fid: draft.fid, forum_name: draft.forum_name,
-      subject: draft.subject, message: draft.message, fire_at,
-      overflow_message:   draft.reply1 || '',
-      overflow_message_2: draft.reply2 || '',
-    })
-    if (res?.ok || res?.id) {
+    setPublishError(null)
+    try {
+      const res = await api.post('/api/posting/thread', { ...payload, fire_at })
+      if (!(res?.ok || res?.id)) throw new Error(res?.error || 'HF did not accept the post.')
       await api.delete(`/api/posting/drafts/${draft.id}`)
       setMyDrafts(ds => ds.filter(x => x.id !== draft.id))
       setSharedDrafts(ds => ds.filter(x => x.id !== draft.id))
+      setPublishReview(null)
+      setScheduling(null)
       if (editingDraft?.id === draft.id) closeEdit()
-      onSchedule?.()
+      onSchedule?.(action)
+    } catch (error) {
+      setPublishError({ draftId: draft.id, message: error?.message || 'Unable to publish this draft.' })
+    } finally {
+      setSaving(false)
     }
-    setSaving(false)
-    setScheduling(null)
   }
 
   const deleteDraft = async (id, isOwner) => {
@@ -3273,7 +3280,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                 </button>
                 {isOwner && (
                   <button className="btn btn-acc" style={{ fontSize: 10, padding: '2px 7px' }}
-                    onClick={() => scheduleNow(d)}>
+                    onClick={() => reviewDraftPublish(d, 'now')}>
                     Post now
                   </button>
                 )}
@@ -3306,11 +3313,33 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                   ))}
                 </div>
                 <button className="btn btn-acc" style={{ fontSize: 11 }} disabled={saving}
-                  onClick={() => scheduleLater(d)}>
-                  {saving ? 'Scheduling…' : `Schedule → ${fmtFireAt()}`}
+                  onClick={() => reviewDraftPublish(d, 'schedule')}>
+                  {`Review schedule → ${fmtFireAt()}`}
                 </button>
                 <button className="btn btn-ghost" style={{ fontSize: 11 }} onClick={() => setScheduling(null)}>Cancel</button>
               </div>
+            )}
+
+            {publishReview?.draft.id === d.id && (
+              <div className="posting-draft-review" role="region" aria-label="Review draft publication">
+                <div className="posting-inline-review">
+                  <strong>{publishReview.action === 'schedule' ? 'Schedule this thread?' : 'Post this thread now?'}</strong>
+                  <span>{publishReview.payload.forum_name || `Forum ${publishReview.payload.fid}`} / {publishReview.payload.subject}</span>
+                  <span>{publishReview.action === 'schedule'
+                    ? new Date(publishReview.fire_at * 1000).toLocaleString()
+                    : 'Send as soon as the publisher can process it'}</span>
+                  <span>{[publishReview.payload.overflow_message, publishReview.payload.overflow_message_2].filter(Boolean).length} additional replies</span>
+                </div>
+                <div className="posting-draft-review-actions">
+                  <button className="btn btn-acc" disabled={saving} onClick={confirmDraftPublish}>
+                    {saving ? 'Working...' : publishReview.action === 'schedule' ? 'Confirm schedule' : 'Confirm and post'}
+                  </button>
+                  <button className="btn btn-ghost" disabled={saving} onClick={() => setPublishReview(null)}>Back</button>
+                </div>
+              </div>
+            )}
+            {publishError?.draftId === d.id && (
+              <div className="posting-action-error" role="alert">{publishError.message}</div>
             )}
 
             {/* ── Edit panel ─────────────────────────────────────────── */}
@@ -3383,15 +3412,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                 {/* Toolbar row */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--b1)', flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>v{editVersion}</span>
-                  <label style={{ fontSize: 11, color: 'var(--dim)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
-                    <input type="checkbox" checked={editPreview} onChange={e => { setEditPreview(e.target.checked); if (!e.target.checked) setEditSideBySide(false) }} /> Preview
-                  </label>
-                  {editPreview && (
-                    <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
-                      onClick={() => setEditSideBySide(s => !s)}>
-                      {editSideBySide ? 'Stack' : 'Side by Side'}
-                    </button>
-                  )}
+                  <span style={{ fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>Editor + preview</span>
                   {isOwner && (
                     <button className="btn btn-ghost" style={{ fontSize: 10, padding: '2px 7px' }}
                       onClick={() => { setShowCollabPanel(p => !p); setShowLog(false) }}>
@@ -3597,21 +3618,16 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                   )}
 
                   {!editMultiPost ? (
-                    editPreview && editSideBySide ? (
+                    <>
                       <PostingWorkspace
                         editor={<BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />}
                         preview={<BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />} />
-                    ) : (
-                      <>
-                        <BBEditor value={editMessage} onChange={setEditMessage} userGroups={userGroups} />
-                        {editPreview && <BBPreview message={editMessage} title={editSubject} userGroups={userGroups} />}
-                      </>
-                    )
+                    </>
                   ) : (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                       <SectionEditor label="Post 1 — Thread" index={0}
                         value={editMessage} onChange={setEditMessage}
-                        userGroups={userGroups} preview={editPreview} sideBySide={editSideBySide} addFooter={false} title={editSubject} />
+                        userGroups={userGroups} preview sideBySide addFooter={false} title={editSubject} />
                       <div style={{ borderTop: '2px dashed var(--b2)', position: 'relative' }}>
                         <span style={{ position: 'absolute', top: -9, left: '50%', transform: 'translateX(-50%)',
                           background: 'var(--s2)', padding: '0 8px', fontSize: 10, color: 'var(--dim)', fontFamily: 'var(--mono)' }}>
@@ -3620,7 +3636,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                       </div>
                       <SectionEditor label="Reply 1" index={1}
                         value={editReply1} onChange={setEditReply1}
-                        userGroups={userGroups} preview={editPreview} sideBySide={editSideBySide} addFooter={false} title={editSubject} />
+                        userGroups={userGroups} preview sideBySide addFooter={false} title={editSubject} />
                       {editReplyCount >= 2 ? (
                         <>
                           <div style={{ borderTop: '2px dashed var(--b2)', position: 'relative' }}>
@@ -3631,7 +3647,7 @@ function DraftsPanel({ onSchedule, autoOpenId }) {
                           </div>
                           <SectionEditor label="Reply 2" index={2}
                             value={editReply2} onChange={setEditReply2}
-                            userGroups={userGroups} preview={editPreview} sideBySide={editSideBySide} addFooter={false} title={editSubject} />
+                            userGroups={userGroups} preview sideBySide addFooter={false} title={editSubject} />
                           <button className="btn btn-ghost" style={{ fontSize: 11, alignSelf: 'flex-start', color: 'var(--red)' }}
                             onClick={() => { setEditReplyCount(1); setEditReply2('') }}>− Remove Reply 2</button>
                         </>
@@ -3659,7 +3675,6 @@ function ReplyQueue({ onCountChange }) {
   const [expandedTid, setExpandedTid] = useState(null)
   const [multiSel,   setMultiSel]   = useState({})
   const [threadMsg,  setThreadMsg]  = useState({})
-  const [preview,    setPreview]    = useState({})
   const [sending,    setSending]    = useState({})
   const [sendResult, setSendResult] = useState({})
   const [confirming, setConfirming] = useState({})
@@ -3912,20 +3927,9 @@ function ReplyQueue({ onCountChange }) {
 
                 {/* ── Composer ── */}
                 <div style={{background:'var(--bg)',borderTop:'1px solid var(--b2)',padding:'10px 12px'}}>
-                  <div style={{display:'flex',justifyContent:'flex-end',marginBottom:6}}>
-                    <button className="btn btn-ghost" style={{fontSize:9,padding:'2px 8px',fontFamily:'var(--mono)'}}
-                      onClick={() => setPreview(p => ({...p,[tid]:!p[tid]}))}>
-                      {preview[tid] ? 'hide preview' : 'preview'}
-                    </button>
-                  </div>
-                  {preview[tid] ? (
-                    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,alignItems:'start'}}>
-                      <BBEditor value={threadMsg[tid]||''} onChange={v=>setThreadMsg(m=>({...m,[tid]:v}))} userGroups={userGroups}/>
-                      <BBPreview message={threadMsg[tid]||''} userGroups={userGroups}/>
-                    </div>
-                  ) : (
-                    <BBEditor value={threadMsg[tid]||''} onChange={v=>setThreadMsg(m=>({...m,[tid]:v}))} userGroups={userGroups}/>
-                  )}
+                  <PostingWorkspace
+                    editor={<BBEditor value={threadMsg[tid]||''} onChange={v=>setThreadMsg(m=>({...m,[tid]:v}))} userGroups={userGroups}/>}
+                    preview={<BBPreview message={threadMsg[tid]||''} userGroups={userGroups}/>} />
                   {sendResult[tid] && (
                     <div style={{
                       fontFamily:'var(--mono)',fontSize:11,padding:'5px 8px',marginTop:6,
@@ -3978,6 +3982,7 @@ function ScheduledQueue({ refresh }) {
 
   const [editingTime, setEditingTime] = useState(null) // id of row being rescheduled
   const [editTimeVal, setEditTimeVal] = useState('')
+  const [retryReview, setRetryReview] = useState(null)
 
   const cancelToDraft = async (id) => {
     try {
@@ -3992,6 +3997,7 @@ function ScheduledQueue({ refresh }) {
       setQueue(items => items.map(item => item.id === id
         ? { ...item, status:'pending', error:null, fire_at:Math.floor(Date.now() / 1000) }
         : item))
+      setRetryReview(null)
     } catch {}
   }
 
@@ -4076,7 +4082,13 @@ function ScheduledQueue({ refresh }) {
             </div>
           ) : t.status === 'failed' ? (
             <div style={{ display:'flex', gap:4 }}>
-              <button className="btn btn-acc" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => retryFailed(t.id)}>Retry now</button>
+              {retryReview === t.id ? <>
+                <span style={{ fontSize:10, color:'var(--sub)' }}>Send this failed thread again?</span>
+                <button className="btn btn-acc" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => retryFailed(t.id)}>Confirm retry</button>
+                <button className="btn btn-ghost" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => setRetryReview(null)}>Back</button>
+              </> : (
+                <button className="btn btn-acc" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => setRetryReview(t.id)}>Retry now</button>
+              )}
               <button className="btn btn-ghost" style={{ fontSize:10, padding:'2px 7px' }} onClick={() => cancelToDraft(t.id)}>Restore draft</button>
             </div>
           ) : null}
