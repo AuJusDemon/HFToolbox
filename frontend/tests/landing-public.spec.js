@@ -19,14 +19,16 @@ async function runCommand(page, command) {
   await input.press('Enter')
 }
 
-test('root sign-in is single-flight under repeated clicks', async ({ page }) => {
+test('root serves the public landing and sign-in remains single-flight', async ({ page }) => {
   let authRequests = 0
   await page.route('**/auth/login**', route => {
     authRequests += 1
     return route.abort()
   })
   await page.goto('/')
-  const button = page.getByRole('button', { name: 'Continue with HackForums' })
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('heading', { name: 'HF Toolbox' })).toBeVisible()
+  const button = page.getByRole('button', { name: 'Login with HF' })
   await expect(button).toBeVisible({ timeout: 5000 })
   await button.evaluate(element => {
     element.click()
@@ -38,7 +40,7 @@ test('root sign-in is single-flight under repeated clicks', async ({ page }) => 
 for (const viewport of VIEWPORTS) {
   test(`${viewport.name} hero boots, accepts commands, and remains width-contained`, async ({ page }) => {
     await page.setViewportSize(viewport)
-    await page.goto('/landing-mock')
+    await page.goto('/')
     const hero = page.locator('.hero-instrument')
     const before = await hero.boundingBox()
     await waitForBoot(page)
@@ -264,12 +266,25 @@ test('terminal open command preserves the selected internal OAuth route', async 
   expect(request.url()).not.toContain('example.invalid')
 })
 
-test('authenticated Program Bus entry navigates directly to its dashboard route', async ({ page }) => {
+test('authenticated root and landing alias stay inside the Toolbox', async ({ page }) => {
   await page.route('**/auth/me', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ uid: '761578', username: 'PreviewUser', groups: [] }) }))
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/dashboard$/)
+
   await page.goto('/landing-mock')
+  await expect(page).toHaveURL(/\/dashboard$/)
+})
+
+test('protected deep link returns through the landing with its OAuth destination intact', async ({ page }) => {
+  await page.route('**/auth/login**', route => route.fulfill({ status: 200, body: 'redirect captured' }))
+  await page.goto('/dashboard/posting')
+  await expect(page).toHaveURL(/\/$/)
   await page.keyboard.press('Escape')
-  await page.locator('.hero-program-grid').getByRole('button', { name: /Bump Service/ }).click()
-  await expect(page).toHaveURL(/\/dashboard\/bumper$/)
+
+  const requestPromise = page.waitForRequest(request => request.url().includes('/auth/login'))
+  await page.getByRole('button', { name: 'Login with HF' }).click()
+  const request = await requestPromise
+  expect(request.url()).toContain('next=%2Fdashboard%2Fposting')
 })
 
 test('OAuth errors appear inside the terminal with their reference', async ({ page }) => {

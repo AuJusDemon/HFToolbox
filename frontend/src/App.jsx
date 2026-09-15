@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate, useParams, useNavigate } from '
 import './index.css'
 import useStore    from './store.js'
 import Shell       from './core/ShellV2.jsx'
-import Login       from './core/Login.jsx'
 import Dashboard   from './core/OverviewDashboard.jsx'
 import { api }     from './core/api.js'
 
@@ -22,6 +21,20 @@ const MarketPage         = lazy(() => import('./core/MarketPage.jsx'))
 const MerchantPage       = lazy(() => import('./core/MerchantPage.jsx'))
 const OperatorPage       = lazy(() => import('./core/OperatorPage.jsx'))
 const LandingMock        = lazy(() => import('./core/LandingMock.jsx'))
+
+function PublicEntry() {
+  const { user, authLoading } = useStore()
+
+  if (authLoading) return (
+    <div className="empty" style={{ height:'100vh' }}>
+      <div className="spin" />
+    </div>
+  )
+
+  if (user) return <Navigate to="/dashboard" replace />
+
+  return <Suspense fallback={<Spin/>}><LandingMock /></Suspense>
+}
 
 function RequireAuth({ children }) {
   const { user, authLoading } = useStore()
@@ -119,8 +132,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Login />} />
-        <Route path="/landing-mock" element={<Suspense fallback={<Spin/>}><LandingMock /></Suspense>} />
+        <Route path="/" element={<PublicEntry />} />
+        <Route path="/landing-mock" element={<PublicEntry />} />
         <Route path="/dashboard" element={<RequireAuth><Shell /></RequireAuth>}>
           <Route index element={<GuardedRoute><Dashboard /></GuardedRoute>} />
           <Route path="bytes"          element={<GuardedRoute><Suspense fallback={<Spin/>}><BytesPage /></Suspense></GuardedRoute>} />
