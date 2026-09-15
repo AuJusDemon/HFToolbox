@@ -84,6 +84,15 @@ describe('interactive terminal hero', () => {
     expect(screen.getByRole('log')).not.toHaveTextContent('business')
   })
 
+  it('marks the command input as non-credential data for password managers', () => {
+    renderHero()
+    const input = screen.getByLabelText('Terminal command')
+    expect(input).toHaveAttribute('type', 'search')
+    expect(input).toHaveAttribute('name', 'hftoolbox-command')
+    expect(input).toHaveAttribute('autocomplete', 'off')
+    expect(input).toHaveAttribute('data-lpignore', 'true')
+  })
+
   it('keeps Byte Casino on-page and routes available program clicks', () => {
     const { props } = renderHero()
     fireEvent.pointerDown(window)

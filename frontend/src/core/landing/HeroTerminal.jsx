@@ -35,7 +35,7 @@ export default function HeroTerminal({ runtime }) {
       <form className={`hero-terminal-prompt${runtime.ready ? ' is-visible' : ''}`} onSubmit={(event) => { event.preventDefault(); runtime.execute(runtime.input) }}>
         <label htmlFor="hero-command">Terminal command</label>
         <span aria-hidden="true">guest@hftoolbox:~$</span>
-        <input ref={runtime.inputRef} id="hero-command" value={runtime.input} onChange={event => runtime.setInput(event.target.value)} onKeyDown={runtime.handleKeyDown} autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck="false" disabled={!runtime.ready || runtime.interactionState !== 'idle'} />
+        <input ref={runtime.inputRef} id="hero-command" name="hftoolbox-command" type="search" data-lpignore="true" value={runtime.input} onChange={event => runtime.setInput(event.target.value)} onKeyDown={runtime.handleKeyDown} autoCapitalize="none" autoComplete="off" autoCorrect="off" spellCheck="false" disabled={!runtime.ready || runtime.interactionState !== 'idle'} />
         <i aria-hidden="true" />
         <button type="submit" disabled={!runtime.input.trim() || runtime.interactionState !== 'idle'}>RUN</button>
       </form>

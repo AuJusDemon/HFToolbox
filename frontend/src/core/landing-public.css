@@ -102,6 +102,7 @@
 .hero-terminal-prompt label { width: 1px; height: 1px; position: absolute; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .hero-terminal-prompt > span { color: var(--lp-green); font-size: 11px; white-space: nowrap; }
 .hero-terminal-prompt input { width: 100%; min-width: 0; height: 38px; padding: 0; color: var(--lp-text); background: transparent; border: 0; outline: 0; font: 12px 'Share Tech Mono', monospace; caret-color: transparent; }
+.hero-terminal-prompt input::-webkit-search-cancel-button { appearance: none; }
 .hero-terminal-prompt input:disabled { color: var(--lp-text); opacity: 1; }
 .hero-terminal-prompt > i { width: 7px; height: 13px; background: var(--lp-green); animation: lp-cursor 900ms steps(1) infinite; }
 .hero-terminal-prompt:focus-within > i { background: var(--lp-text); }
