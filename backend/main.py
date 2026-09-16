@@ -890,6 +890,7 @@ async def lifespan(app: FastAPI):
 
     if not _disable_crawl:
         asyncio.create_task(_unified_loop(), name="unified_scheduler")
+        log.info("Unified scheduler: started (tick=60s, autobump interval=60s)")
 
     # Pre-warm sigmarket browse cache on startup from local DB only.
     async def _startup_browse_warm():
