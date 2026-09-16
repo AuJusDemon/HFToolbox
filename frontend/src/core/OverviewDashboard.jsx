@@ -50,11 +50,10 @@ function StatusStrip({ snapshot, merchant, jobs, loading }) {
 }
 
 function buildWorkItems(merchant, jobs, posting) {
-  const routeFor = type => type === 'unread_replies' || type === 'sla_breach' || type === 'followup_due' || type === 'bump_waste' ? '/dashboard/merchant' : '/dashboard/contracts'
   const items = (merchant?.action_queue || []).map((item, index) => ({
     id:`merchant-${item.type}-${index}`, source:item.type.includes('contract') || item.type === 'awaiting_approval' ? 'Contracts' : 'My Business',
     title:item.label, detail:item.type === 'sla_breach' ? 'Reply target has been missed.' : 'Review the current sales workflow.',
-    severity:item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'normal', route:routeFor(item.type), order:item.severity === 'high' ? 0 : item.severity === 'medium' ? 1 : 2,
+    severity:item.severity === 'high' ? 'error' : item.severity === 'medium' ? 'warning' : 'normal', route:'/dashboard/merchant', order:item.severity === 'high' ? 0 : item.severity === 'medium' ? 1 : 2,
   }))
   for (const job of jobs) {
     if (job.expired || (job.enabled && !job.next_bump)) items.push({ id:`bump-${job.id}`, source:'Bump Service', title:job.thread_title || `Thread ${job.tid}`, detail:job.expired ? 'Job end time has passed.' : 'Enabled job has no next attempt.', severity:'error', route:'/dashboard/bumper', order:0 })

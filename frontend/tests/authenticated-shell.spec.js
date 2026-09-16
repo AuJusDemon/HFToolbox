@@ -92,3 +92,13 @@ test('revisiting a program reuses its prefetched data without another request', 
 
   expect(merchantRequests).toBe(requestsAfterFirstVisit)
 })
+
+test('contract work queue actions open My Business', async ({ page }) => {
+  await mockApp(page)
+  await page.goto('/dashboard')
+
+  await page.getByRole('button', { name:/1 contract awaiting approval/ }).click()
+
+  await expect(page).toHaveURL(/\/dashboard\/merchant$/)
+  await expect(page.getByRole('heading', { name:'Today in My Business' })).toBeVisible()
+})
