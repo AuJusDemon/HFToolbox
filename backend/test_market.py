@@ -32,9 +32,6 @@ _posting_spec = importlib.util.spec_from_file_location(
 )
 posting_db = importlib.util.module_from_spec(_posting_spec)
 _posting_spec.loader.exec_module(posting_db)
-from types import SimpleNamespace  # noqa: E402
-
-
 class MarketTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -94,13 +91,11 @@ class MarketTests(unittest.TestCase):
         self.assertEqual(topics.normalize("[WTB] Claude Max API accounts"),
                          ["claude", "max", "api"])
 
-    def test_owner_free_preview_is_disabled(self):
-        request = SimpleNamespace(session={"market_access_preview": "free"})
-        with patch.object(market_router, "ACCESS_PREVIEW_ENABLED", True):
-            self.assertFalse(market_router._previewing_free("761578", request))
-            self.assertFalse(market_router._previewing_free("12345", request))
-        with patch.object(market_router, "ACCESS_PREVIEW_ENABLED", False):
-            self.assertFalse(market_router._previewing_free("761578", request))
+    def test_market_access_preview_is_not_exposed(self):
+        paths = {route.path for route in market_router.router.routes}
+        self.assertNotIn("/api/market/access/preview", paths)
+        self.assertFalse(hasattr(market_router, "ACCESS_PREVIEW_ENABLED"))
+        self.assertFalse(hasattr(market_router, "_previewing_free"))
 
     def test_followup_requires_explicit_record_and_can_be_corrected(self):
         event = merchant_db.create_followup("761578", "99001", "88001", "42",

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Literal
-
 import db
 import integration_db
 from fastapi import APIRouter, HTTPException, Request
@@ -22,9 +20,6 @@ PASS_DAYS = int(os.environ.get("MARKET_PASS_DAYS", "30"))
 PASS_PERMANENT = os.environ.get("MARKET_PASS_PERMANENT", "1") != "0"
 WATCH_LIMIT = int(os.environ.get("MARKET_WATCH_LIMIT", "25"))
 FREE_WATCH_LIMIT = int(os.environ.get("MARKET_FREE_WATCH_LIMIT", "3"))
-# DEV ONLY: never enable this in production. It lets the collector owner preview
-# real free-tier authorization behavior without changing or purchasing a pass.
-ACCESS_PREVIEW_ENABLED = os.environ.get("MARKET_ACCESS_PREVIEW_ENABLED") == "1"
 
 
 def _payment_reference(payment_id: str) -> str:
@@ -43,16 +38,7 @@ def _uid(request: Request) -> str:
     return str(uid)
 
 
-def _previewing_free(uid: str, request: Request | None = None) -> bool:
-    return bool(
-        ACCESS_PREVIEW_ENABLED and uid == OWNER_UID and request
-        and request.session.get("market_access_preview") == "free"
-    )
-
-
 async def _paid(uid: str, request: Request | None = None) -> bool:
-    if _previewing_free(uid, request):
-        return False
     if uid == OWNER_UID:
         return True
     status = await asyncio.to_thread(market_db.access_status, uid)
@@ -69,9 +55,8 @@ async def market_pulse(request: Request):
     uid = _uid(request)
     paid = await _paid(uid, request)
     result = await asyncio.to_thread(market_db.pulse)
-    if not (ACCESS_PREVIEW_ENABLED and uid == OWNER_UID):
-        for key in ("threads", "sellers", "contracts", "forum_coverage", "contract_coverage", "latest_run"):
-            result.pop(key, None)
+    for key in ("threads", "sellers", "contracts", "forum_coverage", "contract_coverage", "latest_run"):
+        result.pop(key, None)
     if not paid:
         for thread in result.get("recent_threads", []) + result.get("recent_buyer_threads", []):
             for key in (
@@ -184,14 +169,11 @@ async def market_disputes(request: Request, page: int = 1, perpage: int = 25):
 async def market_access(request: Request):
     uid = _uid(request)
     status = await asyncio.to_thread(market_db.access_status, uid)
-    preview_free = _previewing_free(uid, request)
-    if uid == OWNER_UID and not preview_free:
+    if uid == OWNER_UID:
         status = {"paid": True, "expires_at": 4102444800}
     paid = bool(status["paid"])
     return {
         **status,
-        "preview_available": ACCESS_PREVIEW_ENABLED and uid == OWNER_UID,
-        "preview_mode": "free" if preview_free else "paid",
         "price": PASS_PRICE,
         "duration_days": PASS_DAYS,
         "permanent": PASS_PERMANENT,
@@ -219,22 +201,6 @@ async def market_access(request: Request):
             "telegram_alerts": paid,
         },
     }
-
-
-class AccessPreviewRequest(BaseModel):
-    mode: Literal["free", "paid"]
-
-
-@router.post("/access/preview")
-async def preview_market_access(body: AccessPreviewRequest, request: Request):
-    uid = _uid(request)
-    if not ACCESS_PREVIEW_ENABLED or uid != OWNER_UID:
-        raise HTTPException(404, "Access preview is not available")
-    if body.mode == "free":
-        request.session["market_access_preview"] = "free"
-    else:
-        request.session.pop("market_access_preview", None)
-    return {"ok": True, "mode": body.mode}
 
 
 @router.get("/topics")

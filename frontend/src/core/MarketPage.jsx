@@ -47,7 +47,7 @@ function purchaseReference(id) {
   return `MP-${compact.slice(0,12)}`
 }
 
-function AccessStrip({access,onPurchase,purchasing,onPreview}) {
+function AccessStrip({access,onPurchase,purchasing}) {
   if(!access)return null
   const expires=access.expires_at&&access.expires_at<4102444800
     ?new Date(Number(access.expires_at)*1000).toLocaleDateString():null
@@ -55,7 +55,6 @@ function AccessStrip({access,onPurchase,purchasing,onPreview}) {
   return <div className="market-access">
     <div><strong>{access.paid?'Market pass active':'Free market tools'}</strong>
       <span>{access.paid?`${access.watch_limit} alert rules, retained history, comparisons, and Telegram delivery${expires?` - active through ${expires}`:''}`:`Recent listings, demand summaries, disputes, My Business, and ${access.watch_limit} dashboard alerts`}</span></div>
-    {access.preview_available&&<div className="market-preview-toggle"><span>Dev preview</span><button className={`btn btn-sm${access.preview_mode==='free'?' btn-acc':''}`} onClick={()=>onPreview('free')}>Free</button><button className={`btn btn-sm${access.preview_mode!=='free'?' btn-acc':''}`} onClick={()=>onPreview('paid')}>Paid</button></div>}
     {!access.paid&&<button className="btn btn-acc" onClick={onPurchase} disabled={purchasing}>
       {purchasing?'Processing...':`Add market pass for ${Number(access.price).toLocaleString()} bytes (${passTerm})`}
     </button>}
@@ -330,10 +329,9 @@ export default function MarketPage() {
   const open=(nextTab,nextPreset={})=>{setPreset(nextPreset);setTab(nextTab)}
   const purchase=()=>{setPurchaseId(newPurchaseId());setUpgradeOpen(true)}
   const confirmPurchase=async()=>{const id=purchaseId||newPurchaseId();setPurchaseId(id);setPurchasing(true);try{await api.post('/api/market/access/purchase',{idempotency_key:id});await loadAccess();setUpgradeOpen(false)}finally{setPurchasing(false)}}
-  const setPreview=async mode=>{await api.post('/api/market/access/preview',{mode});await loadAccess()}
   const tabs=[['overview','Overview'],['business','My Business'],['explore','Explore'],['demand','Demand'],['movers','Movers'],['disputes','Disputes'],['watches','Alerts']]
   return <div className="content market-page"><header className="market-page-head"><div><h2>Marketplace</h2><p>Sales threads, buyer requests, disputes, and observed contract movement in one seller workspace.</p></div></header>
-    <AccessStrip access={access} onPurchase={purchase} purchasing={purchasing} onPreview={setPreview}/>
+    <AccessStrip access={access} onPurchase={purchase} purchasing={purchasing}/>
     <nav className="mhq-tabs market-tabs">{tabs.map(([id,label])=><button key={id} className={`tab${tab===id?' on':''}`} onClick={()=>open(id,{})}>{label}</button>)}</nav>
     {tab==='overview'&&<Pulse access={access} onPurchase={purchase} openBrowse={p=>open('explore',p)} openDemand={()=>open('demand',{})} openSection={section=>open(section,{})}/>}
     {tab==='demand'&&<Demand access={access} onPurchase={purchase} openBrowse={p=>open('explore',p)}/>}
