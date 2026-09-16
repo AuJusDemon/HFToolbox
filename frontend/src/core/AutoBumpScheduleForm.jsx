@@ -1,11 +1,144 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { BUMP_INTERVALS, BUMP_MODES, bumpMode } from './autobumpModes.js'
 import './AutoBumpScheduleForm.css'
 
 export const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
+const COMMON_TIMEZONES = [
+  'UTC',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Dubai',
+  'Asia/Kolkata',
+  'Asia/Singapore',
+  'Asia/Tokyo',
+  'Australia/Sydney',
+]
+
 const browserTimezone = () => {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' }
   catch { return 'UTC' }
+}
+
+export const availableTimezones = current => {
+  let supported = []
+  try { supported = Intl.supportedValuesOf?.('timeZone') || [] }
+  catch { supported = [] }
+  const zones = new Set([...COMMON_TIMEZONES, ...supported])
+  if (current) zones.add(current)
+  return [...zones].sort((left, right) => {
+    const leftRank = COMMON_TIMEZONES.indexOf(left)
+    const rightRank = COMMON_TIMEZONES.indexOf(right)
+    if (leftRank !== -1 || rightRank !== -1) {
+      if (leftRank === -1) return 1
+      if (rightRank === -1) return -1
+      return leftRank - rightRank
+    }
+    return left.localeCompare(right)
+  })
+}
+
+const timezoneDetails = zone => {
+  try {
+    const date = new Date()
+    const name = new Intl.DateTimeFormat('en-US', { timeZone:zone, timeZoneName:'longGeneric' })
+      .formatToParts(date).find(part => part.type === 'timeZoneName')?.value
+    const offset = new Intl.DateTimeFormat('en-US', { timeZone:zone, timeZoneName:'longOffset' })
+      .formatToParts(date).find(part => part.type === 'timeZoneName')?.value
+      ?.replace('GMT', 'UTC')
+    return { name:name || zone.replaceAll('_', ' '), offset:offset || 'UTC' }
+  } catch {
+    return { name:zone.replaceAll('_', ' '), offset:'' }
+  }
+}
+
+export const timezoneOption = zone => {
+  const { name, offset } = timezoneDetails(zone)
+  return { zone, name, offset, label:`${name} (${offset})` }
+}
+
+function TimezonePicker({ value, onChange, id }) {
+  const options = useMemo(() => availableTimezones(value).map(timezoneOption), [value])
+  const selected = useMemo(() => timezoneOption(value), [value])
+  const [query, setQuery] = useState(selected.name)
+  const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
+  const activeRef = useRef(null)
+  const listId = `${id}-options`
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const matches = useMemo(() => {
+    if (!normalizedQuery || query === selected.name) return options
+    return options.filter(option => `${option.name} ${option.offset} ${option.zone.replaceAll('_', ' ')}`.toLocaleLowerCase().includes(normalizedQuery))
+  }, [normalizedQuery, options, query, selected.name])
+
+  useEffect(() => setQuery(selected.name), [selected.name])
+  useEffect(() => setActiveIndex(index => Math.min(index, Math.max(matches.length - 1, 0))), [matches.length])
+  useEffect(() => activeRef.current?.scrollIntoView({ block:'nearest' }), [activeIndex])
+
+  const choose = option => {
+    onChange(option.zone)
+    setQuery(option.name)
+    setOpen(false)
+  }
+  const handleKeyDown = event => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setOpen(true)
+      setActiveIndex(index => Math.min(index + 1, matches.length - 1))
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setOpen(true)
+      setActiveIndex(index => Math.max(index - 1, 0))
+    } else if (event.key === 'Enter' && open && matches[activeIndex]) {
+      event.preventDefault()
+      choose(matches[activeIndex])
+    } else if (event.key === 'Escape') {
+      setQuery(selected.name)
+      setOpen(false)
+    }
+  }
+
+  return <div className="abs-timezone" onBlur={event => {
+    if (!event.currentTarget.contains(event.relatedTarget)) {
+      setQuery(selected.name)
+      setOpen(false)
+    }
+  }}>
+    <input
+      id={id}
+      role="combobox"
+      aria-label="Timezone"
+      aria-autocomplete="list"
+      aria-controls={listId}
+      aria-expanded={open}
+      aria-activedescendant={open && matches[activeIndex] ? `${id}-option-${activeIndex}` : undefined}
+      autoComplete="off"
+      value={query}
+      onFocus={event => { event.target.select(); setOpen(true) }}
+      onChange={event => { setQuery(event.target.value); setActiveIndex(0); setOpen(true) }}
+      onKeyDown={handleKeyDown}
+    />
+    {open && <div id={listId} className="abs-timezone-list" role="listbox" aria-label="Timezone results">
+      {matches.length ? matches.map((option, index) => <button
+        id={`${id}-option-${index}`}
+        ref={index === activeIndex ? activeRef : null}
+        key={option.zone}
+        type="button"
+        role="option"
+        aria-selected={option.zone === value}
+        className={index === activeIndex ? 'is-active' : ''}
+        onMouseDown={event => event.preventDefault()}
+        onClick={() => choose(option)}
+      >
+        <span>{option.name} <b>{option.offset}</b></span>
+        <small>{option.zone}</small>
+      </button>) : <p className="abs-timezone-empty">No matching timezone</p>}
+    </div>}
+  </div>
 }
 
 export function defaultBumpSchedule() {
@@ -58,7 +191,7 @@ export default function AutoBumpScheduleForm({ value, onChange, idPrefix = 'bump
   const schedule = value
   const set = patch => onChange({ ...schedule, ...patch })
   const restricted = schedule.allowed_windows.length > 0
-  const activeDays = restricted ? schedule.allowed_windows[0]?.days || [] : [0, 1, 2, 3, 4]
+  const activeDays = restricted ? schedule.allowed_windows[0]?.days || [] : [0, 1, 2, 3, 4, 5, 6]
   const windows = restricted ? schedule.allowed_windows : [{ days: activeDays, start: '09:00', end: '22:00' }]
   const setWindows = next => set({ allowed_windows: next })
   const toggleRestriction = () => setWindows(restricted ? [] : windows)
@@ -82,9 +215,8 @@ export default function AutoBumpScheduleForm({ value, onChange, idPrefix = 'bump
         <small>Every attempt waits for this much thread inactivity.</small>
       </label>
       <label htmlFor={`${idPrefix}-timezone`}>Timezone
-        <input id={`${idPrefix}-timezone`} aria-label="Timezone" value={schedule.timezone} onChange={event => set({ timezone: event.target.value })} list={`${idPrefix}-zones`} />
-        <datalist id={`${idPrefix}-zones`}><option value="UTC" /><option value="America/New_York" /><option value="America/Chicago" /><option value="America/Denver" /><option value="America/Los_Angeles" /><option value="Europe/London" /><option value="Australia/Sydney" /></datalist>
-        <small>Use an IANA timezone name. Daylight saving changes are handled by the scheduler.</small>
+        <TimezonePicker id={`${idPrefix}-timezone`} value={schedule.timezone} onChange={timezone => set({ timezone })} />
+        <small>Times use this timezone. Daylight saving changes are handled automatically.</small>
       </label>
     </div>
 

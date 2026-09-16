@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import AutoBumpScheduleForm, { defaultBumpSchedule, schedulePayload } from './AutoBumpScheduleForm.jsx'
+import AutoBumpScheduleForm, { availableTimezones, defaultBumpSchedule, schedulePayload, timezoneOption } from './AutoBumpScheduleForm.jsx'
 
 describe('shared Auto-Bump schedule form', () => {
   it('defaults to unrestricted Activity Interval with no end condition', () => {
@@ -20,8 +20,25 @@ describe('shared Auto-Bump schedule form', () => {
     expect(value.calendar_slots).toEqual([{ day:0, time:'10:00' }])
     fireEvent.click(screen.getByRole('button', { name:'Unrestricted' }))
     rerender(<AutoBumpScheduleForm value={value} onChange={onChange} />)
+    expect(value.allowed_windows[0].days).toEqual([0, 1, 2, 3, 4, 5, 6])
+    expect(screen.getByRole('button', { name:'Sat' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name:'Sun' })).toHaveAttribute('aria-pressed', 'true')
     fireEvent.click(screen.getByRole('button', { name:'Add time window' }))
     expect(value.allowed_windows).toHaveLength(2)
+  })
+
+  it('searches and selects supported IANA timezones using friendly names and offsets', () => {
+    const schedule = { ...defaultBumpSchedule(), timezone:'America/New_York' }
+    const onChange = vi.fn()
+    render(<AutoBumpScheduleForm value={schedule} onChange={onChange} />)
+    const timezone = screen.getByRole('combobox', { name:'Timezone' })
+    expect(timezone.tagName).toBe('INPUT')
+    expect(timezone).toHaveValue(timezoneOption('America/New_York').name)
+    fireEvent.focus(timezone)
+    fireEvent.change(timezone, { target:{ value:'Tokyo' } })
+    fireEvent.click(screen.getByRole('option', { name:/Tokyo/i }))
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ timezone:'Asia/Tokyo' }))
+    expect(availableTimezones('America/New_York')).toEqual(expect.arrayContaining(['UTC', 'America/New_York']))
   })
 
   it('serializes each end condition using the same API contract', () => {

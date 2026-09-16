@@ -21,9 +21,9 @@ const promotion = { offers:[{ tid:'222', since_last_bump:{ tracked_replies:3, co
 const stats = { tid:'222', range:{key:'30d'}, freshness:{thread_observed_at:null}, current_period:{started_at:null,replies_since_latest_bump:{value:null,available:false,source:'observed'},contracts_opened:{value:0,available:true,source:'observed'}}, metrics:{successful_bumps:{value:1,available:true,source:'observed'},skips:{value:0,available:true,source:'observed'},failures:{value:0,available:true,source:'observed'},tracked_replies:{value:0,available:true,source:'observed'},contracts_opened:{value:0,available:true,source:'observed'},estimated_bytes_spent:{value:110,available:true,source:'estimated'}},fees:{hf_fee:100,hf_fee_tier:'L33t',service_fee:10,total_cost:110},activity:[],attempts:[],pagination:{page:1,total_pages:1,has_previous:false,has_next:false} }
 const renderPage = (route = '/dashboard/bumper') => render(<MemoryRouter initialEntries={[route]}><BumperPageV2 /></MemoryRouter>)
 
-function mockLoads({ logFailure = false, feeData = fees } = {}) {
+function mockLoads({ logFailure = false, feeData = fees, jobData = jobs } = {}) {
   apiMock.get.mockImplementation(path => {
-    if (path === '/api/autobump/jobs') return Promise.resolve({ jobs })
+    if (path === '/api/autobump/jobs') return Promise.resolve({ jobs:jobData })
     if (path === '/api/autobump/log') return logFailure ? Promise.reject(new Error('log down')) : Promise.resolve({ log })
     if (path === '/api/autobump/settings') return Promise.resolve(feeData)
     if (path === '/api/merchant/promotion') return Promise.resolve(promotion)
@@ -65,6 +65,15 @@ describe('Bump Service page interactions', () => {
     fireEvent.click(pause)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Pause job' })).toBeInTheDocument())
     expect(screen.getByText('pause failed')).toBeInTheDocument()
+  })
+
+  it('shows that retired Page 1 jobs are already paused', async () => {
+    mockLoads({ jobData:[{ ...jobs[1], mode:'page1', enabled:false, requires_schedule_update:true }] })
+    renderPage()
+    expect(await screen.findByText('Job paused')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name:'Pause job' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name:'Choose replacement schedule' }))
+    expect(screen.getByRole('region', { name:'Edit schedule' })).toBeInTheDocument()
   })
 
   it('does not reload performance when operational job state changes', async () => {
@@ -156,5 +165,15 @@ describe('Bump Service page interactions', () => {
     fireEvent.click(screen.getByRole('button', { name:'Edit schedule' }))
     expect(screen.getByRole('region', { name:'Edit schedule' })).toHaveTextContent('cannot be changed here')
     expect(screen.getByRole('button', { name:'Save schedule' })).toBeDisabled()
+  })
+
+  it('places selected job controls before performance reporting', async () => {
+    renderPage()
+    const heading = await screen.findByRole('heading', { name:'Broken thread' })
+    const workspace = heading.closest('.bp-workspace')
+    const controls = screen.getByRole('group', { name:'Selected job controls' })
+    const report = screen.getByText('THREAD PERFORMANCE')
+    expect(workspace).toContainElement(controls)
+    expect(controls.compareDocumentPosition(report) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })

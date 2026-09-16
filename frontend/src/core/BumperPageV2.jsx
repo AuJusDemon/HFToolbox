@@ -202,6 +202,17 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
       <div><span className="bp-kicker">ACTIVE WORKSPACE</span><h2 id="active-job-title">{job.thread_title || `Thread ${job.tid}`}</h2><p>TID {job.tid} {job.fid ? `/ FID ${job.fid}` : ''} / {job.mode === 'calendar' ? 'Calendar Scheduling' : job.mode === 'page1' ? 'Retired schedule' : 'Activity Interval'}</p></div>
       <Status state={state} />
     </div>
+    <div className="bp-actions bp-actions-top" role="group" aria-label="Selected job controls">
+      <button type="button" onClick={() => setEditing(value => !value)}>{editing ? 'Close editor' : 'Edit schedule'}</button>
+      {job.requires_schedule_update ? <>
+        <span className="bp-control-state is-paused" role="status">Job paused</span>
+        <button type="button" onClick={() => setEditing(true)}>Choose replacement schedule</button>
+      </> : <button type="button" onClick={() => onToggle(job)} disabled={busyTid === job.tid}>{job.enabled ? 'Pause job' : 'Resume job'}</button>}
+      <a href={`https://hackforums.net/showthread.php?tid=${job.tid}`} target="_blank" rel="noreferrer">Inspect HF thread</a>
+      <Link to={`/dashboard/merchant?tab=bumps&tid=${job.tid}`}>View business analysis</Link>
+      {!confirmRemove ? <button type="button" className="bp-danger" onClick={() => setConfirmRemove(true)}>Remove job</button> : <div className="bp-remove-confirm"><span>Remove this job?</span><button type="button" className="bp-danger" onClick={() => onRemove(job)}>Confirm remove</button><button type="button" onClick={() => setConfirmRemove(false)}>Cancel</button></div>}
+    </div>
+    {editing && <JobScheduleEditor job={job} onSave={saveSchedule} onCancel={() => setEditing(false)} saving={saving} error={editError} />}
     {notice && <div className={`bp-state-note is-${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}><strong>{notice.title}</strong><span>{notice.body}</span></div>}
     <div className="bp-work-grid">
       <div className="bp-schedule">
@@ -217,14 +228,6 @@ function ActiveJob({ job, state, performance, statsLoading, statsRefreshing, sta
     <div className="bp-performance-head"><div><span className="bp-kicker">THREAD PERFORMANCE</span><p>Operational totals and measured business movement for this job.</p></div><div className="bp-performance-controls"><BumpRangeControl value={range} onChange={onRange} /><span role="status">{statsRefreshing ? 'Updating report...' : '\u00a0'}</span></div></div>
     {statsError && <ErrorLine>Statistics could not be updated. {performance ? 'The previous report remains visible.' : 'Scheduler controls remain available.'}</ErrorLine>}
     {statsLoading && !performance ? <div className="bp-stat-loading" role="status">Loading statistics for TID {job.tid}...</div> : performance ? <><BumpPerformanceSummary data={performance} /><BumpActivityTimeline data={performance} onPage={onPage} /><BumpAttempts attempts={performance?.attempts} fees={performance?.fees} /></> : null}
-    {editing && <JobScheduleEditor job={job} onSave={saveSchedule} onCancel={() => setEditing(false)} saving={saving} error={editError} />}
-    <div className="bp-actions">
-      <button type="button" onClick={() => setEditing(value => !value)}>{editing ? 'Close editor' : 'Edit schedule'}</button>
-      <button type="button" onClick={() => job.requires_schedule_update ? setEditing(true) : onToggle(job)} disabled={busyTid === job.tid}>{job.requires_schedule_update ? 'Choose replacement schedule' : job.enabled ? 'Pause job' : 'Resume job'}</button>
-      <a href={`https://hackforums.net/showthread.php?tid=${job.tid}`} target="_blank" rel="noreferrer">Inspect HF thread</a>
-      <Link to={`/dashboard/merchant?tab=bumps&tid=${job.tid}`}>View business analysis</Link>
-      {!confirmRemove ? <button type="button" className="bp-danger" onClick={() => setConfirmRemove(true)}>Remove job</button> : <div className="bp-remove-confirm"><span>Remove this job?</span><button type="button" className="bp-danger" onClick={() => onRemove(job)}>Confirm remove</button><button type="button" onClick={() => setConfirmRemove(false)}>Cancel</button></div>}
-    </div>
   </section>
 }
 

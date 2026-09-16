@@ -88,6 +88,24 @@ test('loading scheduler state', async ({ page }) => {
   await page.screenshot({ path:'test-results/bumper-loading.png', fullPage:true })
 })
 
+test('scheduler fields and selected-job actions share exact control baselines', async ({ page }) => {
+  await page.setViewportSize({ width:1440, height:900 })
+  await mockBumper(page, 'retired')
+  await page.goto('/dashboard/bumper')
+  await expect(page.getByText('Job paused')).toBeVisible()
+  const addJobControls = await Promise.all([
+    page.getByLabel('Schedule type').first().boundingBox(),
+    page.getByLabel('Minimum inactivity').first().boundingBox(),
+    page.getByRole('combobox', { name:'Timezone' }).first().boundingBox(),
+  ])
+  expect(Math.max(...addJobControls.map(box => box.y)) - Math.min(...addJobControls.map(box => box.y))).toBeLessThanOrEqual(1)
+  expect(new Set(addJobControls.map(box => box.height)).size).toBe(1)
+  const actionControls = await page.getByRole('group', { name:'Selected job controls' }).locator(':scope > button, :scope > a, :scope > .bp-control-state').evaluateAll(nodes => nodes.map(node => ({ top:node.getBoundingClientRect().top, height:node.getBoundingClientRect().height })))
+  expect(Math.max(...actionControls.map(control => control.top)) - Math.min(...actionControls.map(control => control.top))).toBeLessThanOrEqual(1)
+  expect(new Set(actionControls.map(control => control.height)).size, JSON.stringify(actionControls)).toBe(1)
+  await page.screenshot({ path:'test-results/bumper-control-alignment.png', fullPage:true })
+})
+
 test('deep-linked job can open the immutable schedule editor', async ({ page }) => {
   await mockBumper(page)
   await page.goto('/dashboard/bumper?tid=6319077')
@@ -97,8 +115,15 @@ test('deep-linked job can open the immutable schedule editor', async ({ page }) 
   const schedulerSwitch = page.getByRole('switch', { name:'Scheduler enabled' })
   await expect(schedulerSwitch).toHaveAttribute('aria-checked', 'true')
   expect((await schedulerSwitch.boundingBox()).height).toBeLessThanOrEqual(48)
-  await page.screenshot({ path:'test-results/bumper-schedule-editor.png', fullPage:true })
   const editor = page.getByRole('region', { name:'Edit schedule' })
+  const timezone = editor.getByRole('combobox', { name:'Timezone' })
+  await timezone.fill('Tokyo')
+  await expect(editor.getByRole('option', { name:/Tokyo/i })).toBeVisible()
+  await page.screenshot({ path:'test-results/bumper-schedule-editor.png', fullPage:true })
+  await page.setViewportSize({ width:390, height:844 })
+  await page.screenshot({ path:'test-results/bumper-schedule-editor-mobile.png', fullPage:true })
+  await editor.getByRole('option', { name:/Tokyo/i }).click()
+  await expect(timezone).toHaveValue('Japan Standard Time')
   await editor.getByLabel('Schedule type').selectOption('calendar')
   await editor.getByRole('button', { name:'Add calendar slot' }).click()
   await expect(editor.getByLabel('Calendar slot 1 time')).toHaveValue('10:00')

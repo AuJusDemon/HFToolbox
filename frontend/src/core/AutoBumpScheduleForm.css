@@ -1,11 +1,24 @@
 .abs-form { display:grid; gap:14px; min-width:0; }
-.abs-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.abs-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; align-items:start; }
+.abs-grid > label { grid-template-rows:auto 44px auto; align-content:start; }
 .abs-form label { display:grid; gap:6px; min-width:0; color:var(--muted); font:inherit; }
 .abs-form label small,.abs-section>small,.abs-section>p { color:var(--muted); line-height:1.5; }
 .abs-form input,.abs-form select,.abs-form button { min-height:40px; border:1px solid var(--b1); border-radius:0; background:var(--bg); color:var(--text); font:inherit; }
 .abs-form input,.abs-form select { width:100%; padding:0 10px; }
+.abs-grid > label > select,.abs-grid > label > .abs-timezone { width:100%; height:44px; min-height:44px; }
+.abs-grid > label > select,.abs-timezone > input { line-height:42px; }
 .abs-form button { padding:0 12px; cursor:pointer; }
 .abs-form button:hover,.abs-form button:focus-visible,.abs-form button.is-on { border-color:var(--acc); color:var(--acc); }
+.abs-timezone { position:relative; min-width:0; }
+.abs-timezone > input { height:100%; }
+.abs-timezone-list { position:absolute; z-index:20; top:calc(100% + 4px); left:0; right:0; max-height:260px; overflow-y:auto; border:1px solid var(--b1); background:var(--bg); }
+.abs-timezone-list button { display:grid; width:100%; height:auto; min-height:48px; padding:8px 10px; border:0; border-bottom:1px solid var(--b1); text-align:left; }
+.abs-timezone-list button:last-child { border-bottom:0; }
+.abs-timezone-list button:hover,.abs-timezone-list button:focus-visible,.abs-timezone-list button.is-active { background:var(--panel); color:var(--acc); }
+.abs-timezone-list button span { display:flex; justify-content:space-between; gap:8px; color:var(--text); }
+.abs-timezone-list button b { color:var(--muted); font-weight:400; white-space:nowrap; }
+.abs-timezone-list button small { color:var(--muted); }
+.abs-timezone-empty { margin:0; padding:12px 10px; color:var(--muted); }
 .abs-section { display:grid; gap:10px; margin:0; padding:12px; border:1px solid var(--b1); min-width:0; }
 .abs-section legend { padding:0 6px; color:var(--text); }
 .abs-rows { display:grid; gap:8px; }
