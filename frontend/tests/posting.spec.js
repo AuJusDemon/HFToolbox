@@ -140,7 +140,7 @@ test('thread editor keeps preview to the right and reviews before queueing', asy
   await page.getByText('Add to Bump Service', { exact:true }).click()
   await expect(page.getByLabel('Schedule type')).toBeVisible()
   await page.getByLabel('Schedule type').selectOption('calendar')
-  await page.getByRole('button', { name:'Add calendar slot' }).click()
+  await expect(page.getByLabel('Calendar days').getByRole('button', { name:'Sunday' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByText('A confirmed bump uses 100 Bytes')).toBeVisible()
   await page.getByRole('button', { name:'Review Thread' }).click()
   await expect(page.getByText('Queue this thread')).toBeVisible()
@@ -152,7 +152,7 @@ test('thread editor keeps preview to the right and reviews before queueing', asy
     mode:'calendar',
     interval_h:12,
     end_mode:'unlimited',
-    calendar_slots:[{ day:0, time:'10:00' }],
+    calendar_slots:[0,1,2,3,4,5,6].map(day => ({ day, time:'10:00' })),
   })
   expect(threadRequests[0].bump_schedule.timezone).toBeTruthy()
 })

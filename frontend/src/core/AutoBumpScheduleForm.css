@@ -24,9 +24,11 @@
 .abs-rows { display:grid; gap:8px; }
 .abs-row { display:grid; grid-template-columns:minmax(130px,1fr) minmax(130px,1fr) auto; gap:8px; align-items:end; }
 .abs-days { display:grid; grid-template-columns:repeat(7,minmax(44px,1fr)); gap:6px; }
+.abs-calendar-control { display:grid; grid-template-columns:minmax(0,1fr) 150px; gap:10px; align-items:end; }
+.abs-calendar-days { display:grid; gap:6px; min-width:0; color:var(--muted); }
 .abs-toggle { justify-self:start; }
 @media (max-width:720px) {
-  .abs-grid,.abs-row { grid-template-columns:1fr; }
+  .abs-grid,.abs-row,.abs-calendar-control { grid-template-columns:1fr; }
   .abs-days { grid-template-columns:repeat(4,minmax(44px,1fr)); }
   .abs-form input,.abs-form select,.abs-form button { min-height:44px; }
 }

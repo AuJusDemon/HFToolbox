@@ -186,6 +186,8 @@ export function schedulePayload(schedule) {
 }
 
 const changeAt = (rows, index, patch) => rows.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row)
+const allDays = () => WEEKDAYS.map((_, day) => day)
+const slotsAtTime = (days, time) => days.map(day => ({ day, time }))
 
 export default function AutoBumpScheduleForm({ value, onChange, idPrefix = 'bump' }) {
   const schedule = value
@@ -193,17 +195,28 @@ export default function AutoBumpScheduleForm({ value, onChange, idPrefix = 'bump
   const restricted = schedule.allowed_windows.length > 0
   const activeDays = restricted ? schedule.allowed_windows[0]?.days || [] : [0, 1, 2, 3, 4, 5, 6]
   const windows = restricted ? schedule.allowed_windows : [{ days: activeDays, start: '09:00', end: '22:00' }]
+  const calendarDays = [...new Set(schedule.calendar_slots.map(slot => Number(slot.day)))].sort((left, right) => left - right)
+  const calendarTime = schedule.calendar_slots[0]?.time || '10:00'
+  const savedCalendarTimes = [...new Set(schedule.calendar_slots.map(slot => slot.time))]
   const setWindows = next => set({ allowed_windows: next })
   const toggleRestriction = () => setWindows(restricted ? [] : windows)
   const toggleDay = day => {
     const days = activeDays.includes(day) ? activeDays.filter(item => item !== day) : [...activeDays, day].sort()
     setWindows(windows.map(window => ({ ...window, days })))
   }
+  const setCalendar = (days, time = calendarTime) => set({ calendar_slots:slotsAtTime(days, time) })
+  const toggleCalendarDay = day => {
+    const days = calendarDays.includes(day) ? calendarDays.filter(item => item !== day) : [...calendarDays, day].sort()
+    if (days.length) setCalendar(days)
+  }
 
   return <div className="abs-form">
     <div className="abs-grid">
       <label htmlFor={`${idPrefix}-mode`}>Schedule type
-        <select id={`${idPrefix}-mode`} aria-label="Schedule type" value={schedule.mode} onChange={event => set({ mode: event.target.value })}>
+        <select id={`${idPrefix}-mode`} aria-label="Schedule type" value={schedule.mode} onChange={event => {
+          const mode = event.target.value
+          set({ mode, calendar_slots:mode === 'calendar' && !schedule.calendar_slots.length ? slotsAtTime(allDays(), '10:00') : schedule.calendar_slots })
+        }}>
           {BUMP_MODES.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}
         </select>
         <small>{bumpMode(schedule.mode).description}</small>
@@ -222,15 +235,12 @@ export default function AutoBumpScheduleForm({ value, onChange, idPrefix = 'bump
 
     {schedule.mode === 'calendar' && <fieldset className="abs-section">
       <legend>Weekly calendar slots</legend>
-      <p>The job checks at each selected slot. A missed or ineligible slot advances to the next one.</p>
-      <div className="abs-rows">
-        {schedule.calendar_slots.map((slot, index) => <div className="abs-row" key={`${slot.day}-${slot.time}-${index}`}>
-          <label>Day<select aria-label={`Calendar slot ${index + 1} day`} value={slot.day} onChange={event => set({ calendar_slots: changeAt(schedule.calendar_slots, index, { day: Number(event.target.value) }) })}>{WEEKDAYS.map((day, dayIndex) => <option key={day} value={dayIndex}>{day}</option>)}</select></label>
-          <label>Time<input aria-label={`Calendar slot ${index + 1} time`} type="time" value={slot.time} onChange={event => set({ calendar_slots: changeAt(schedule.calendar_slots, index, { time: event.target.value }) })} /></label>
-          <button type="button" onClick={() => set({ calendar_slots: schedule.calendar_slots.filter((_, rowIndex) => rowIndex !== index) })}>Remove slot</button>
-        </div>)}
+      <p>Choose the days and time for this weekly schedule. A missed or ineligible time advances to the next selected day.</p>
+      <div className="abs-calendar-control">
+        <div className="abs-calendar-days"><span>Days</span><div className="abs-days" aria-label="Calendar days">{WEEKDAYS.map((day, dayIndex) => <button type="button" aria-label={day} aria-pressed={calendarDays.includes(dayIndex)} className={calendarDays.includes(dayIndex) ? 'is-on' : ''} key={day} onClick={() => toggleCalendarDay(dayIndex)}>{day.slice(0, 3)}</button>)}</div></div>
+        <label>Time<input aria-label="Calendar time" type="time" value={calendarTime} onChange={event => setCalendar(calendarDays, event.target.value)} /></label>
       </div>
-      <button type="button" onClick={() => set({ calendar_slots: [...schedule.calendar_slots, { day: 0, time: '10:00' }] })}>Add calendar slot</button>
+      {savedCalendarTimes.length > 1 && <small>This saved job currently has multiple times. Changing its days or time replaces them with this single weekly schedule.</small>}
     </fieldset>}
 
     <fieldset className="abs-section">

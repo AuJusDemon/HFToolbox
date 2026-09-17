@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import AutoBumpScheduleForm, { availableTimezones, defaultBumpSchedule, schedulePayload, timezoneOption } from './AutoBumpScheduleForm.jsx'
+import AutoBumpScheduleForm, { availableTimezones, defaultBumpSchedule, schedulePayload, timezoneOption, WEEKDAYS } from './AutoBumpScheduleForm.jsx'
 
 describe('shared Auto-Bump schedule form', () => {
   it('defaults to unrestricted Activity Interval with no end condition', () => {
@@ -9,15 +9,28 @@ describe('shared Auto-Bump schedule form', () => {
     expect(schedulePayload(schedule)).toMatchObject({ mode:'timer', end_mode:'unlimited', allowed_windows:[], calendar_slots:[] })
   })
 
-  it('creates calendar slots and multiple allowed windows without submitting a form', () => {
+  it('shows one calendar time with all weekday buttons immediately', () => {
     let value = defaultBumpSchedule()
     const onChange = vi.fn(next => { value = next })
     const { rerender } = render(<AutoBumpScheduleForm value={value} onChange={onChange} />)
     fireEvent.change(screen.getByLabelText('Schedule type'), { target:{ value:'calendar' } })
     rerender(<AutoBumpScheduleForm value={value} onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name:'Add calendar slot' }))
+    expect(value.calendar_slots).toEqual(WEEKDAYS.map((_, day) => ({ day, time:'10:00' })))
+    const calendarDays = screen.getByLabelText('Calendar days')
+    expect(within(calendarDays).getByRole('button', { name:'Saturday' })).toHaveAttribute('aria-pressed', 'true')
+    expect(within(calendarDays).getByRole('button', { name:'Sunday' })).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(calendarDays).getByRole('button', { name:'Wednesday' }))
     rerender(<AutoBumpScheduleForm value={value} onChange={onChange} />)
-    expect(value.calendar_slots).toEqual([{ day:0, time:'10:00' }])
+    expect(value.calendar_slots).not.toContainEqual({ day:2, time:'10:00' })
+    fireEvent.change(screen.getByLabelText('Calendar time'), { target:{ value:'18:00' } })
+    expect(value.calendar_slots).toEqual(expect.arrayContaining([{ day:0, time:'18:00' }, { day:6, time:'18:00' }]))
+    expect(screen.queryByRole('button', { name:/another time/i })).not.toBeInTheDocument()
+  })
+
+  it('creates multiple allowed windows without submitting a form', () => {
+    let value = defaultBumpSchedule()
+    const onChange = vi.fn(next => { value = next })
+    const { rerender } = render(<AutoBumpScheduleForm value={value} onChange={onChange} />)
     fireEvent.click(screen.getByRole('button', { name:'Unrestricted' }))
     rerender(<AutoBumpScheduleForm value={value} onChange={onChange} />)
     expect(value.allowed_windows[0].days).toEqual([0, 1, 2, 3, 4, 5, 6])
